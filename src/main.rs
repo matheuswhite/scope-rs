@@ -9,6 +9,7 @@ use std::time::Duration;
 use chrono::{DateTime, Local, Utc};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, KeyCode, self};
 use crossterm::execute;
+use crossterm::style::style;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use tui::backend::{Backend, CrosstermBackend};
 use tui::{Frame, Terminal};
@@ -62,6 +63,59 @@ enum SerialData {
     Sent(DateTime<Local>, String),
 }
 
+fn decode_ansi_color(text: &str) -> Vec<(String, Color)> {
+    if text.is_empty() {
+        return vec![];
+    }
+
+    let splitted = text.split("\x1B[").collect::<Vec<_>>();
+    let mut res = vec![];
+
+    let pattern_n_color = [
+        ("0m", Color::White),
+        ("30m", Color::Black),
+        ("0;30m", Color::Black),
+        ("31m", Color::Red),
+        ("0;31m", Color::Red),
+        ("32m", Color::Green),
+        ("0;32m", Color::Green),
+        ("33m", Color::Yellow),
+        ("0;33m", Color::Yellow),
+        ("34m", Color::Blue),
+        ("0;34m", Color::Blue),
+        ("35m", Color::Magenta),
+        ("0;35m", Color::Magenta),
+        ("36m", Color::Cyan),
+        ("0;36m", Color::Cyan),
+        ("37m", Color::Gray),
+        ("0;37m", Color::Gray),
+    ];
+
+    for splitted_str in splitted.iter() {
+        if splitted_str.is_empty() {
+            continue;
+        }
+
+        if pattern_n_color.iter().all(|(pattern, color)| {
+            if splitted_str.starts_with(pattern) {
+                let final_str = splitted_str.to_string().replace(pattern, "").trim().to_string();
+                if final_str.is_empty() {
+                    return true;
+                }
+
+                res.push((final_str, color.clone()));
+                return false;
+            }
+
+            true
+        }) && !splitted_str.starts_with("0m") {
+            res.push((splitted_str.to_string(), Color::White));
+        }
+    }
+
+    res
+}
+
 fn tui_ui<B: Backend>(f: &mut Frame<B>, paragraph: Vec<SerialData>, command_line: String) {
     let bottom_bar_height = 3;
     let monitor_height = f.size().height - bottom_bar_height;
@@ -87,23 +141,36 @@ fn tui_ui<B: Backend>(f: &mut Frame<B>, paragraph: Vec<SerialData>, command_line
     let text = paragraph
         .iter()
         .map(|x| {
+            let received_span = |timestamp: &DateTime<Local>, line, color| {
+                Span::styled(
+                    format!("[{}] {}", timestamp.format("%d/%m/%Y %H:%M:%S"), line),
+                    Style::default().fg(color),
+                )
+            };
+
+            let sent_span = |timestamp: &DateTime<Local>, line| {
+                Spans::from(Span::styled(
+                    format!("[{}] {}", timestamp.format("%d/%m/%Y %H:%M:%S"), line),
+                    Style::default()
+                        .bg(Color::Cyan)
+                        .fg(Color::Black),
+                ))
+            };
+
             match x {
-                // TODO Decode ANSI colors
-                SerialData::Received(timestamp, line) => Spans::from(
-                    Span::styled(
-                        format!("[{}] {}", timestamp.format("%d/%m/%Y %H:%M:%S"), line),
-                        Style::default()
-                            .fg(Color::White),
-                    )
-                ),
-                SerialData::Sent(timestamp, line) => Spans::from(
-                    Span::styled(
-                        format!("[{}] {}", timestamp.format("%d/%m/%Y %H:%M:%S"), line),
-                        Style::default()
-                            .bg(Color::Cyan)
-                            .fg(Color::Black),
-                    )
-                ),
+                SerialData::Received(timestamp, line) => {
+                    let decoded_line = decode_ansi_color(line);
+                    let mut span_vec = vec![];
+
+                    for (line, color) in decoded_line.iter() {
+                        span_vec.push(received_span(timestamp, line, color.clone()));
+                    }
+
+                    Spans::from(span_vec)
+                }
+                SerialData::Sent(timestamp, line) => {
+                    sent_span(timestamp, line)
+                }
             }
         })
         .collect::<Vec<_>>();
@@ -114,10 +181,11 @@ fn tui_ui<B: Backend>(f: &mut Frame<B>, paragraph: Vec<SerialData>, command_line
     f.render_widget(paragraph, chunks[0]);
 
     /* Command */
+    let cursor_pos = (chunks[1].x + command_line.len() as u16 + 1, chunks[1].y + 1);
     let block = Block::default().title(format!("Command")).borders(Borders::ALL);
-    let paragraph = Paragraph::new(Span::from(command_line))
-        .block(block);
+    let paragraph = Paragraph::new(Span::from(command_line)).block(block);
     f.render_widget(paragraph, chunks[1]);
+    f.set_cursor(cursor_pos.0, cursor_pos.1);
 }
 
 fn tui_task(serial_tx: Sender<String>, data_rx: Receiver<Cmd>) -> Result<(), io::Error> {
@@ -188,8 +256,8 @@ fn main() {
     let data_tx2 = data_tx.clone();
 
     thread::spawn(move || {
-        // serial_task(serial_rx, data_tx);
-        fake_serial_task(serial_rx, data_tx);
+        serial_task(serial_rx, data_tx);
+        // fake_serial_task(serial_rx, data_tx);
     });
 
     let tui_task_handler = thread::spawn(move || {
