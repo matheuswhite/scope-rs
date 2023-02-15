@@ -190,9 +190,9 @@ fn tui_ui<B: Backend>(f: &mut Frame<B>, paragraph: Vec<SerialData>, command_line
 
     /* Monitor */
     let block = Block::default()
-        .title(format!("Monitor [{:03}], {}, height{}", paragraph.len(), scroll, frame_height))
+        .title(format!("[{:03}] Serial {}:{}bps", paragraph.len(), PORT_NAME, BAUD_RATE))
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan));
+        .border_style(Style::default().fg(Color::Yellow));
     let text = paragraph
         .iter()
         .map(|x| {
@@ -340,8 +340,8 @@ fn main() {
     let yaml_cmds: BTreeMap<String, String> = serde_yaml::from_str(std::str::from_utf8(yaml_content.as_slice()).unwrap()).unwrap();
 
     thread::spawn(move || {
-        // serial_task(serial_rx, data_tx);
-        fake_serial_task(serial_rx, data_tx);
+        serial_task(serial_rx, data_tx);
+        // fake_serial_task(serial_rx, data_tx);
     });
 
     let tui_task_handler = thread::spawn(move || {
