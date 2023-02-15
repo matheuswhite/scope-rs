@@ -1,34 +1,44 @@
 use std::{io, thread};
-use std::cmp::max;
-use std::collections::VecDeque;
+use std::collections::BTreeMap;
 use std::io::{Read, Write};
-use std::marker::PhantomData;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread::sleep;
 use std::time::Duration;
-use chrono::{DateTime, Local, Utc};
+use chrono::{DateTime, format, Local};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture, Event, KeyCode, self};
 use crossterm::execute;
-use crossterm::style::style;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen};
 use tui::backend::{Backend, CrosstermBackend};
 use tui::{Frame, Terminal};
 use tui::layout::{Constraint, Direction, Layout};
-use tui::style::{Color, Modifier, Style};
+use tui::style::{Color, Style};
 use tui::text::{Span, Spans};
 use tui::widgets::{Block, Borders, Paragraph, Wrap};
 
-const PORT_NAME: &'static str = "COM8";
+const PORT_NAME: &str = "COM8";
 const BAUD_RATE: u32 = 115200;
-const TIME_ZONE_OFFSET: i8 = -3;
+const CMD_YAML_FILEPATH: &str = "cmds.yaml";
+
+enum SentType {
+    Ok,
+    Fail,
+    Complex(String),
+}
 
 enum Cmd {
     Input(KeyCode),
     Data(DateTime<Local>, String),
+    Sent(DateTime<Local>, String, SentType),
 }
 
-fn serial_task(serial_rx: Receiver<String>, data_tx: Sender<Cmd>) {
+enum SerialToSent {
+    Simple(String),
+    Complex(String, String),
+}
+
+fn serial_task(serial_rx: Receiver<SerialToSent>, data_tx: Sender<Cmd>) {
     let mut serial = serialport::new(PORT_NAME, BAUD_RATE)
+        .timeout(Duration::from_millis(100))
         .open()
         .expect("Failed to open serial port");
 
@@ -37,8 +47,23 @@ fn serial_task(serial_rx: Receiver<String>, data_tx: Sender<Cmd>) {
 
     loop {
         if let Ok(data_to_send) = serial_rx.try_recv() {
-            serial.write(data_to_send.as_bytes())
-                .expect("Cannot write data to serial");
+            let (data_to_send, sent_type) = match data_to_send {
+                SerialToSent::Simple(data_to_send) => {
+                    match serial.write(data_to_send.clone().as_bytes()) {
+                        Ok(_) => (data_to_send, SentType::Ok),
+                        Err(_) => (data_to_send, SentType::Fail),
+                    }
+                }
+                SerialToSent::Complex(name, data_to_send) => {
+                    match serial.write(data_to_send.clone().as_bytes()) {
+                        Ok(_) => (data_to_send, SentType::Complex(name)),
+                        Err(_) => (data_to_send, SentType::Fail),
+                    }
+                }
+            };
+
+            data_tx.send(Cmd::Sent(Local::now(), data_to_send, sent_type))
+                .expect("Cannot sent data write feedback");
         }
 
         match serial.read(&mut buffer) {
@@ -52,7 +77,7 @@ fn serial_task(serial_rx: Receiver<String>, data_tx: Sender<Cmd>) {
                 }
             }
             Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {}
-            Err(e) => eprint!("{:?}", e)
+            Err(e) => eprint!("{e:?}")
         }
     }
 }
@@ -60,7 +85,16 @@ fn serial_task(serial_rx: Receiver<String>, data_tx: Sender<Cmd>) {
 #[derive(Clone)]
 enum SerialData {
     Received(DateTime<Local>, String),
-    Sent(DateTime<Local>, String),
+    Sent(DateTime<Local>, String, Color),
+}
+
+impl Into<String> for SerialData {
+    fn into(self) -> String {
+        match self {
+            SerialData::Received(_, str) => str,
+            SerialData::Sent(_, str, _) => str,
+        }
+    }
 }
 
 fn decode_ansi_color(text: &str) -> Vec<(String, Color)> {
@@ -103,7 +137,7 @@ fn decode_ansi_color(text: &str) -> Vec<(String, Color)> {
                     return true;
                 }
 
-                res.push((final_str, color.clone()));
+                res.push((final_str, *color));
                 return false;
             }
 
@@ -116,15 +150,26 @@ fn decode_ansi_color(text: &str) -> Vec<(String, Color)> {
     res
 }
 
+fn how_many_lines(text: &str, initial_offset: usize, view_width: usize) -> usize {
+    match initial_offset + text.len() {
+        v if v < view_width => return 1,
+        v if v == view_width => return 2,
+        _ => {},
+    }
+
+    1 + how_many_lines(&text[(view_width - initial_offset)..], 0, view_width)
+}
+
+fn calc_scroll_pos(n_lines: u16, height: u16) -> u16 {
+    if n_lines <= height {
+        0
+    } else {
+        n_lines - height
+    }
+}
+
 fn tui_ui<B: Backend>(f: &mut Frame<B>, paragraph: Vec<SerialData>, command_line: String) {
     let bottom_bar_height = 3;
-    let monitor_height = f.size().height - bottom_bar_height;
-    let scroll = if paragraph.len() as u16 > monitor_height - 2 {
-        paragraph.len() as u16 + 2 - monitor_height
-    } else {
-        0
-    };
-
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
@@ -133,9 +178,19 @@ fn tui_ui<B: Backend>(f: &mut Frame<B>, paragraph: Vec<SerialData>, command_line
         ].as_ref())
         .split(f.size());
 
+    let frame_width = f.size().width as usize - 2;
+    let frame_height = f.size().height - 5;
+    let timestamp_width = format!("{} ", Local::now().format("%d/%m/%Y %H:%M:%S")).len();
+    let n_lines = paragraph.iter().fold(0, |x, serial_data| {
+        let line: String = serial_data.clone().into();
+        x + how_many_lines(&line, timestamp_width, frame_width)
+    });
+
+    let scroll = calc_scroll_pos(n_lines as u16, frame_height);
+
     /* Monitor */
     let block = Block::default()
-        .title(format!("Monitor [{:03}]", paragraph.len()))
+        .title(format!("Monitor [{:03}], {}, height{}", paragraph.len(), scroll, frame_height))
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Cyan));
     let text = paragraph
@@ -148,13 +203,14 @@ fn tui_ui<B: Backend>(f: &mut Frame<B>, paragraph: Vec<SerialData>, command_line
                 )
             };
 
-            let sent_span = |timestamp: &DateTime<Local>, line| {
-                Spans::from(Span::styled(
-                    format!("[{}] {}", timestamp.format("%d/%m/%Y %H:%M:%S"), line),
-                    Style::default()
-                        .bg(Color::Cyan)
-                        .fg(Color::Black),
-                ))
+            let sent_span = |timestamp: &DateTime<Local>, line, color| {
+                Spans::from(vec![
+                    Span::styled(format!("[{}] ", timestamp.format("%d/%m/%Y %H:%M:%S")), Style::default()
+                        .fg(color)),
+                    Span::styled(format!(" {line} "), Style::default()
+                        .bg(color)
+                        .fg(Color::Black)),
+                ])
             };
 
             match x {
@@ -163,32 +219,32 @@ fn tui_ui<B: Backend>(f: &mut Frame<B>, paragraph: Vec<SerialData>, command_line
                     let mut span_vec = vec![];
 
                     for (line, color) in decoded_line.iter() {
-                        span_vec.push(received_span(timestamp, line, color.clone()));
+                        span_vec.push(received_span(timestamp, line, *color));
                     }
 
                     Spans::from(span_vec)
                 }
-                SerialData::Sent(timestamp, line) => {
-                    sent_span(timestamp, line)
+                SerialData::Sent(timestamp, line, color) => {
+                    sent_span(timestamp, line, *color)
                 }
             }
         })
         .collect::<Vec<_>>();
     let paragraph = Paragraph::new(text)
         .block(block)
-        .wrap(Wrap { trim: true })
+        .wrap(Wrap { trim: false })
         .scroll((scroll, 0));
     f.render_widget(paragraph, chunks[0]);
 
     /* Command */
     let cursor_pos = (chunks[1].x + command_line.len() as u16 + 1, chunks[1].y + 1);
-    let block = Block::default().title(format!("Command")).borders(Borders::ALL);
+    let block = Block::default().title("Command").borders(Borders::ALL);
     let paragraph = Paragraph::new(Span::from(command_line)).block(block);
     f.render_widget(paragraph, chunks[1]);
     f.set_cursor(cursor_pos.0, cursor_pos.1);
 }
 
-fn tui_task(serial_tx: Sender<String>, data_rx: Receiver<Cmd>) -> Result<(), io::Error> {
+fn tui_task(serial_tx: Sender<SerialToSent>, data_rx: Receiver<Cmd>, yaml_cmds: BTreeMap<String, String>) -> Result<(), io::Error> {
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -205,10 +261,22 @@ fn tui_task(serial_tx: Sender<String>, data_rx: Receiver<Cmd>) -> Result<(), io:
                     match code {
                         KeyCode::Char(c) => command_line.push(c),
                         KeyCode::Enter => {
-                            // TODO Transform messages starts with / to command loaded from YAML file
-
-                            serial_tx.send(command_line.clone()).unwrap();
-                            lines.push(SerialData::Sent(Local::now(), command_line.clone()));
+                            if command_line.starts_with('/') {
+                                let key = command_line.strip_prefix('/').unwrap();
+                                if yaml_cmds.contains_key(key) {
+                                    let data_to_send = yaml_cmds.get(key).unwrap().clone();
+                                    serial_tx.send(SerialToSent::Complex(command_line.clone(), data_to_send)).unwrap();
+                                } else {
+                                    lines.push(SerialData::Sent(Local::now(), format!("Command <{}> not found!", command_line.clone()), Color::LightRed));
+                                }
+                            } else if command_line.starts_with('!') {
+                                match command_line.strip_prefix('!').unwrap() {
+                                    "clear" => lines.clear(),
+                                    _ => lines.push(SerialData::Sent(Local::now(), format!("Command <{command_line}> invalid"), Color::LightMagenta)),
+                                }
+                            } else {
+                                serial_tx.send(SerialToSent::Simple(command_line.clone())).unwrap();
+                            }
                             command_line.clear();
                         }
                         KeyCode::Backspace => {
@@ -221,6 +289,17 @@ fn tui_task(serial_tx: Sender<String>, data_rx: Receiver<Cmd>) -> Result<(), io:
                     }
                 }
                 Cmd::Data(timestamp, line) => lines.push(SerialData::Received(timestamp, line.clone())),
+                Cmd::Sent(timestamp, mut line, sent_type) => {
+                    let color = match sent_type {
+                        SentType::Ok => Color::LightCyan,
+                        SentType::Fail => Color::LightRed,
+                        SentType::Complex(name) => {
+                            line = format!("<{name}> {line}");
+                            Color::LightGreen
+                        }
+                    };
+                    lines.push(SerialData::Sent(timestamp, line, color))
+                }
             }
         }
 
@@ -228,7 +307,7 @@ fn tui_task(serial_tx: Sender<String>, data_rx: Receiver<Cmd>) -> Result<(), io:
             tui_ui(f, lines.clone(), command_line.clone())
         )?;
 
-        if lines.len() > 100 {
+        if lines.len() > 50 {
             lines.remove(0);
         }
     }
@@ -240,13 +319,15 @@ fn tui_task(serial_tx: Sender<String>, data_rx: Receiver<Cmd>) -> Result<(), io:
     Ok(())
 }
 
-fn fake_serial_task(serial_rx: Receiver<String>, data_tx: Sender<Cmd>) {
+#[allow(unused)]
+fn fake_serial_task(serial_rx: Receiver<SerialToSent>, data_tx: Sender<Cmd>) {
     let mut counter = 0;
 
     loop {
-        data_tx.send(Cmd::Data(Local::now(), format!("Hello {}", counter))).unwrap();
+        // data_tx.send(Cmd::Data(Local::now(), format!("Hello{counter}"))).unwrap();
+        data_tx.send(Cmd::Data(Local::now(), "Hello".repeat(30))).unwrap();
         counter += 1;
-        sleep(Duration::from_millis(1000));
+        sleep(Duration::from_millis(100));
     }
 }
 
@@ -255,13 +336,16 @@ fn main() {
     let (data_tx, data_rx) = channel();
     let data_tx2 = data_tx.clone();
 
+    let yaml_content = std::fs::read(CMD_YAML_FILEPATH).unwrap();
+    let yaml_cmds: BTreeMap<String, String> = serde_yaml::from_str(std::str::from_utf8(yaml_content.as_slice()).unwrap()).unwrap();
+
     thread::spawn(move || {
-        serial_task(serial_rx, data_tx);
-        // fake_serial_task(serial_rx, data_tx);
+        // serial_task(serial_rx, data_tx);
+        fake_serial_task(serial_rx, data_tx);
     });
 
     let tui_task_handler = thread::spawn(move || {
-        tui_task(serial_tx, data_rx).unwrap();
+        tui_task(serial_tx, data_rx, yaml_cmds).unwrap();
     });
 
     thread::spawn(move || {
