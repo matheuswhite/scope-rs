@@ -45,6 +45,7 @@ impl Interface for SerialIF {
     }
 }
 
+#[allow(unused)]
 impl SerialIF {
     const RECONNECT_INTERVAL: Duration = Duration::from_millis(200);
 

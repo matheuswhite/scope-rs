@@ -13,8 +13,7 @@ use tui::widgets::{Block, Borders, Paragraph};
 use tui::Frame;
 
 pub struct CommandBar<B: Backend> {
-    interface: usize,
-    interfaces: Vec<Box<dyn Interface>>,
+    interface: Box<dyn Interface>,
     view: usize,
     views: Vec<Box<dyn View<Backend = B>>>,
     command_line: String,
@@ -28,7 +27,6 @@ impl<B: Backend> CommandBar<B> {
 
     pub fn draw(&self, f: &mut Frame<B>) {
         let view = self.views[self.view].as_ref();
-        let interface = self.interfaces[self.interface].as_ref();
 
         let chunks = Layout::default()
             .direction(Direction::Vertical)
@@ -51,11 +49,11 @@ impl<B: Backend> CommandBar<B> {
             .title(format!(
                 "[{:03}] {}",
                 self.history.len(),
-                interface.description()
+                self.interface.description()
             ))
             .borders(Borders::ALL)
-            .border_style(Style::default().fg(if interface.is_connected() {
-                interface.color()
+            .border_style(Style::default().fg(if self.interface.is_connected() {
+                self.interface.color()
             } else {
                 Color::LightRed
             }));
@@ -65,11 +63,10 @@ impl<B: Backend> CommandBar<B> {
     }
 
     pub fn update(&mut self) -> Result<(), ()> {
-        let view = self.views[self.view].as_mut();
-        let interface = self.interfaces[self.interface].as_ref();
-
-        if let Ok(data_out) = interface.try_recv() {
-            view.add_data_out(data_out);
+        if let Ok(data_out) = self.interface.try_recv() {
+            for view in self.views.iter_mut() {
+                view.add_data_out(data_out.clone());
+            }
         }
 
         let Ok(key) = self.key_receiver.try_recv() else {
@@ -102,7 +99,8 @@ impl<B: Backend> CommandBar<B> {
                         }
 
                         let data_to_send = yaml_content.get(key).unwrap();
-                        interface.send(DataIn::Command(key.to_string(), data_to_send.to_string()));
+                        self.interface
+                            .send(DataIn::Command(key.to_string(), data_to_send.to_string()));
                     }
                     '!' => {
                         match command_line
@@ -111,7 +109,11 @@ impl<B: Backend> CommandBar<B> {
                             .to_lowercase()
                             .as_ref()
                         {
-                            "clear" | "clean" => view.clear(),
+                            "clear" | "clean" => {
+                                for view in self.views.iter_mut() {
+                                    view.clear();
+                                }
+                            }
                             "cmds" | "commands" => {
                                 // TODO Open pop up with commands
                             }
@@ -121,7 +123,7 @@ impl<B: Backend> CommandBar<B> {
                         }
                     }
                     _ => {
-                        interface.send(DataIn::Data(command_line));
+                        self.interface.send(DataIn::Data(command_line));
                     }
                 }
             }
@@ -143,11 +145,7 @@ impl<B: Backend> CommandBar<B> {
 }
 
 impl<B: Backend> CommandBar<B> {
-    pub fn new(
-        interfaces: Vec<Box<dyn Interface>>,
-        views: Vec<Box<dyn View<Backend = B>>>,
-    ) -> Self {
-        assert!(!interfaces.is_empty(), "Interfaces cannot be empty");
+    pub fn new(interface: Box<dyn Interface>, views: Vec<Box<dyn View<Backend = B>>>) -> Self {
         assert!(!views.is_empty(), "Views cannot be empty");
 
         let (key_sender, key_receiver) = channel();
@@ -155,8 +153,7 @@ impl<B: Backend> CommandBar<B> {
         thread::spawn(move || CommandBar::<B>::task(key_sender));
 
         Self {
-            interface: 0,
-            interfaces,
+            interface,
             view: 0,
             views,
             command_line: String::new(),

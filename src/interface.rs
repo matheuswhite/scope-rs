@@ -8,6 +8,7 @@ pub enum DataIn {
     Command(String, String),
 }
 
+#[derive(Clone)]
 pub enum DataOut {
     Data(DateTime<Local>, String),
     ConfirmData(DateTime<Local>, String),

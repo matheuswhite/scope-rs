@@ -11,13 +11,15 @@ use tui::Frame;
 
 pub struct TextView<B: Backend> {
     history: Vec<ViewData>,
+    capacity: usize,
     _marker: PhantomData<B>,
 }
 
 impl<B: Backend> TextView<B> {
-    pub fn new() -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
             history: vec![],
+            capacity,
             _marker: PhantomData,
         }
     }
@@ -27,7 +29,12 @@ impl<B: Backend> View for TextView<B> {
     type Backend = B;
 
     fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect) {
-        // TODO Add scroll
+        let height = (rect.height - 2) as usize;
+        let scroll = if self.history.len() > height {
+            self.history.len() - height
+        } else {
+            0
+        };
 
         let block = Block::default()
             .title(format!("[{:03}] Text UTF-8", self.history.len()))
@@ -55,12 +62,14 @@ impl<B: Backend> View for TextView<B> {
                 ])
             })
             .collect::<Vec<_>>();
-        let paragraph = Paragraph::new(text).block(block).scroll((0, 0));
+        let paragraph = Paragraph::new(text).block(block).scroll((scroll as u16, 0));
         f.render_widget(paragraph, rect);
     }
 
     fn add_data_out(&mut self, data: DataOut) {
-        // TODO Remove old datas
+        if self.history.len() >= self.capacity {
+            self.history.remove(0);
+        }
 
         self.history.push(match data {
             DataOut::Data(timestamp, data) => ViewData::if_data(timestamp, data),

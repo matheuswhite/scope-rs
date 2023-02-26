@@ -13,13 +13,15 @@ use tui::Frame;
 
 pub struct GraphView<B: Backend> {
     history: Vec<GraphData>,
+    capacity: usize,
     _marker: PhantomData<B>,
 }
 
 impl<B: Backend> GraphView<B> {
-    pub fn new() -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
             history: vec![],
+            capacity,
             _marker: PhantomData,
         }
     }
@@ -101,7 +103,6 @@ impl<B: Backend> View for GraphView<B> {
     type Backend = B;
 
     fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect) {
-        // TODO Add scroll
         let x_limit = |data: Option<&GraphData>| {
             if let Some(data) = data {
                 data.timestamp
@@ -110,7 +111,16 @@ impl<B: Backend> View for GraphView<B> {
             }
         };
 
-        let x_bounds = [x_limit(self.history.first()), x_limit(self.history.last())];
+        let window = rect.width as usize;
+        let x_min = x_limit(self.history.first());
+        let x_max = x_limit(self.history.last());
+        let x_min = if self.history.len() > window {
+            x_limit(self.history.get(self.history.len() - window))
+        } else {
+            x_min
+        };
+
+        let x_bounds = [x_min, x_max];
         let y_bounds = [self.get_y_bottom() * 1.2, self.get_y_top() * 1.2];
         let x_labels = GraphView::<B>::get_labels(x_bounds);
         let y_labels = GraphView::<B>::get_labels(y_bounds);
@@ -162,7 +172,9 @@ impl<B: Backend> View for GraphView<B> {
     }
 
     fn add_data_out(&mut self, data: DataOut) {
-        // TODO Remove old datas
+        if self.history.len() >= self.capacity {
+            self.history.remove(0);
+        }
 
         match data {
             DataOut::Data(timestamp, data) => {
