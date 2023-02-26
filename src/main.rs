@@ -28,18 +28,6 @@ type ConcreteBackend = CrosstermBackend<Stdout>;
 const CMD_FILEPATH: &str = "cmds.yaml";
 const CAPACITY: usize = 250;
 
-pub mod timer {
-    use std::thread;
-    use std::time::Duration;
-
-    pub fn start<F: FnOnce() + Send + Clone + 'static>(interval: Duration, action: F) {
-        thread::spawn(move || loop {
-            thread::sleep(interval);
-            action.clone()();
-        });
-    }
-}
-
 fn main() -> Result<(), io::Error> {
     let views: Vec<Box<dyn View<Backend = ConcreteBackend>>> = vec![
         Box::new(TextView::new(CAPACITY)),

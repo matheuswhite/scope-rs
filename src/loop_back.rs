@@ -1,5 +1,4 @@
 use crate::interface::{DataIn, DataOut, Interface};
-use crate::timer;
 use chrono::Local;
 use rand::rngs::ThreadRng;
 use rand::Rng;
@@ -7,6 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::thread;
+use std::thread::sleep;
 use std::time::Duration;
 use tui::style::Color;
 
@@ -68,7 +68,8 @@ impl LoopBackIF {
             LoopBackIF::task(if_rx, data_tx, is_connected2);
         });
 
-        timer::start(send_interval, move || {
+        thread::spawn(move || loop {
+            sleep(send_interval);
             if is_connected3.load(Ordering::SeqCst) {
                 data_tx2
                     .send(DataOut::Data(Local::now(), data_to_send()))
@@ -76,7 +77,8 @@ impl LoopBackIF {
             }
         });
 
-        timer::start(LoopBackIF::UPDATE_CONNECTION_INTERVAL, move || {
+        thread::spawn(move || loop {
+            sleep(LoopBackIF::UPDATE_CONNECTION_INTERVAL);
             let mut rng = rand::thread_rng();
             if is_connected4.load(Ordering::SeqCst) {
                 LoopBackIF::rng_disconnet(&mut rng, is_connected4.clone());
