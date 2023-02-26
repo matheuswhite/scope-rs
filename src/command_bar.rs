@@ -1,16 +1,16 @@
+use crate::error_pop_up::ErrorPopUp;
 use crate::interface::{DataIn, Interface};
 use crate::view::View;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use std::cmp::{max, min};
 use std::collections::BTreeMap;
-use std::marker::PhantomData;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
-use std::time::{Duration, Instant};
 use tui::backend::Backend;
-use tui::layout::{Alignment, Constraint, Direction, Layout, Rect};
+use tui::layout::{Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Style};
-use tui::text::Span;
+use tui::text::{Span, Spans};
 use tui::widgets::{Block, Borders, Clear, Paragraph};
 use tui::Frame;
 
@@ -22,6 +22,7 @@ pub struct CommandBar<B: Backend> {
     command_filepath: Option<PathBuf>,
     history: Vec<String>,
     error_pop_up: Option<ErrorPopUp<B>>,
+    command_list: CommandList,
     key_receiver: Receiver<KeyEvent>,
 }
 
@@ -64,6 +65,9 @@ impl<B: Backend + Send> CommandBar<B> {
         f.render_widget(paragraph, chunks[1]);
         f.set_cursor(cursor_pos.0, cursor_pos.1);
 
+        self.command_list
+            .draw(f, chunks[1].y, self.interface.color());
+
         if let Some(pop_up) = self.error_pop_up.as_ref() {
             pop_up.draw(f, chunks[1].y);
         }
@@ -77,6 +81,39 @@ impl<B: Backend + Send> CommandBar<B> {
 
     fn set_error_pop_up(&mut self, message: String) {
         self.error_pop_up = Some(ErrorPopUp::new(message));
+    }
+
+    fn update_command_list(&mut self) {
+        if !self.command_line.starts_with('/') {
+            self.command_list.clear();
+            return;
+        }
+
+        // TODO Load YAML file at start
+        let Some(filepath) = self.command_filepath.clone() else {
+            self.set_error_pop_up("No YAML command file loaded!".to_string());
+            return;
+        };
+
+        let yaml_content = self.load_commands(&filepath);
+        if yaml_content.is_empty() {
+            return;
+        }
+
+        let cmd_line = self.command_line.strip_prefix('/').unwrap();
+        let cmds = yaml_content
+            .keys()
+            .filter_map(|x| {
+                if x.starts_with(cmd_line) {
+                    Some(x.clone())
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>();
+
+        self.command_list
+            .update_params(cmds, self.command_line.clone());
     }
 
     pub fn update(&mut self) -> Result<(), ()> {
@@ -101,14 +138,19 @@ impl<B: Backend + Send> CommandBar<B> {
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.error_pop_up.take();
             }
-            KeyCode::Char(c) => self.command_line.push(c),
+            KeyCode::Char(c) => {
+                self.command_line.push(c);
+                self.update_command_list();
+            }
             KeyCode::Backspace => {
                 self.command_line.pop();
+                self.update_command_list();
             }
             KeyCode::Esc => return Err(()),
             KeyCode::Enter if !self.command_line.is_empty() => {
                 let command_line = self.command_line.clone();
                 self.command_line.clear();
+                self.command_list.clear();
 
                 match command_line.chars().next().unwrap() {
                     '/' => {
@@ -211,6 +253,7 @@ impl<B: Backend> CommandBar<B> {
             key_receiver,
             error_pop_up: None,
             command_filepath: None,
+            command_list: CommandList::new(),
         }
     }
 
@@ -228,44 +271,75 @@ impl<B: Backend> CommandBar<B> {
     }
 }
 
-struct ErrorPopUp<B: Backend> {
-    message: String,
-    spwan_time: Instant,
-    _marker: PhantomData<B>,
+struct CommandList {
+    commands: Vec<String>,
+    pattern: String,
 }
 
-impl<B: Backend> ErrorPopUp<B> {
-    const TIMEOUT: Duration = Duration::from_millis(5000);
-
-    pub fn new(message: String) -> Self {
+impl CommandList {
+    pub fn new() -> Self {
         Self {
-            message,
-            _marker: PhantomData,
-            spwan_time: Instant::now(),
+            commands: vec![],
+            pattern: String::new(),
         }
     }
 }
 
-impl<B: Backend> ErrorPopUp<B> {
-    pub fn draw(&self, f: &mut Frame<B>, command_bar_y: u16) {
-        let area_size = (self.message.chars().count() as u16 + 4, 3);
+impl CommandList {
+    pub fn clear(&mut self) {
+        self.commands.clear();
+        self.pattern.clear();
+    }
+
+    pub fn update_params(&mut self, commands: Vec<String>, pattern: String) {
+        self.commands = commands;
+        self.pattern = pattern;
+    }
+
+    pub fn draw<B: Backend>(&self, f: &mut Frame<B>, command_bar_y: u16, color: Color) {
+        if self.commands.is_empty() {
+            return;
+        }
+
+        let max_commands = min(f.size().height as usize / 2, self.commands.len());
+        let mut commands = self.commands[..max_commands].to_vec();
+        if commands.len() < self.commands.len() {
+            commands.push("...".to_string());
+        }
+
+        let longest_command_len = commands
+            .iter()
+            .fold(0u16, |len, x| max(len, x.chars().count() as u16));
+        let area_size = (longest_command_len + 5, commands.len() as u16 + 2);
         let area = Rect::new(
-            (f.size().width - area_size.0) / 2,
-            command_bar_y - area_size.1 + 1,
+            f.size().x + 2,
+            command_bar_y - area_size.1,
             area_size.0,
             area_size.1,
         );
         let block = Block::default()
             .borders(Borders::ALL)
-            .style(Style::default().fg(Color::LightRed));
-        let paragraph = Paragraph::new(Span::from(self.message.clone()))
-            .block(block)
-            .alignment(Alignment::Center);
+            .style(Style::default().fg(color));
+        let text = commands
+            .iter()
+            .map(|x| {
+                let is_last =
+                    (x == commands.last().unwrap()) && (commands.len() < self.commands.len());
+
+                Spans::from(vec![
+                    Span::styled(
+                        format!(" {}", if !is_last { &self.pattern } else { "" }),
+                        Style::default().fg(color),
+                    ),
+                    Span::styled(
+                        x[self.pattern.len() - 1..].to_string(),
+                        Style::default().fg(Color::White),
+                    ),
+                ])
+            })
+            .collect::<Vec<_>>();
+        let paragraph = Paragraph::new(text).block(block);
         f.render_widget(Clear, area);
         f.render_widget(paragraph, area);
-    }
-
-    pub fn is_timeout(&self) -> bool {
-        self.spwan_time.elapsed() >= ErrorPopUp::<B>::TIMEOUT
     }
 }

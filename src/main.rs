@@ -16,6 +16,7 @@ use tui::backend::CrosstermBackend;
 use tui::Terminal;
 
 mod command_bar;
+mod error_pop_up;
 mod graph;
 mod interface;
 mod loop_back;
