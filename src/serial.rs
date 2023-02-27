@@ -4,7 +4,7 @@ use serialport::SerialPort;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use std::{io, thread};
 use tui::style::Color;
@@ -47,6 +47,7 @@ impl Interface for SerialIF {
 
 #[allow(unused)]
 impl SerialIF {
+    const SERIAL_TIMEOUT: Duration = Duration::from_millis(10);
     const RECONNECT_INTERVAL: Duration = Duration::from_millis(200);
 
     pub fn new(port: &str, baudrate: u32) -> Self {
@@ -58,7 +59,7 @@ impl SerialIF {
         let port_clone = port.to_string();
         let is_connected_clone = is_connected.clone();
         thread::spawn(move || {
-            SerialIF::task(
+            SerialIF::send_task(
                 &port_clone,
                 baudrate,
                 serial_rx,
@@ -83,7 +84,10 @@ impl SerialIF {
         is_connected: Arc<AtomicBool>,
     ) -> Box<dyn SerialPort> {
         'reconnect: loop {
-            if let Ok(serial) = serialport::new(port, baudrate).open() {
+            if let Ok(mut serial) = serialport::new(port, baudrate).open() {
+                serial
+                    .set_timeout(SerialIF::SERIAL_TIMEOUT)
+                    .expect("Cannot set serialport timeout");
                 is_connected.store(true, Ordering::SeqCst);
                 break 'reconnect serial;
             }
@@ -91,7 +95,7 @@ impl SerialIF {
         }
     }
 
-    fn task(
+    fn send_task(
         port: &str,
         baudrate: u32,
         serial_rx: Receiver<DataIn>,
@@ -104,38 +108,40 @@ impl SerialIF {
             SerialIF::RECONNECT_INTERVAL,
             is_connected.clone(),
         );
+
         let mut line = String::new();
-        let mut buffer = [0u8; 1];
+        let mut buffer = [0u8];
 
         'task: loop {
             if let Ok(data_to_send) = serial_rx.try_recv() {
                 match data_to_send {
                     DataIn::Exit => break 'task,
-                    DataIn::Data(data_to_send) => match serial.write(data_to_send.as_bytes()) {
-                        Ok(_) => data_tx
-                            .send(DataOut::ConfirmData(Local::now(), data_to_send))
-                            .expect("Cannot send data confirm"),
-                        Err(_) => {
-                            data_tx
-                                .send(DataOut::FailData(Local::now(), data_to_send))
-                                .expect("Canot send data fail");
-                            serial = SerialIF::reconnect(
-                                port,
-                                baudrate,
-                                SerialIF::RECONNECT_INTERVAL,
-                                is_connected.clone(),
-                            )
+                    DataIn::Data(data_to_send) => {
+                        match serial.write(format!("{data_to_send}\r\n").as_bytes()) {
+                            Ok(_) => {
+                                data_tx
+                                    .send(DataOut::ConfirmData(Local::now(), data_to_send))
+                                    .expect("Cannot send data confirm");
+                                eprint!("Data tx sent\r");
+                            }
+                            Err(_) => {
+                                data_tx
+                                    .send(DataOut::FailData(Local::now(), data_to_send))
+                                    .expect("Canot send data fail");
+                            }
                         }
-                    },
+                    }
                     DataIn::Command(command_name, data_to_send) => {
-                        match serial.write(data_to_send.as_bytes()) {
-                            Ok(_) => data_tx
-                                .send(DataOut::ConfirmCommand(
-                                    Local::now(),
-                                    command_name,
-                                    data_to_send,
-                                ))
-                                .expect("Cannot send command confirm"),
+                        match serial.write(format!("{data_to_send}\r\n").as_bytes()) {
+                            Ok(_) => {
+                                data_tx
+                                    .send(DataOut::ConfirmCommand(
+                                        Local::now(),
+                                        command_name,
+                                        data_to_send,
+                                    ))
+                                    .expect("Cannot send command confirm");
+                            }
                             Err(_) => {
                                 data_tx
                                     .send(DataOut::FailCommand(
@@ -144,12 +150,6 @@ impl SerialIF {
                                         data_to_send,
                                     ))
                                     .expect("Cannot send command fail");
-                                serial = SerialIF::reconnect(
-                                    port,
-                                    baudrate,
-                                    SerialIF::RECONNECT_INTERVAL,
-                                    is_connected.clone(),
-                                )
                             }
                         }
                     }
