@@ -71,17 +71,27 @@ impl<B: Backend> View for TextView<B> {
             self.history.remove(0);
         }
 
-        self.history.push(match data {
-            DataOut::Data(timestamp, data) => ViewData::if_data(timestamp, data),
-            DataOut::ConfirmData(timestamp, data) => ViewData::user_data(timestamp, data),
-            DataOut::ConfirmCommand(timestamp, cmd_name, data) => {
-                ViewData::user_command(timestamp, cmd_name, data)
+        match data {
+            DataOut::Data(timestamp, data) => {
+                let contents = ViewData::decode_ansi_color(&data);
+                for (content, color) in contents {
+                    self.history
+                        .push(ViewData::if_data(timestamp, content, color));
+                }
             }
-            DataOut::FailData(timestamp, data) => ViewData::fail_data(timestamp, data),
-            DataOut::FailCommand(timestamp, cmd_name, _data) => {
-                ViewData::fail_command(timestamp, cmd_name)
+            DataOut::ConfirmData(timestamp, data) => {
+                self.history.push(ViewData::user_data(timestamp, data))
             }
-        });
+            DataOut::ConfirmCommand(timestamp, cmd_name, data) => self
+                .history
+                .push(ViewData::user_command(timestamp, cmd_name, data)),
+            DataOut::FailData(timestamp, data) => {
+                self.history.push(ViewData::fail_data(timestamp, data))
+            }
+            DataOut::FailCommand(timestamp, cmd_name, _data) => self
+                .history
+                .push(ViewData::fail_command(timestamp, cmd_name)),
+        };
     }
 
     fn clear(&mut self) {
@@ -97,11 +107,69 @@ struct ViewData {
 }
 
 impl ViewData {
-    fn if_data(timestamp: DateTime<Local>, content: String) -> Self {
+    fn decode_ansi_color(text: &str) -> Vec<(String, Color)> {
+        if text.is_empty() {
+            return vec![];
+        }
+
+        let splitted = text.split("\x1B[").collect::<Vec<_>>();
+        let mut res = vec![];
+
+        let pattern_n_color = [
+            ("0m", Color::White),
+            ("30m", Color::Black),
+            ("0;30m", Color::Black),
+            ("31m", Color::Red),
+            ("0;31m", Color::Red),
+            ("32m", Color::Green),
+            ("0;32m", Color::Green),
+            ("33m", Color::Yellow),
+            ("0;33m", Color::Yellow),
+            ("34m", Color::Blue),
+            ("0;34m", Color::Blue),
+            ("35m", Color::Magenta),
+            ("0;35m", Color::Magenta),
+            ("36m", Color::Cyan),
+            ("0;36m", Color::Cyan),
+            ("37m", Color::Gray),
+            ("0;37m", Color::Gray),
+        ];
+
+        for splitted_str in splitted.iter() {
+            if splitted_str.is_empty() {
+                continue;
+            }
+
+            if pattern_n_color.iter().all(|(pattern, color)| {
+                if splitted_str.starts_with(pattern) {
+                    let final_str = splitted_str
+                        .to_string()
+                        .replace(pattern, "")
+                        .trim()
+                        .to_string();
+                    if final_str.is_empty() {
+                        return true;
+                    }
+
+                    res.push((final_str, *color));
+                    return false;
+                }
+
+                true
+            }) && !splitted_str.starts_with("0m")
+            {
+                res.push((splitted_str.to_string(), Color::White));
+            }
+        }
+
+        res
+    }
+
+    fn if_data(timestamp: DateTime<Local>, content: String, color: Color) -> Self {
         Self {
             timestamp,
             content,
-            fg: Color::White,
+            fg: color,
             bg: Color::Reset,
         }
     }
@@ -142,79 +210,3 @@ impl ViewData {
         }
     }
 }
-
-// fn decode_ansi_color(text: &str) -> Vec<(String, Color)> {
-//     if text.is_empty() {
-//         return vec![];
-//     }
-//
-//     let splitted = text.split("\x1B[").collect::<Vec<_>>();
-//     let mut res = vec![];
-//
-//     let pattern_n_color = [
-//         ("0m", Color::White),
-//         ("30m", Color::Black),
-//         ("0;30m", Color::Black),
-//         ("31m", Color::Red),
-//         ("0;31m", Color::Red),
-//         ("32m", Color::Green),
-//         ("0;32m", Color::Green),
-//         ("33m", Color::Yellow),
-//         ("0;33m", Color::Yellow),
-//         ("34m", Color::Blue),
-//         ("0;34m", Color::Blue),
-//         ("35m", Color::Magenta),
-//         ("0;35m", Color::Magenta),
-//         ("36m", Color::Cyan),
-//         ("0;36m", Color::Cyan),
-//         ("37m", Color::Gray),
-//         ("0;37m", Color::Gray),
-//     ];
-//
-//     for splitted_str in splitted.iter() {
-//         if splitted_str.is_empty() {
-//             continue;
-//         }
-//
-//         if pattern_n_color.iter().all(|(pattern, color)| {
-//             if splitted_str.starts_with(pattern) {
-//                 let final_str = splitted_str
-//                     .to_string()
-//                     .replace(pattern, "")
-//                     .trim()
-//                     .to_string();
-//                 if final_str.is_empty() {
-//                     return true;
-//                 }
-//
-//                 res.push((final_str, *color));
-//                 return false;
-//             }
-//
-//             true
-//         }) && !splitted_str.starts_with("0m")
-//         {
-//             res.push((splitted_str.to_string(), Color::White));
-//         }
-//     }
-//
-//     res
-// }
-//
-// fn how_many_lines(text: &str, initial_offset: usize, view_width: usize) -> usize {
-//     match initial_offset + text.len() {
-//         v if v < view_width => return 1,
-//         v if v == view_width => return 2,
-//         _ => {}
-//     }
-//
-//     1 + how_many_lines(&text[(view_width - initial_offset)..], 0, view_width)
-// }
-//
-// fn calc_scroll_pos(n_lines: u16, height: u16) -> u16 {
-//     if n_lines <= height {
-//         0
-//     } else {
-//         n_lines - height
-//     }
-// }

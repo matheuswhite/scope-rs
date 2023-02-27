@@ -168,7 +168,8 @@ impl SerialIF {
                     }
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {}
-                Err(ref e) if e.kind() == io::ErrorKind::ConnectionAborted => {
+                Err(ref e) if e.kind() == io::ErrorKind::PermissionDenied => {
+                    is_connected.store(false, Ordering::SeqCst);
                     serial = SerialIF::reconnect(
                         port,
                         baudrate,
@@ -176,7 +177,7 @@ impl SerialIF {
                         is_connected.clone(),
                     );
                 }
-                Err(e) => eprint!("{e:?}"),
+                Err(e) => eprint!("{:?}", e.kind()),
             }
         }
     }

@@ -1,6 +1,7 @@
 use crate::command_bar::CommandBar;
 use crate::graph::GraphView;
 use crate::loop_back::LoopBackIF;
+use crate::serial::SerialIF;
 use crate::text::TextView;
 use crate::view::View;
 use chrono::Local;
@@ -28,6 +29,8 @@ type ConcreteBackend = CrosstermBackend<Stdout>;
 
 const CMD_FILEPATH: &str = "cmds.yaml";
 const CAPACITY: usize = 250;
+const PORT: &str = "COM8";
+const BAUDRATE: u32 = 115200;
 
 fn main() -> Result<(), io::Error> {
     let views: Vec<Box<dyn View<Backend = ConcreteBackend>>> = vec![
@@ -35,7 +38,7 @@ fn main() -> Result<(), io::Error> {
         Box::new(GraphView::new(CAPACITY)),
     ];
 
-    let interface = Box::new(LoopBackIF::new(
+    let loop_back = Box::new(LoopBackIF::new(
         || {
             let now = 2.0 * std::f32::consts::PI * 1000.0;
             let now = Local::now().timestamp_millis() % now as i64;
@@ -52,6 +55,7 @@ fn main() -> Result<(), io::Error> {
         },
         Duration::from_millis(100),
     ));
+    let serial_if = Box::new(SerialIF::new(PORT, BAUDRATE));
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -60,7 +64,7 @@ fn main() -> Result<(), io::Error> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut command_bar =
-        CommandBar::<ConcreteBackend>::new(interface, views).with_command_file(CMD_FILEPATH);
+        CommandBar::<ConcreteBackend>::new(serial_if, views).with_command_file(CMD_FILEPATH);
 
     'main: loop {
         terminal.draw(|f| command_bar.draw(f))?;
