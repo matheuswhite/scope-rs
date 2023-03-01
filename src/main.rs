@@ -13,7 +13,7 @@ use crossterm::terminal::{
 use std::io;
 use std::io::Stdout;
 use std::time::Duration;
-use tui::backend::CrosstermBackend;
+use tui::backend::{Backend, CrosstermBackend};
 use tui::Terminal;
 
 mod command_bar;
@@ -28,7 +28,7 @@ mod view;
 type ConcreteBackend = CrosstermBackend<Stdout>;
 
 const CMD_FILEPATH: &str = "cmds.yaml";
-const CAPACITY: usize = 250;
+const CAPACITY: usize = 2000;
 const PORT: &str = "COM8";
 const BAUDRATE: u32 = 115200;
 
@@ -38,6 +38,7 @@ fn main() -> Result<(), io::Error> {
         Box::new(GraphView::new(CAPACITY)),
     ];
 
+    #[allow(unused)]
     let loop_back = Box::new(LoopBackIF::new(
         || {
             let now = 2.0 * std::f32::consts::PI * 1000.0;
@@ -69,7 +70,10 @@ fn main() -> Result<(), io::Error> {
     'main: loop {
         terminal.draw(|f| command_bar.draw(f))?;
 
-        if command_bar.update().is_err() {
+        if command_bar
+            .update(terminal.backend().size().unwrap())
+            .is_err()
+        {
             break 'main;
         }
     }

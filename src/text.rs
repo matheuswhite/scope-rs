@@ -4,65 +4,73 @@ use chrono::{DateTime, Local};
 use std::marker::PhantomData;
 use tui::backend::Backend;
 use tui::layout::Rect;
-use tui::style::{Color, Style};
+use tui::style::{Color, Modifier, Style};
 use tui::text::{Span, Spans};
-use tui::widgets::{Block, Borders, Paragraph};
+use tui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use tui::Frame;
 
-pub struct TextView<B: Backend> {
-    history: Vec<ViewData>,
+pub struct TextView<'a, B: Backend> {
+    history: Vec<ViewData<'a>>,
     capacity: usize,
     _marker: PhantomData<B>,
+    auto_scroll: bool,
 }
 
-impl<B: Backend> TextView<B> {
+impl<'a, B: Backend> TextView<'a, B> {
     pub fn new(capacity: usize) -> Self {
         Self {
             history: vec![],
             capacity,
             _marker: PhantomData,
+            auto_scroll: true,
         }
     }
 }
 
-impl<B: Backend> View for TextView<B> {
+impl<'a, B: Backend> View for TextView<'a, B> {
     type Backend = B;
 
-    fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect) {
+    fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect, scroll: (u16, u16)) {
         let height = (rect.height - 2) as usize;
-        let scroll = if self.history.len() > height {
-            self.history.len() - height
+        let scroll = if self.auto_scroll {
+            let max_size = self.max_main_axis((f.size().width, f.size().height));
+
+            if max_size > height {
+                ((max_size - height) as u16, 0)
+            } else {
+                (0, 0)
+            }
         } else {
-            0
+            scroll
         };
 
-        let block = Block::default()
-            .title(format!("[{:03}] Text UTF-8", self.history.len()))
-            .borders(Borders::ALL)
-            .border_style(Style::default().fg(Color::White));
+        let block = if self.auto_scroll {
+            Block::default()
+                .title(format!("[{:03}] Text UTF-8", self.history.len()))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Thick)
+                .border_style(Style::default().fg(Color::White))
+        } else {
+            Block::default()
+                .title(format!("[{:03}] Text UTF-8", self.history.len()))
+                .borders(Borders::ALL)
+                .border_type(BorderType::Double)
+                .border_style(
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::RAPID_BLINK),
+                )
+        };
+
         let text = self
             .history
             .iter()
-            .map(|x| {
-                let tm_fg = if x.bg != Color::Reset { x.bg } else { x.fg };
-
-                Spans::from(vec![
-                    Span::styled(
-                        format!("[{}] ", x.timestamp.format("%d/%m/%Y %H:%M:%S")),
-                        Style::default().fg(tm_fg),
-                    ),
-                    Span::styled(
-                        format!(
-                            "{}{} ",
-                            if x.bg != Color::Reset { " " } else { "" },
-                            x.content
-                        ),
-                        Style::default().bg(x.bg).fg(x.fg),
-                    ),
-                ])
-            })
+            .map(|x| x.spans.clone())
             .collect::<Vec<_>>();
-        let paragraph = Paragraph::new(text).block(block).scroll((scroll as u16, 0));
+        let paragraph = Paragraph::new(text)
+            .block(block)
+            .wrap(Wrap { trim: false })
+            .scroll(scroll);
         f.render_widget(paragraph, rect);
     }
 
@@ -97,16 +105,25 @@ impl<B: Backend> View for TextView<B> {
     fn clear(&mut self) {
         self.history.clear();
     }
+
+    fn toggle_auto_scroll(&mut self) {
+        self.auto_scroll = !self.auto_scroll;
+    }
+
+    fn max_main_axis(&self, frame_size: (u16, u16)) -> usize {
+        self.history.iter().fold(0usize, |cnt, x| {
+            let lines = ((x.length - 1) / frame_size.0 as usize) + 1;
+            cnt + lines
+        })
+    }
 }
 
-struct ViewData {
-    timestamp: DateTime<Local>,
-    content: String,
-    fg: Color,
-    bg: Color,
+struct ViewData<'a> {
+    length: usize,
+    spans: Spans<'a>,
 }
 
-impl ViewData {
+impl<'a> ViewData<'a> {
     fn decode_ansi_color(text: &str) -> Vec<(String, Color)> {
         if text.is_empty() {
             return vec![];
@@ -165,48 +182,65 @@ impl ViewData {
         res
     }
 
+    fn build_spans(timestamp: DateTime<Local>, content: String, fg: Color, bg: Color) -> Spans<'a> {
+        let tm_fg = if bg != Color::Reset { bg } else { fg };
+
+        Spans::from(vec![
+            Span::styled(
+                format!("[{}] ", timestamp.format("%d/%m/%Y %H:%M:%S")),
+                Style::default().fg(tm_fg),
+            ),
+            Span::styled(
+                format!("{}{} ", if bg != Color::Reset { " " } else { "" }, content),
+                Style::default().bg(bg).fg(fg),
+            ),
+        ])
+    }
+
+    fn compute_content_length(timestamp: DateTime<Local>, content: &str) -> usize {
+        let timestamp_str = format!("[{}] ", timestamp.format("%d/%m/%Y %H:%M:%S"));
+
+        timestamp_str.chars().count() + content.chars().count() + 2
+    }
+
     fn if_data(timestamp: DateTime<Local>, content: String, color: Color) -> Self {
         Self {
-            timestamp,
-            content,
-            fg: color,
-            bg: Color::Reset,
+            length: ViewData::compute_content_length(timestamp, &content),
+            spans: ViewData::build_spans(timestamp, content, color, Color::Reset),
         }
     }
 
     fn user_data(timestamp: DateTime<Local>, content: String) -> Self {
         Self {
-            timestamp,
-            content,
-            fg: Color::Black,
-            bg: Color::LightCyan,
+            length: ViewData::compute_content_length(timestamp, &content),
+            spans: ViewData::build_spans(timestamp, content, Color::Black, Color::LightCyan),
         }
     }
 
     fn user_command(timestamp: DateTime<Local>, cmd_name: String, content: String) -> Self {
+        let content = format!("</{cmd_name}> {content}");
+
         Self {
-            timestamp,
-            content: format!("</{cmd_name}> {content}"),
-            fg: Color::Black,
-            bg: Color::LightGreen,
+            length: ViewData::compute_content_length(timestamp, &content),
+            spans: ViewData::build_spans(timestamp, content, Color::Black, Color::LightGreen),
         }
     }
 
     fn fail_data(timestamp: DateTime<Local>, content: String) -> Self {
+        let content = format!("Cannot send \"{content}\"");
+
         Self {
-            timestamp,
-            content: format!("Cannot send \"{content}\""),
-            fg: Color::White,
-            bg: Color::LightRed,
+            length: ViewData::compute_content_length(timestamp, &content),
+            spans: ViewData::build_spans(timestamp, content, Color::White, Color::LightRed),
         }
     }
 
     fn fail_command(timestamp: DateTime<Local>, cmd_name: String) -> Self {
+        let content = format!("Cannot send </{cmd_name}>");
+
         Self {
-            timestamp,
-            content: format!("Cannot send </{cmd_name}>"),
-            fg: Color::White,
-            bg: Color::LightRed,
+            length: ViewData::compute_content_length(timestamp, &content),
+            spans: ViewData::build_spans(timestamp, content, Color::White, Color::LightRed),
         }
     }
 }

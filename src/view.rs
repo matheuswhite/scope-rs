@@ -6,7 +6,9 @@ use tui::Frame;
 pub trait View {
     type Backend: Backend;
 
-    fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect);
+    fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect, scroll: (u16, u16));
     fn add_data_out(&mut self, data: DataOut);
     fn clear(&mut self);
+    fn toggle_auto_scroll(&mut self);
+    fn max_main_axis(&self, frame_size: (u16, u16)) -> usize;
 }

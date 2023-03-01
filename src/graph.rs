@@ -102,7 +102,7 @@ const MARKERS: [(Color, Marker); 12] = [
 impl<B: Backend> View for GraphView<B> {
     type Backend = B;
 
-    fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect) {
+    fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect, _scroll: (u16, u16)) {
         let x_limit = |data: Option<&GraphData>| {
             if let Some(data) = data {
                 data.timestamp
@@ -191,6 +191,14 @@ impl<B: Backend> View for GraphView<B> {
 
     fn clear(&mut self) {
         self.history.clear();
+    }
+
+    fn toggle_auto_scroll(&mut self) {
+        todo!()
+    }
+
+    fn max_main_axis(&self, _frame_size: (u16, u16)) -> usize {
+        todo!()
     }
 }
 

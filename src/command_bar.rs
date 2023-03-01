@@ -1,7 +1,8 @@
+use crate::command_bar::InputEvent::{Key, VerticalScroll};
 use crate::error_pop_up::ErrorPopUp;
 use crate::interface::{DataIn, Interface};
 use crate::view::View;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use std::cmp::{max, min};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -23,7 +24,8 @@ pub struct CommandBar<B: Backend> {
     history: Vec<String>,
     error_pop_up: Option<ErrorPopUp<B>>,
     command_list: CommandList,
-    key_receiver: Receiver<KeyEvent>,
+    key_receiver: Receiver<InputEvent>,
+    scroll: (usize, usize),
 }
 
 impl<B: Backend + Send> CommandBar<B> {
@@ -43,7 +45,7 @@ impl<B: Backend + Send> CommandBar<B> {
             )
             .split(f.size());
 
-        view.draw(f, chunks[0]);
+        view.draw(f, chunks[0], (self.scroll.0 as u16, self.scroll.1 as u16));
 
         let cursor_pos = (
             chunks[1].x + self.command_line.chars().count() as u16 + 1,
@@ -116,24 +118,26 @@ impl<B: Backend + Send> CommandBar<B> {
             .update_params(cmds, self.command_line.clone());
     }
 
-    pub fn update(&mut self) -> Result<(), ()> {
-        if let Some(error_pop_up) = self.error_pop_up.as_ref() {
-            if error_pop_up.is_timeout() {
-                self.error_pop_up.take();
-            }
-        }
+    fn get_view_frame_size(term_size: Rect) -> (u16, u16) {
+        (
+            term_size.width - 2,
+            term_size.height - 2 - CommandBar::<B>::HEIGHT,
+        )
+    }
 
-        if let Ok(data_out) = self.interface.try_recv() {
-            for view in self.views.iter_mut() {
-                view.add_data_out(data_out.clone());
-            }
-        }
-
-        let Ok(key) = self.key_receiver.try_recv() else {
-            return Ok(());
-        };
-
+    fn handle_key_input(&mut self, key: KeyEvent, term_size: Rect) -> Result<(), ()> {
         match key.code {
+            KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
+                self.views[self.view].toggle_auto_scroll();
+
+                let height = term_size.height as usize - 5;
+                let frame_size = CommandBar::<B>::get_view_frame_size(term_size);
+                let max_main_axis = self.views[self.view].max_main_axis(frame_size);
+
+                if max_main_axis > height {
+                    self.scroll.0 = max_main_axis - height;
+                }
+            }
             KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => self.clear_views(),
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.error_pop_up.take();
@@ -216,6 +220,40 @@ impl<B: Backend + Send> CommandBar<B> {
         Ok(())
     }
 
+    pub fn update(&mut self, term_size: Rect) -> Result<(), ()> {
+        if let Some(error_pop_up) = self.error_pop_up.as_ref() {
+            if error_pop_up.is_timeout() {
+                self.error_pop_up.take();
+            }
+        }
+
+        if let Ok(data_out) = self.interface.try_recv() {
+            for view in self.views.iter_mut() {
+                view.add_data_out(data_out.clone());
+            }
+        }
+
+        let Ok(input_evt) = self.key_receiver.try_recv() else {
+            return Ok(());
+        };
+
+        match input_evt {
+            Key(key) => return self.handle_key_input(key, term_size),
+            VerticalScroll(direction) => {
+                let frame_size = CommandBar::<B>::get_view_frame_size(term_size);
+                let max_main_axis = self.views[self.view].max_main_axis(frame_size);
+
+                if direction < 0 && self.scroll.0 > 0 {
+                    self.scroll.0 -= 1;
+                } else if self.scroll.0 < (max_main_axis - 1) {
+                    self.scroll.0 += 1;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn load_commands(&mut self, filepath: &PathBuf) -> BTreeMap<String, String> {
         let Ok(yaml) = std::fs::read(filepath) else {
             self.set_error_pop_up(format!("Cannot find {filepath:?} filepath"));
@@ -254,6 +292,7 @@ impl<B: Backend> CommandBar<B> {
             error_pop_up: None,
             command_filepath: None,
             command_list: CommandList::new(),
+            scroll: (0, 0),
         }
     }
 
@@ -262,13 +301,24 @@ impl<B: Backend> CommandBar<B> {
         self
     }
 
-    fn task(sender: Sender<KeyEvent>) {
+    fn task(sender: Sender<InputEvent>) {
         loop {
-            if let Event::Key(key) = crossterm::event::read().unwrap() {
-                sender.send(key).unwrap();
+            match crossterm::event::read().unwrap() {
+                Event::Key(key) => sender.send(Key(key)).unwrap(),
+                Event::Mouse(mouse_evt) => match mouse_evt.kind {
+                    MouseEventKind::ScrollUp => sender.send(VerticalScroll(-1)).unwrap(),
+                    MouseEventKind::ScrollDown => sender.send(VerticalScroll(1)).unwrap(),
+                    _ => {}
+                },
+                _ => {}
             }
         }
     }
+}
+
+enum InputEvent {
+    Key(KeyEvent),
+    VerticalScroll(i8),
 }
 
 struct CommandList {
