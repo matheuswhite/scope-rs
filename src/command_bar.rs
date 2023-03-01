@@ -127,6 +127,22 @@ impl<B: Backend + Send> CommandBar<B> {
 
     fn handle_key_input(&mut self, key: KeyEvent, term_size: Rect) -> Result<(), ()> {
         match key.code {
+            KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
+                // TODO Mostrar Pop-Up de salvo
+                self.set_error_pop_up("Snapshot Salvo!".to_string());
+                self.views[self.view].save_snapshot();
+            }
+            KeyCode::Char('o') if key.modifiers == KeyModifiers::CONTROL => {
+                self.views[self.view].toggle_snapshot_mode();
+
+                let height = term_size.height as usize - 5;
+                let frame_size = CommandBar::<B>::get_view_frame_size(term_size);
+                let max_main_axis = self.views[self.view].max_main_axis(frame_size);
+
+                if max_main_axis > height {
+                    self.scroll.0 = max_main_axis - height;
+                }
+            }
             KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
                 self.views[self.view].toggle_auto_scroll();
 

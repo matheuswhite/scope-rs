@@ -200,6 +200,14 @@ impl<B: Backend> View for GraphView<B> {
     fn max_main_axis(&self, _frame_size: (u16, u16)) -> usize {
         todo!()
     }
+
+    fn save_snapshot(&mut self) {
+        todo!()
+    }
+
+    fn toggle_snapshot_mode(&mut self) {
+        todo!()
+    }
 }
 
 struct GraphData {

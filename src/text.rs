@@ -14,6 +14,8 @@ pub struct TextView<'a, B: Backend> {
     capacity: usize,
     _marker: PhantomData<B>,
     auto_scroll: bool,
+    snapshot_mode_en: bool,
+    snapshot: Vec<ViewData<'a>>,
 }
 
 impl<'a, B: Backend> TextView<'a, B> {
@@ -23,6 +25,8 @@ impl<'a, B: Backend> TextView<'a, B> {
             capacity,
             _marker: PhantomData,
             auto_scroll: true,
+            snapshot_mode_en: false,
+            snapshot: vec![],
         }
     }
 }
@@ -44,15 +48,25 @@ impl<'a, B: Backend> View for TextView<'a, B> {
             scroll
         };
 
+        let (coll, title, max) = if self.snapshot_mode_en {
+            (
+                &self.snapshot,
+                "Snapshot",
+                format!("/{}", self.snapshot.len()),
+            )
+        } else {
+            (&self.history, "Normal", "".to_string())
+        };
+
         let block = if self.auto_scroll {
             Block::default()
-                .title(format!("[{:03}] Text UTF-8", self.history.len()))
+                .title(format!("[{:03}{}] Text UTF-8 <{}>", coll.len(), max, title))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Thick)
                 .border_style(Style::default().fg(Color::White))
         } else {
             Block::default()
-                .title(format!("[{:03}] Text UTF-8", self.history.len()))
+                .title(format!("[{:03}{}] Text UTF-8 <{}>", coll.len(), max, title))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Double)
                 .border_style(
@@ -62,11 +76,7 @@ impl<'a, B: Backend> View for TextView<'a, B> {
                 )
         };
 
-        let text = self
-            .history
-            .iter()
-            .map(|x| x.spans.clone())
-            .collect::<Vec<_>>();
+        let text = coll.iter().map(|x| x.spans.clone()).collect::<Vec<_>>();
         let paragraph = Paragraph::new(text)
             .block(block)
             .wrap(Wrap { trim: false })
@@ -116,8 +126,27 @@ impl<'a, B: Backend> View for TextView<'a, B> {
             cnt + lines
         })
     }
+
+    fn save_snapshot(&mut self) {
+        let snapshot_capacity = self.capacity / 4;
+        let last_index = self.history.len();
+        let start = if snapshot_capacity > last_index {
+            0
+        } else {
+            last_index - snapshot_capacity
+        };
+
+        self.snapshot = self.history[start..].to_vec();
+    }
+
+    fn toggle_snapshot_mode(&mut self) {
+        self.snapshot_mode_en = !self.snapshot_mode_en;
+
+        self.auto_scroll = !self.snapshot_mode_en;
+    }
 }
 
+#[derive(Clone)]
 struct ViewData<'a> {
     length: usize,
     spans: Spans<'a>,

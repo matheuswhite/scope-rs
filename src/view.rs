@@ -11,4 +11,6 @@ pub trait View {
     fn clear(&mut self);
     fn toggle_auto_scroll(&mut self);
     fn max_main_axis(&self, frame_size: (u16, u16)) -> usize;
+    fn save_snapshot(&mut self);
+    fn toggle_snapshot_mode(&mut self);
 }
