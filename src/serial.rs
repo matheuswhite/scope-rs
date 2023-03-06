@@ -122,7 +122,6 @@ impl SerialIF {
                                 data_tx
                                     .send(DataOut::ConfirmData(Local::now(), data_to_send))
                                     .expect("Cannot send data confirm");
-                                eprint!("Data tx sent\r");
                             }
                             Err(_) => {
                                 data_tx

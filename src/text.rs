@@ -1,11 +1,12 @@
 use crate::interface::DataOut;
 use crate::view::View;
 use chrono::{DateTime, Local};
+use std::fmt::Write;
 use std::marker::PhantomData;
 use tui::backend::Backend;
 use tui::layout::Rect;
 use tui::style::{Color, Modifier, Style};
-use tui::text::{Span, Spans, Text};
+use tui::text::{Span, Spans};
 use tui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use tui::Frame;
 
@@ -219,16 +220,9 @@ impl<'a> ViewData<'a> {
 
     fn bytes_to_hex_string(bytes: &[u8]) -> String {
         let mut hex_string = String::new();
-        let convert = |nibble: u8| {
-            if nibble >= 10 {
-                ((nibble - 10) + ('A' as u8)) as char
-            } else {
-                (nibble + ('0' as u8)) as char
-            }
-        };
 
         for byte in bytes {
-            hex_string += &format!("{}{}", convert((byte & 0xF0) >> 4), convert(byte & 0x0F));
+            write!(&mut hex_string, "{:02X}", byte).unwrap();
         }
 
         hex_string

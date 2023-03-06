@@ -125,33 +125,24 @@ impl<B: Backend + Send> CommandBar<B> {
         )
     }
 
-    fn hex_string_to_bytes(mut hex_string: &str) -> Result<Vec<u8>, ()> {
+    fn hex_string_to_bytes(hex_string: &str) -> Result<Vec<u8>, ()> {
         if hex_string.len() % 2 != 0 {
             return Err(());
         }
 
-        let mut bytes = vec![];
-        let byte_table = |nibble: char| match nibble {
-            '0'..='9' => Some(nibble as u8 - '0' as u8),
-            'A'..='F' => Some(nibble as u8 - 'A' as u8 + 10),
-            'a'..='f' => Some(nibble as u8 - 'a' as u8 + 10),
-            _ => None,
-        };
-
-        while !hex_string.is_empty() {
-            let Some(first_nibble) = byte_table(hex_string.chars().nth(0).unwrap()) else {
-                return Err(());
-            };
-            let Some(second_nibble) = byte_table(hex_string.chars().nth(1).unwrap()) else {
-                return Err(());
-            };
-
-            bytes.push((first_nibble << 4) | second_nibble);
-
-            hex_string = &hex_string[2..];
+        if !hex_string
+            .chars()
+            .all(|x| "0123456789abcdefABCDEF".contains(x))
+        {
+            return Err(());
         }
 
-        Ok(bytes)
+        let res = (0..hex_string.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex_string[i..(i + 2)], 16).unwrap())
+            .collect();
+
+        Ok(res)
     }
 
     fn handle_key_input(&mut self, key: KeyEvent, term_size: Rect) -> Result<(), ()> {
