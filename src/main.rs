@@ -1,3 +1,5 @@
+extern crate core;
+
 use crate::command_bar::CommandBar;
 use crate::graph::GraphView;
 use crate::loop_back::LoopBackIF;

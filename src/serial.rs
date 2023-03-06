@@ -153,6 +153,17 @@ impl SerialIF {
                             }
                         }
                     }
+                    DataIn::HexString(bytes) => {
+                        let content = [bytes.clone(), b"\r\n".to_vec()].concat();
+                        match serial.write(&content) {
+                            Ok(_) => data_tx
+                                .send(DataOut::ConfirmHexString(Local::now(), bytes))
+                                .expect("Cannot send hex string comfirm"),
+                            Err(_) => data_tx
+                                .send(DataOut::FailHexString(Local::now(), bytes))
+                                .expect("Cannot send hex string fail"),
+                        }
+                    }
                 }
             }
 

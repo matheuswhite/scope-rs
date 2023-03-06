@@ -142,6 +142,7 @@ impl LoopBackIF {
                                 .expect("Cannot send command fail");
                         }
                     }
+                    DataIn::HexString(_) => todo!(),
                 }
             };
         }

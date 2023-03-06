@@ -5,7 +5,7 @@ use std::marker::PhantomData;
 use tui::backend::Backend;
 use tui::layout::Rect;
 use tui::style::{Color, Modifier, Style};
-use tui::text::{Span, Spans};
+use tui::text::{Span, Spans, Text};
 use tui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
 use tui::Frame;
 
@@ -103,12 +103,18 @@ impl<'a, B: Backend> View for TextView<'a, B> {
             DataOut::ConfirmCommand(timestamp, cmd_name, data) => self
                 .history
                 .push(ViewData::user_command(timestamp, cmd_name, data)),
+            DataOut::ConfirmHexString(timestamp, bytes) => self
+                .history
+                .push(ViewData::user_hex_string(timestamp, bytes)),
             DataOut::FailData(timestamp, data) => {
                 self.history.push(ViewData::fail_data(timestamp, data))
             }
             DataOut::FailCommand(timestamp, cmd_name, _data) => self
                 .history
                 .push(ViewData::fail_command(timestamp, cmd_name)),
+            DataOut::FailHexString(timestamp, bytes) => self
+                .history
+                .push(ViewData::fail_hex_string(timestamp, bytes)),
         };
     }
 
@@ -211,6 +217,23 @@ impl<'a> ViewData<'a> {
         res
     }
 
+    fn bytes_to_hex_string(bytes: &[u8]) -> String {
+        let mut hex_string = String::new();
+        let convert = |nibble: u8| {
+            if nibble >= 10 {
+                ((nibble - 10) + ('A' as u8)) as char
+            } else {
+                (nibble + ('0' as u8)) as char
+            }
+        };
+
+        for byte in bytes {
+            hex_string += &format!("{}{}", convert((byte & 0xF0) >> 4), convert(byte & 0x0F));
+        }
+
+        hex_string
+    }
+
     fn build_spans(timestamp: DateTime<Local>, content: String, fg: Color, bg: Color) -> Spans<'a> {
         let tm_fg = if bg != Color::Reset { bg } else { fg };
 
@@ -255,6 +278,15 @@ impl<'a> ViewData<'a> {
         }
     }
 
+    fn user_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>) -> Self {
+        let content = format!("<${}> {:?}", ViewData::bytes_to_hex_string(&bytes), &bytes);
+
+        Self {
+            length: ViewData::compute_content_length(timestamp, &content),
+            spans: ViewData::build_spans(timestamp, content, Color::Black, Color::Yellow),
+        }
+    }
+
     fn fail_data(timestamp: DateTime<Local>, content: String) -> Self {
         let content = format!("Cannot send \"{content}\"");
 
@@ -266,6 +298,15 @@ impl<'a> ViewData<'a> {
 
     fn fail_command(timestamp: DateTime<Local>, cmd_name: String) -> Self {
         let content = format!("Cannot send </{cmd_name}>");
+
+        Self {
+            length: ViewData::compute_content_length(timestamp, &content),
+            spans: ViewData::build_spans(timestamp, content, Color::White, Color::LightRed),
+        }
+    }
+
+    fn fail_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>) -> Self {
+        let content = format!("Cannot send <${}>", ViewData::bytes_to_hex_string(&bytes));
 
         Self {
             length: ViewData::compute_content_length(timestamp, &content),

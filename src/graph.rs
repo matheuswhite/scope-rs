@@ -184,8 +184,10 @@ impl<B: Backend> View for GraphView<B> {
             }
             DataOut::ConfirmData(_, _) => {}
             DataOut::ConfirmCommand(_, _, _) => {}
+            DataOut::ConfirmHexString(_, _) => {}
             DataOut::FailData(_, _) => {}
             DataOut::FailCommand(_, _, _) => {}
+            DataOut::FailHexString(_, _) => {}
         }
     }
 

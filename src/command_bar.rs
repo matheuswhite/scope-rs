@@ -125,6 +125,35 @@ impl<B: Backend + Send> CommandBar<B> {
         )
     }
 
+    fn hex_string_to_bytes(mut hex_string: &str) -> Result<Vec<u8>, ()> {
+        if hex_string.len() % 2 != 0 {
+            return Err(());
+        }
+
+        let mut bytes = vec![];
+        let byte_table = |nibble: char| match nibble {
+            '0'..='9' => Some(nibble as u8 - '0' as u8),
+            'A'..='F' => Some(nibble as u8 - 'A' as u8 + 10),
+            'a'..='f' => Some(nibble as u8 - 'a' as u8 + 10),
+            _ => None,
+        };
+
+        while !hex_string.is_empty() {
+            let Some(first_nibble) = byte_table(hex_string.chars().nth(0).unwrap()) else {
+                return Err(());
+            };
+            let Some(second_nibble) = byte_table(hex_string.chars().nth(1).unwrap()) else {
+                return Err(());
+            };
+
+            bytes.push((first_nibble << 4) | second_nibble);
+
+            hex_string = &hex_string[2..];
+        }
+
+        Ok(bytes)
+    }
+
     fn handle_key_input(&mut self, key: KeyEvent, term_size: Rect) -> Result<(), ()> {
         match key.code {
             KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
@@ -203,15 +232,22 @@ impl<B: Backend + Send> CommandBar<B> {
                             .as_ref()
                         {
                             "clear" | "clean" => self.clear_views(),
-                            "cmds" | "commands" => {
-                                // TODO Open pop up with commands
-                            }
                             _ => {
                                 self.set_error_pop_up(format!(
                                     "Command <!{command_line}> not found"
                                 ));
                             }
                         }
+                    }
+                    '$' => {
+                        let command_line = command_line.strip_prefix('$').unwrap().to_uppercase();
+
+                        let Ok(bytes) = CommandBar::<B>::hex_string_to_bytes(&command_line) else {
+                            self.set_error_pop_up(format!("Invalid hex string: {command_line}"));
+                            return Ok(());
+                        };
+
+                        self.interface.send(DataIn::HexString(bytes));
                     }
                     _ => {
                         self.interface.send(DataIn::Data(command_line));
