@@ -49,25 +49,31 @@ impl<'a, B: Backend> View for TextView<'a, B> {
             scroll
         };
 
-        let (coll, title, max) = if self.snapshot_mode_en {
+        let (coll, title, max, coll_size) = if self.snapshot_mode_en {
             (
-                &self.snapshot,
+                &self.snapshot[(scroll.0 as usize)..],
                 "Snapshot",
                 format!("/{}", self.snapshot.len()),
+                self.snapshot.len(),
             )
         } else {
-            (&self.history, "Normal", "".to_string())
+            (
+                &self.history[(scroll.0 as usize)..],
+                "Normal",
+                "".to_string(),
+                self.history.len(),
+            )
         };
 
         let block = if self.auto_scroll {
             Block::default()
-                .title(format!("[{:03}{}] Text UTF-8 <{}>", coll.len(), max, title))
+                .title(format!("[{:03}{}] Text UTF-8 <{}>", coll_size, max, title))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Thick)
                 .border_style(Style::default().fg(Color::White))
         } else {
             Block::default()
-                .title(format!("[{:03}{}] Text UTF-8 <{}>", coll.len(), max, title))
+                .title(format!("[{:03}{}] Text UTF-8 <{}>", coll_size, max, title))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Double)
                 .border_style(
@@ -81,7 +87,8 @@ impl<'a, B: Backend> View for TextView<'a, B> {
         let paragraph = Paragraph::new(text)
             .block(block)
             .wrap(Wrap { trim: false })
-            .scroll(scroll);
+            // .scroll(scroll)
+            ;
         f.render_widget(paragraph, rect);
     }
 
