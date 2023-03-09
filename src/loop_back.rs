@@ -43,6 +43,13 @@ impl Interface for LoopBackIF {
     fn color(&self) -> Color {
         Color::LightGreen
     }
+    fn set_port(&mut self, _port: String) {
+
+        todo!()
+    }
+    fn set_baudrate(&mut self, _baudarate: u32) {
+        todo!()
+    }
 }
 
 impl LoopBackIF {
@@ -51,9 +58,9 @@ impl LoopBackIF {
     const UPDATE_CONNECTION_INTERVAL: Duration = Duration::from_secs(2);
 
     pub fn new<F>(data_to_send: F, send_interval: Duration) -> Self
-    where
-        F: Fn() -> String,
-        F: Send + Clone + 'static,
+        where
+            F: Fn() -> String,
+            F: Send + Clone + 'static,
     {
         let (if_tx, if_rx) = channel();
         let (data_tx, data_rx) = channel();
