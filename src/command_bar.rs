@@ -18,7 +18,7 @@ use tui::Frame;
 pub struct CommandBar<B: Backend> {
     interface: Box<dyn Interface>,
     view: usize,
-    views: Vec<Box<dyn View<Backend = B>>>,
+    views: Vec<Box<dyn View<Backend=B>>>,
     command_line: String,
     command_filepath: Option<PathBuf>,
     history: Vec<String>,
@@ -41,7 +41,7 @@ impl<B: Backend + Send> CommandBar<B> {
                     Constraint::Length(f.size().height - CommandBar::<B>::HEIGHT),
                     Constraint::Length(CommandBar::<B>::HEIGHT),
                 ]
-                .as_ref(),
+                    .as_ref(),
             )
             .split(f.size());
 
@@ -216,13 +216,19 @@ impl<B: Backend + Send> CommandBar<B> {
                             .send(DataIn::Command(key.to_string(), data_to_send.to_string()));
                     }
                     '!' => {
-                        match command_line
-                            .strip_prefix('!')
-                            .unwrap()
+                        let command_line_split= command_line.strip_prefix('!').unwrap().
+                            split_whitespace().collect::<Vec<_>>();
+                        match command_line_split[0]
                             .to_lowercase()
                             .as_ref()
                         {
                             "clear" | "clean" => self.clear_views(),
+                            "port" => {
+                                self.interface.set_port(command_line_split[1].to_string());
+                            }
+                            "baudrate" =>{
+                                self.interface.set_baudrate(command_line_split[1].parse::<u32>().unwrap());
+                            }
                             _ => {
                                 self.set_error_pop_up(format!(
                                     "Command <!{command_line}> not found"
@@ -318,7 +324,7 @@ impl<B: Backend + Send> CommandBar<B> {
 }
 
 impl<B: Backend> CommandBar<B> {
-    pub fn new(interface: Box<dyn Interface>, views: Vec<Box<dyn View<Backend = B>>>) -> Self {
+    pub fn new(interface: Box<dyn Interface>, views: Vec<Box<dyn View<Backend=B>>>) -> Self {
         assert!(!views.is_empty(), "Views cannot be empty");
 
         let (key_sender, key_receiver) = channel();

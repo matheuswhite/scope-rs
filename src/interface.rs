@@ -27,4 +27,6 @@ pub trait Interface: Drop {
     fn try_recv(&self) -> Result<DataOut, TryRecvError>;
     fn description(&self) -> String;
     fn color(&self) -> Color;
+    fn set_port(&mut self, _port : String);
+    fn set_baudrate(&mut self, _baudarate: u32);
 }

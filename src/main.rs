@@ -31,7 +31,7 @@ type ConcreteBackend = CrosstermBackend<Stdout>;
 
 const CMD_FILEPATH: &str = "cmds.yaml";
 const CAPACITY: usize = 2000;
-const PORT: &str = "COM8";
+const PORT: &str = "COM15";
 const BAUDRATE: u32 = 115200;
 
 fn main() -> Result<(), io::Error> {
