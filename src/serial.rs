@@ -43,11 +43,10 @@ impl Interface for SerialIF {
     fn color(&self) -> Color {
         Color::Yellow
     }
-    fn set_port(&mut self, _port : String){
-
+    fn set_port(&mut self, _port: String) {
         self.port = _port;
     }
-    fn set_baudrate(&mut self, _baudrate : u32){
+    fn set_baudrate(&mut self, _baudrate: u32) {
         self.baudrate = _baudrate;
     }
 }
@@ -194,7 +193,9 @@ impl SerialIF {
                         is_connected.clone(),
                     );
                 }
-                Err(e) => eprint!("{:?}", e.kind()),
+                Err(e) => {
+                    // eprint!("{:?}", e.kind())
+                }
             }
         }
     }

@@ -13,3 +13,4 @@ chrono = "0.4.23"
 serde = "1.0"
 serde_yaml = "0.9"
 rand = "0.8.5"
+clap = { version = "4.1.9", features = ["derive"] }
