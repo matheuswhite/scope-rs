@@ -5,9 +5,12 @@ use crate::view::View;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use std::cmp::{max, min};
 use std::collections::BTreeMap;
+use std::fs::{File, read};
 use std::path::PathBuf;
+use std::ptr::null;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::thread;
+use std::{thread, time};
+use std::thread::sleep;
 use tui::backend::Backend;
 use tui::layout::{Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Style};
@@ -229,11 +232,31 @@ impl<B: Backend + Send> CommandBar<B> {
                             "baudrate" =>{
                                 self.interface.set_baudrate(command_line_split[1].parse::<u32>().unwrap());
                             }
+                            "send_file" =>{
+                                let path = PathBuf::from(command_line_split[1]);
+                                let str_send = self.send_load_file(path);
+                                match str_send {
+                                    Ok(str) => {
+                                        for str_split in str.split("\n"){
+                                            self.interface.send(DataIn::Command(
+                                                command_line_split[1].to_string(),
+                                                str_split.to_string()));
+                                            let ten_millis = time::Duration::from_millis(80);
+                                            sleep(ten_millis);
+                                        }
+
+                                    },
+                                    _ => self.set_error_pop_up(format!(
+                                        "Command <!{command_line}> not found"
+                                    )),
+                                }
+                            }
                             _ => {
                                 self.set_error_pop_up(format!(
                                     "Command <!{command_line}> not found"
                                 ));
                             }
+
                         }
                     }
                     '$' => {
@@ -291,6 +314,9 @@ impl<B: Backend + Send> CommandBar<B> {
             VerticalScroll(direction) => {
                 let frame_size = CommandBar::<B>::get_view_frame_size(term_size);
                 let max_main_axis = self.views[self.view].max_main_axis(frame_size);
+                if max_main_axis == 0 {
+                    return Ok(())
+                }
 
                 if direction < 0 && self.scroll.0 > 0 {
                     self.scroll.0 -= 1;
@@ -320,6 +346,26 @@ impl<B: Backend + Send> CommandBar<B> {
         };
 
         commands
+    }
+
+    fn send_load_file(&mut self, filepath: PathBuf) -> Result<String, ()> {
+        let file_read = match std::fs::read(&filepath) {
+            Ok(file_read) => file_read,
+            Err(_e) =>{
+                self.set_error_pop_up(format!("Cannot find {filepath:?} filepath"));
+                return Err(())
+            },
+        };
+
+        let file_str = match std::str::from_utf8(file_read.as_slice()) {
+            Ok(file) => file,
+            Err(_e) => {
+                self.set_error_pop_up(format!("The file {filepath:?} has non UTF-8 characters"));
+                return Err(())
+            },
+        };
+
+        Ok(file_str.to_string())
     }
 }
 
