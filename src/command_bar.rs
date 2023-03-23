@@ -233,23 +233,7 @@ impl<B: Backend + Send> CommandBar<B> {
                                 self.interface.set_baudrate(command_line_split[1].parse::<u32>().unwrap());
                             }
                             "send_file" =>{
-                                let path = PathBuf::from(command_line_split[1]);
-                                let str_send = self.send_load_file(path);
-                                match str_send {
-                                    Ok(str) => {
-                                        for str_split in str.split("\n"){
-                                            self.interface.send(DataIn::Command(
-                                                command_line_split[1].to_string(),
-                                                str_split.to_string()));
-                                            let ten_millis = time::Duration::from_millis(80);
-                                            sleep(ten_millis);
-                                        }
-
-                                    },
-                                    _ => self.set_error_pop_up(format!(
-                                        "Command <!{command_line}> not found"
-                                    )),
-                                }
+                                self.send_file(command_line_split[1]);
                             }
                             _ => {
                                 self.set_error_pop_up(format!(
@@ -348,7 +332,7 @@ impl<B: Backend + Send> CommandBar<B> {
         commands
     }
 
-    fn send_load_file(&mut self, filepath: PathBuf) -> Result<String, ()> {
+    fn load_file(&mut self, filepath: PathBuf) -> Result<String, ()> {
         let file_read = match std::fs::read(&filepath) {
             Ok(file_read) => file_read,
             Err(_e) =>{
@@ -366,6 +350,26 @@ impl<B: Backend + Send> CommandBar<B> {
         };
 
         Ok(file_str.to_string())
+    }
+
+    fn send_file(&mut self, filepath : &str){
+        let path = PathBuf::from(filepath);
+        let str_send = self.load_file(path);
+        match str_send {
+            Ok(str) => {
+                for str_split in str.split("\n"){
+                    self.interface.send(DataIn::Command(
+                        filepath.to_string(),
+                        str_split.to_string()));
+                    let ten_millis = time::Duration::from_millis(80);
+                    sleep(ten_millis);
+                }
+
+            },
+            _ => self.set_error_pop_up(format!(
+                "File not found"
+            )),
+        }
     }
 }
 
