@@ -51,7 +51,6 @@ impl Interface for SerialIF {
     }
 }
 
-#[allow(unused)]
 impl SerialIF {
     const SERIAL_TIMEOUT: Duration = Duration::from_millis(10);
     const RECONNECT_INTERVAL: Duration = Duration::from_millis(200);

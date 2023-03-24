@@ -1,5 +1,6 @@
 extern crate core;
 
+use crate::ble::BleIF;
 use crate::command_bar::CommandBar;
 use crate::graph::GraphView;
 use crate::interface::Interface;
@@ -7,6 +8,7 @@ use crate::loop_back::LoopBackIF;
 use crate::serial::SerialIF;
 use crate::text::TextView;
 use crate::view::View;
+use btleplug::api::bleuuid::uuid_from_u16;
 use chrono::Local;
 use clap::{Parser, Subcommand};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
@@ -20,7 +22,9 @@ use std::path::PathBuf;
 use std::time::Duration;
 use tui::backend::{Backend, CrosstermBackend};
 use tui::Terminal;
+use uuid::Uuid;
 
+mod ble;
 mod command_bar;
 mod error_pop_up;
 mod graph;
@@ -46,21 +50,21 @@ struct Cli {
 #[derive(Subcommand)]
 enum InterfacesArgs {
     Serial { port: String, baudrate: u32 },
-    Ble {},
+    Ble { name: String },
     Loopback {},
 }
 
 const CMD_FILEPATH: &str = "cmds.yaml";
 const CAPACITY: usize = 2000;
+const BLE_TX_UUID: Uuid = uuid_from_u16(0xAB02);
+const BLE_RX_UUID: Uuid = uuid_from_u16(0xAB01);
 
 fn main() -> Result<(), io::Error> {
     let cli = Cli::parse();
 
     let interface: Box<dyn Interface> = match &cli.interface {
         InterfacesArgs::Serial { port, baudrate } => Box::new(SerialIF::new(port, *baudrate)),
-        InterfacesArgs::Ble { .. } => {
-            todo!()
-        }
+        InterfacesArgs::Ble { name } => Box::new(BleIF::new(BLE_TX_UUID, BLE_RX_UUID, &name)),
         InterfacesArgs::Loopback {} => Box::new(LoopBackIF::new(
             || {
                 let now = 2.0 * std::f32::consts::PI * 1000.0;
