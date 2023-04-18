@@ -71,13 +71,14 @@ fn main() -> Result<(), io::Error> {
                 let now = Local::now().timestamp_millis() % now as i64;
                 let now = now as f32 / 1000.0;
                 format!(
-                    "{},{},{},{},{},{}",
+                    "{},{},{},{},{},{} {}",
                     f32::sin(now),
                     f32::cos(now),
                     f32::sin(now) + f32::cos(now),
                     -f32::sin(now),
                     -f32::cos(now),
                     -f32::sin(now) + f32::cos(now),
+                    "Hello".repeat(10),
                 )
             },
             Duration::from_millis(100),

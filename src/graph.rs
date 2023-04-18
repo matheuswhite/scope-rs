@@ -199,7 +199,7 @@ impl<B: Backend> View for GraphView<B> {
         todo!()
     }
 
-    fn max_main_axis(&self, _frame_size: (u16, u16)) -> usize {
+    fn max_main_axis(&self) -> usize {
         todo!()
     }
 

@@ -318,11 +318,11 @@ dependencies = [
     "bitflags",
     "crossterm_winapi",
     "libc",
- "mio",
- "parking_lot",
- "signal-hook",
- "signal-hook-mio",
- "winapi",
+    "mio",
+    "parking_lot",
+    "signal-hook",
+    "signal-hook-mio",
+    "winapi",
 ]
 
 [[package]]
@@ -1026,10 +1026,10 @@ version = "0.36.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fd5c6ff11fecd55b40746d1995a02f2eb375bf8c00d192d521ee09f42bef37bc"
 dependencies = [
- "bitflags",
- "errno",
- "io-lifetimes",
- "libc",
+    "bitflags",
+    "errno",
+    "io-lifetimes",
+    "libc",
     "linux-raw-sys",
     "windows-sys",
 ]
@@ -1129,8 +1129,8 @@ dependencies = [
     "indexmap",
     "itoa",
     "ryu",
- "serde",
- "unsafe-libyaml",
+    "serde",
+    "unsafe-libyaml",
 ]
 
 [[package]]
@@ -1333,8 +1333,8 @@ dependencies = [
     "bitflags",
     "cassowary",
     "crossterm",
- "unicode-segmentation",
- "unicode-width",
+    "unicode-segmentation",
+    "unicode-width",
 ]
 
 [[package]]

@@ -1,4 +1,4 @@
-use crate::command_bar::InputEvent::{Key, VerticalScroll};
+use crate::command_bar::InputEvent::{HorizontalScroll, Key, VerticalScroll};
 use crate::error_pop_up::ErrorPopUp;
 use crate::interface::{DataIn, Interface};
 use crate::view::View;
@@ -18,7 +18,7 @@ use tui::Frame;
 pub struct CommandBar<B: Backend> {
     interface: Box<dyn Interface>,
     view: usize,
-    views: Vec<Box<dyn View<Backend=B>>>,
+    views: Vec<Box<dyn View<Backend = B>>>,
     command_line: String,
     command_filepath: Option<PathBuf>,
     history: Vec<String>,
@@ -41,7 +41,7 @@ impl<B: Backend + Send> CommandBar<B> {
                     Constraint::Length(f.size().height - CommandBar::<B>::HEIGHT),
                     Constraint::Length(CommandBar::<B>::HEIGHT),
                 ]
-                    .as_ref(),
+                .as_ref(),
             )
             .split(f.size());
 
@@ -156,8 +156,7 @@ impl<B: Backend + Send> CommandBar<B> {
                 self.views[self.view].toggle_snapshot_mode();
 
                 let height = term_size.height as usize - 5;
-                let frame_size = CommandBar::<B>::get_view_frame_size(term_size);
-                let max_main_axis = self.views[self.view].max_main_axis(frame_size);
+                let max_main_axis = self.views[self.view].max_main_axis();
 
                 if max_main_axis > height {
                     self.scroll.0 = max_main_axis - height;
@@ -167,8 +166,7 @@ impl<B: Backend + Send> CommandBar<B> {
                 self.views[self.view].toggle_auto_scroll();
 
                 let height = term_size.height as usize - 5;
-                let frame_size = CommandBar::<B>::get_view_frame_size(term_size);
-                let max_main_axis = self.views[self.view].max_main_axis(frame_size);
+                let max_main_axis = self.views[self.view].max_main_axis();
 
                 if max_main_axis > height {
                     self.scroll.0 = max_main_axis - height;
@@ -216,18 +214,19 @@ impl<B: Backend + Send> CommandBar<B> {
                             .send(DataIn::Command(key.to_string(), data_to_send.to_string()));
                     }
                     '!' => {
-                        let command_line_split= command_line.strip_prefix('!').unwrap().
-                            split_whitespace().collect::<Vec<_>>();
-                        match command_line_split[0]
-                            .to_lowercase()
-                            .as_ref()
-                        {
+                        let command_line_split = command_line
+                            .strip_prefix('!')
+                            .unwrap()
+                            .split_whitespace()
+                            .collect::<Vec<_>>();
+                        match command_line_split[0].to_lowercase().as_ref() {
                             "clear" | "clean" => self.clear_views(),
                             "port" => {
                                 self.interface.set_port(command_line_split[1].to_string());
                             }
-                            "baudrate" =>{
-                                self.interface.set_baudrate(command_line_split[1].parse::<u32>().unwrap());
+                            "baudrate" => {
+                                self.interface
+                                    .set_baudrate(command_line_split[1].parse::<u32>().unwrap());
                             }
                             _ => {
                                 self.set_error_pop_up(format!(
@@ -289,13 +288,21 @@ impl<B: Backend + Send> CommandBar<B> {
         match input_evt {
             Key(key) => return self.handle_key_input(key, term_size),
             VerticalScroll(direction) => {
-                let frame_size = CommandBar::<B>::get_view_frame_size(term_size);
-                let max_main_axis = self.views[self.view].max_main_axis(frame_size);
+                let max_main_axis = self.views[self.view].max_main_axis();
 
                 if direction < 0 && self.scroll.0 > 0 {
                     self.scroll.0 -= 1;
                 } else if self.scroll.0 < (max_main_axis - 1) {
                     self.scroll.0 += 1;
+                }
+            }
+            HorizontalScroll(direction) => {
+                let frame_size = CommandBar::<B>::get_view_frame_size(term_size);
+
+                if direction < 0 && self.scroll.1 > 0 {
+                    self.scroll.1 -= 1;
+                } else if direction > 0 {
+                    self.scroll.1 += 1;
                 }
             }
         }
@@ -324,7 +331,7 @@ impl<B: Backend + Send> CommandBar<B> {
 }
 
 impl<B: Backend> CommandBar<B> {
-    pub fn new(interface: Box<dyn Interface>, views: Vec<Box<dyn View<Backend=B>>>) -> Self {
+    pub fn new(interface: Box<dyn Interface>, views: Vec<Box<dyn View<Backend = B>>>) -> Self {
         assert!(!views.is_empty(), "Views cannot be empty");
 
         let (key_sender, key_receiver) = channel();
@@ -353,6 +360,13 @@ impl<B: Backend> CommandBar<B> {
     fn task(sender: Sender<InputEvent>) {
         loop {
             match crossterm::event::read().unwrap() {
+                Event::Mouse(mouse_evt) if mouse_evt.modifiers == KeyModifiers::CONTROL => {
+                    match mouse_evt.kind {
+                        MouseEventKind::ScrollUp => sender.send(HorizontalScroll(-1)).unwrap(),
+                        MouseEventKind::ScrollDown => sender.send(HorizontalScroll(1)).unwrap(),
+                        _ => {}
+                    }
+                }
                 Event::Key(key) => sender.send(Key(key)).unwrap(),
                 Event::Mouse(mouse_evt) => match mouse_evt.kind {
                     MouseEventKind::ScrollUp => sender.send(VerticalScroll(-1)).unwrap(),
@@ -368,6 +382,7 @@ impl<B: Backend> CommandBar<B> {
 enum InputEvent {
     Key(KeyEvent),
     VerticalScroll(i8),
+    HorizontalScroll(i8),
 }
 
 struct CommandList {
