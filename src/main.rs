@@ -79,7 +79,8 @@ fn main() -> Result<(), io::Error> {
                     -f32::cos(now),
                     -f32::sin(now) + f32::cos(now),
                     "Hello".repeat(10),
-                )
+                );
+                format!("{now}")
             },
             Duration::from_millis(100),
         )),

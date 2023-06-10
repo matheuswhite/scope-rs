@@ -1,14 +1,13 @@
 use crate::interface::DataOut;
 use crate::view::View;
 use chrono::{DateTime, Local};
-use std::borrow::Cow;
 use std::fmt::Write;
 use std::marker::PhantomData;
 use tui::backend::Backend;
-use tui::layout::{Alignment, Rect};
+use tui::layout::Rect;
 use tui::style::{Color, Modifier, Style};
 use tui::text::{Span, Spans};
-use tui::widgets::{Block, BorderType, Borders, Paragraph, Wrap};
+use tui::widgets::{Block, BorderType, Borders, Paragraph};
 use tui::Frame;
 
 pub struct TextView<'a, B: Backend> {
@@ -260,12 +259,6 @@ impl<'a> ViewData<'a> {
             format!("[{}] ", timestamp.format("%d/%m/%Y %H:%M:%S")),
             Style::default().fg(tm_fg),
         )
-    }
-
-    fn compute_content_length(timestamp: DateTime<Local>, content: &str) -> usize {
-        let timestamp_str = format!("[{}] ", timestamp.format("%d/%m/%Y %H:%M:%S"));
-
-        timestamp_str.chars().count() + content.chars().count() + 2
     }
 
     fn if_data(timestamp: DateTime<Local>, content: String, color: Color) -> Self {

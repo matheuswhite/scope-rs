@@ -91,7 +91,6 @@ impl<B: Backend + Send> CommandBar<B> {
             return;
         }
 
-        // TODO Load YAML file at start
         let Some(filepath) = self.command_filepath.clone() else {
             self.set_error_pop_up("No YAML command file loaded!".to_string());
             return;
@@ -116,13 +115,6 @@ impl<B: Backend + Send> CommandBar<B> {
 
         self.command_list
             .update_params(cmds, self.command_line.clone());
-    }
-
-    fn get_view_frame_size(term_size: Rect) -> (u16, u16) {
-        (
-            term_size.width - 2,
-            term_size.height - 2 - CommandBar::<B>::HEIGHT,
-        )
     }
 
     fn hex_string_to_bytes(hex_string: &str) -> Result<Vec<u8>, ()> {
@@ -253,9 +245,6 @@ impl<B: Backend + Send> CommandBar<B> {
                 self.error_pop_up.take();
             }
             KeyCode::Tab if key.modifiers == KeyModifiers::SHIFT => {
-                // TODO Change view mode
-            }
-            KeyCode::Tab => {
                 if self.view == self.views.len() - 1 {
                     self.view = 0;
                 } else {
@@ -290,19 +279,27 @@ impl<B: Backend + Send> CommandBar<B> {
             VerticalScroll(direction) => {
                 let max_main_axis = self.views[self.view].max_main_axis();
 
-                if direction < 0 && self.scroll.0 > 0 {
-                    self.scroll.0 -= 1;
-                } else if self.scroll.0 < (max_main_axis - 1) {
-                    self.scroll.0 += 1;
+                if direction < 0 {
+                    if self.scroll.0 < 3 {
+                        self.scroll.0 = 0;
+                    } else {
+                        self.scroll.0 -= 3;
+                    }
+                } else {
+                    if self.scroll.0 < (max_main_axis - 1) {
+                        self.scroll.0 += 3;
+                    }
                 }
             }
             HorizontalScroll(direction) => {
-                let frame_size = CommandBar::<B>::get_view_frame_size(term_size);
-
-                if direction < 0 && self.scroll.1 > 0 {
-                    self.scroll.1 -= 1;
-                } else if direction > 0 {
-                    self.scroll.1 += 1;
+                if direction < 0 {
+                    if self.scroll.1 < 3 {
+                        self.scroll.1 = 0;
+                    } else {
+                        self.scroll.1 -= 3;
+                    }
+                } else {
+                    self.scroll.1 += 3;
                 }
             }
         }
