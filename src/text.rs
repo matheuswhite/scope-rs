@@ -17,6 +17,8 @@ pub struct TextView<'a, B: Backend> {
     auto_scroll: bool,
     snapshot_mode_en: bool,
     snapshot: Vec<ViewData<'a>>,
+    scroll: (u16, u16),
+    frame_height: u16,
 }
 
 impl<'a, B: Backend> TextView<'a, B> {
@@ -28,6 +30,19 @@ impl<'a, B: Backend> TextView<'a, B> {
             auto_scroll: true,
             snapshot_mode_en: false,
             snapshot: vec![],
+            scroll: (0, 0),
+            frame_height: u16::MAX,
+        }
+    }
+
+    fn max_main_axis(&self) -> u16 {
+        let main_axis_length = self.frame_height - 5;
+        let history_len = self.history.len() as u16;
+
+        if history_len > main_axis_length {
+            history_len - main_axis_length
+        } else {
+            0
         }
     }
 }
@@ -35,18 +50,50 @@ impl<'a, B: Backend> TextView<'a, B> {
 impl<'a, B: Backend> View for TextView<'a, B> {
     type Backend = B;
 
-    fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect, scroll: (u16, u16)) {
-        let height = (rect.height - 2) as usize;
-        let scroll = if self.auto_scroll {
-            let max_size = self.max_main_axis();
+    fn set_frame_height(&mut self, frame_height: u16) {
+        self.frame_height = frame_height;
+    }
 
-            if max_size > height {
-                ((max_size - height) as u16, scroll.1)
-            } else {
-                (0, scroll.1)
-            }
+    fn up_scroll(&mut self) {
+        if self.max_main_axis() > 0 {
+            self.auto_scroll = false;
+        }
+
+        if self.scroll.0 < 3 {
+            self.scroll.0 = 0;
         } else {
-            scroll
+            self.scroll.0 -= 3;
+        }
+    }
+
+    fn down_scroll(&mut self) {
+        let max_main_axis = self.max_main_axis() as u16;
+
+        self.scroll.0 += 3;
+        self.scroll.0 = self.scroll.0.clamp(0, max_main_axis);
+
+        if self.scroll.0 == max_main_axis {
+            self.auto_scroll = true;
+        }
+    }
+
+    fn left_scroll(&mut self) {
+        if self.scroll.1 < 3 {
+            self.scroll.1 = 0;
+        } else {
+            self.scroll.1 -= 3;
+        }
+    }
+
+    fn right_scroll(&mut self) {
+        self.scroll.1 += 3;
+    }
+
+    fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect) {
+        let scroll = if self.auto_scroll {
+            (self.max_main_axis(), self.scroll.1)
+        } else {
+            self.scroll
         };
 
         let (coll, title, max, coll_size) = if self.snapshot_mode_en {
@@ -146,15 +193,7 @@ impl<'a, B: Backend> View for TextView<'a, B> {
 
     fn clear(&mut self) {
         self.history.clear();
-    }
-
-    fn toggle_auto_scroll(&mut self) {
-        self.auto_scroll = !self.auto_scroll;
-    }
-
-    fn max_main_axis(&self) -> usize {
-        self.history.len()
-    }
+    } 
 
     fn save_snapshot(&mut self) {
         let snapshot_capacity = self.capacity / 4;
