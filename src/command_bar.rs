@@ -25,7 +25,6 @@ pub struct CommandBar<B: Backend> {
     error_pop_up: Option<ErrorPopUp<B>>,
     command_list: CommandList,
     key_receiver: Receiver<InputEvent>,
-    scroll: (usize, usize),
 }
 
 impl<B: Backend + Send> CommandBar<B> {
@@ -45,7 +44,7 @@ impl<B: Backend + Send> CommandBar<B> {
             )
             .split(f.size());
 
-        view.draw(f, chunks[0], (self.scroll.0 as u16, self.scroll.1 as u16));
+        view.draw(f, chunks[0]);
 
         let cursor_pos = (
             chunks[1].x + self.command_line.chars().count() as u16 + 1,
@@ -91,7 +90,6 @@ impl<B: Backend + Send> CommandBar<B> {
             return;
         }
 
-        // TODO Load YAML file at start
         let Some(filepath) = self.command_filepath.clone() else {
             self.set_error_pop_up("No YAML command file loaded!".to_string());
             return;
@@ -118,13 +116,6 @@ impl<B: Backend + Send> CommandBar<B> {
             .update_params(cmds, self.command_line.clone());
     }
 
-    fn get_view_frame_size(term_size: Rect) -> (u16, u16) {
-        (
-            term_size.width - 2,
-            term_size.height - 2 - CommandBar::<B>::HEIGHT,
-        )
-    }
-
     fn hex_string_to_bytes(hex_string: &str) -> Result<Vec<u8>, ()> {
         if hex_string.len() % 2 != 0 {
             return Err(());
@@ -145,32 +136,12 @@ impl<B: Backend + Send> CommandBar<B> {
         Ok(res)
     }
 
-    fn handle_key_input(&mut self, key: KeyEvent, term_size: Rect) -> Result<(), ()> {
+    fn handle_key_input(&mut self, key: KeyEvent, _term_size: Rect) -> Result<(), ()> {
         match key.code {
             KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
                 // TODO Mostrar Pop-Up de salvo
                 self.set_error_pop_up("Snapshot Salvo!".to_string());
                 self.views[self.view].save_snapshot();
-            }
-            KeyCode::Char('o') if key.modifiers == KeyModifiers::CONTROL => {
-                self.views[self.view].toggle_snapshot_mode();
-
-                let height = term_size.height as usize - 5;
-                let max_main_axis = self.views[self.view].max_main_axis();
-
-                if max_main_axis > height {
-                    self.scroll.0 = max_main_axis - height;
-                }
-            }
-            KeyCode::Char('k') if key.modifiers == KeyModifiers::CONTROL => {
-                self.views[self.view].toggle_auto_scroll();
-
-                let height = term_size.height as usize - 5;
-                let max_main_axis = self.views[self.view].max_main_axis();
-
-                if max_main_axis > height {
-                    self.scroll.0 = max_main_axis - height;
-                }
             }
             KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => self.clear_views(),
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
@@ -253,9 +224,6 @@ impl<B: Backend + Send> CommandBar<B> {
                 self.error_pop_up.take();
             }
             KeyCode::Tab if key.modifiers == KeyModifiers::SHIFT => {
-                // TODO Change view mode
-            }
-            KeyCode::Tab => {
                 if self.view == self.views.len() - 1 {
                     self.view = 0;
                 } else {
@@ -269,6 +237,11 @@ impl<B: Backend + Send> CommandBar<B> {
     }
 
     pub fn update(&mut self, term_size: Rect) -> Result<(), ()> {
+        {
+            let view = &mut self.views[self.view];
+            view.set_frame_height(term_size.height);
+        }
+
         if let Some(error_pop_up) = self.error_pop_up.as_ref() {
             if error_pop_up.is_timeout() {
                 self.error_pop_up.take();
@@ -288,21 +261,21 @@ impl<B: Backend + Send> CommandBar<B> {
         match input_evt {
             Key(key) => return self.handle_key_input(key, term_size),
             VerticalScroll(direction) => {
-                let max_main_axis = self.views[self.view].max_main_axis();
+                let view = &mut self.views[self.view];
 
-                if direction < 0 && self.scroll.0 > 0 {
-                    self.scroll.0 -= 1;
-                } else if self.scroll.0 < (max_main_axis - 1) {
-                    self.scroll.0 += 1;
+                if direction < 0 {
+                    view.up_scroll();
+                } else {
+                    view.down_scroll();
                 }
             }
             HorizontalScroll(direction) => {
-                let frame_size = CommandBar::<B>::get_view_frame_size(term_size);
+                let view = &mut self.views[self.view];
 
-                if direction < 0 && self.scroll.1 > 0 {
-                    self.scroll.1 -= 1;
-                } else if direction > 0 {
-                    self.scroll.1 += 1;
+                if direction < 0 {
+                    view.left_scroll();
+                } else {
+                    view.right_scroll();
                 }
             }
         }
@@ -348,7 +321,6 @@ impl<B: Backend> CommandBar<B> {
             error_pop_up: None,
             command_filepath: None,
             command_list: CommandList::new(),
-            scroll: (0, 0),
         }
     }
 

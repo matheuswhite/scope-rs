@@ -1,13 +1,11 @@
 use crate::interface::{DataIn, DataOut, Interface};
 use btleplug::api::bleuuid::BleUuid;
 use btleplug::api::{
-    Central, CharPropFlags, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
-};
+    Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
+}; 
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use chrono::Local;
 use futures::stream::StreamExt;
-use futures::TryStreamExt;
-use std::collections::btree_set::BTreeSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;

@@ -192,7 +192,7 @@ impl SerialIF {
                         is_connected.clone(),
                     );
                 }
-                Err(e) => {
+                Err(_e) => {
                     // eprint!("{:?}", e.kind())
                 }
             }

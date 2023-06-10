@@ -19,7 +19,7 @@ use crossterm::terminal::{
 use std::io;
 use std::io::Stdout;
 use std::path::PathBuf;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tui::backend::{Backend, CrosstermBackend};
 use tui::Terminal;
 use uuid::Uuid;
@@ -62,12 +62,9 @@ const BLE_RX_UUID: Uuid = uuid_from_u16(0xAB01);
 fn main() -> Result<(), io::Error> {
     let cli = Cli::parse();
 
-    let interface: Box<dyn Interface> = match &cli.interface {
-        InterfacesArgs::Serial { port, baudrate } => Box::new(SerialIF::new(port, *baudrate)),
-        InterfacesArgs::Ble { name } => Box::new(BleIF::new(BLE_TX_UUID, BLE_RX_UUID, &name)),
-        InterfacesArgs::Loopback {} => Box::new(LoopBackIF::new(
-            || {
-                let now = 2.0 * std::f32::consts::PI * 1000.0;
+    let start = Instant::now();
+
+    let _loopback_graph_fn = || {let now = 2.0 * std::f32::consts::PI * 1000.0;
                 let now = Local::now().timestamp_millis() % now as i64;
                 let now = now as f32 / 1000.0;
                 format!(
@@ -79,8 +76,22 @@ fn main() -> Result<(), io::Error> {
                     -f32::cos(now),
                     -f32::sin(now) + f32::cos(now),
                     "Hello".repeat(10),
-                )
-            },
+                )};
+    let loopback_burst_fn = move || {
+        let now = start.elapsed().as_millis();
+
+        if now < 60_000 {
+            format!("{now}")
+        } else {
+            "".to_owned()
+        }
+    };
+
+    let interface: Box<dyn Interface> = match &cli.interface {
+        InterfacesArgs::Serial { port, baudrate } => Box::new(SerialIF::new(port, *baudrate)),
+        InterfacesArgs::Ble { name } => Box::new(BleIF::new(BLE_TX_UUID, BLE_RX_UUID, &name)),
+        InterfacesArgs::Loopback {} => Box::new(LoopBackIF::new(
+            loopback_burst_fn,
             Duration::from_millis(100),
         )),
     };
