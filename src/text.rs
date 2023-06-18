@@ -50,45 +50,6 @@ impl<'a, B: Backend> TextView<'a, B> {
 impl<'a, B: Backend> View for TextView<'a, B> {
     type Backend = B;
 
-    fn set_frame_height(&mut self, frame_height: u16) {
-        self.frame_height = frame_height;
-    }
-
-    fn up_scroll(&mut self) {
-        if self.max_main_axis() > 0 {
-            self.auto_scroll = false;
-        }
-
-        if self.scroll.0 < 3 {
-            self.scroll.0 = 0;
-        } else {
-            self.scroll.0 -= 3;
-        }
-    }
-
-    fn down_scroll(&mut self) {
-        let max_main_axis = self.max_main_axis() as u16;
-
-        self.scroll.0 += 3;
-        self.scroll.0 = self.scroll.0.clamp(0, max_main_axis);
-
-        if self.scroll.0 == max_main_axis {
-            self.auto_scroll = true;
-        }
-    }
-
-    fn left_scroll(&mut self) {
-        if self.scroll.1 < 3 {
-            self.scroll.1 = 0;
-        } else {
-            self.scroll.1 -= 3;
-        }
-    }
-
-    fn right_scroll(&mut self) {
-        self.scroll.1 += 3;
-    }
-
     fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect) {
         let scroll = if self.auto_scroll {
             (self.max_main_axis(), self.scroll.1)
@@ -192,8 +153,45 @@ impl<'a, B: Backend> View for TextView<'a, B> {
     }
 
     fn clear(&mut self) {
+        self.scroll = (0, 0);
+        self.auto_scroll = true;
         self.history.clear();
-    } 
+    }
+
+    fn up_scroll(&mut self) {
+        if self.max_main_axis() > 0 {
+            self.auto_scroll = false;
+        }
+
+        if self.scroll.0 < 3 {
+            self.scroll.0 = 0;
+        } else {
+            self.scroll.0 -= 3;
+        }
+    }
+
+    fn down_scroll(&mut self) {
+        let max_main_axis = self.max_main_axis();
+
+        self.scroll.0 += 3;
+        self.scroll.0 = self.scroll.0.clamp(0, max_main_axis);
+
+        if self.scroll.0 == max_main_axis {
+            self.auto_scroll = true;
+        }
+    }
+
+    fn left_scroll(&mut self) {
+        if self.scroll.1 < 3 {
+            self.scroll.1 = 0;
+        } else {
+            self.scroll.1 -= 3;
+        }
+    }
+
+    fn right_scroll(&mut self) {
+        self.scroll.1 += 3;
+    }
 
     fn save_snapshot(&mut self) {
         let snapshot_capacity = self.capacity / 4;
@@ -209,8 +207,19 @@ impl<'a, B: Backend> View for TextView<'a, B> {
 
     fn toggle_snapshot_mode(&mut self) {
         self.snapshot_mode_en = !self.snapshot_mode_en;
-
         self.auto_scroll = !self.snapshot_mode_en;
+    }
+
+    fn set_frame_height(&mut self, frame_height: u16) {
+        self.frame_height = frame_height;
+    }
+
+    fn update_scroll(&mut self) {
+        self.scroll = if self.auto_scroll {
+            (self.max_main_axis(), self.scroll.1)
+        } else {
+            self.scroll
+        };
     }
 }
 

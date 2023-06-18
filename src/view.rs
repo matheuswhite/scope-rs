@@ -16,4 +16,5 @@ pub trait View {
     fn save_snapshot(&mut self);
     fn toggle_snapshot_mode(&mut self);
     fn set_frame_height(&mut self, frame_height: u16);
+    fn update_scroll(&mut self);
 }

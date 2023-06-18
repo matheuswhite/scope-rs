@@ -222,6 +222,10 @@ impl<B: Backend> View for GraphView<B> {
     fn toggle_snapshot_mode(&mut self) {
         todo!()
     }
+
+    fn update_scroll(&mut self) {
+        todo!()
+    }
 }
 
 struct GraphData {

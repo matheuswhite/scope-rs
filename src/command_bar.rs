@@ -240,6 +240,7 @@ impl<B: Backend + Send> CommandBar<B> {
         {
             let view = &mut self.views[self.view];
             view.set_frame_height(term_size.height);
+            view.update_scroll();
         }
 
         if let Some(error_pop_up) = self.error_pop_up.as_ref() {
@@ -369,9 +370,7 @@ impl CommandList {
             pattern: String::new(),
         }
     }
-}
 
-impl CommandList {
     pub fn clear(&mut self) {
         self.commands.clear();
         self.pattern.clear();
