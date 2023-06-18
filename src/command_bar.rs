@@ -4,7 +4,7 @@ use crate::interface::{DataIn, Interface};
 use crate::view::View;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use std::cmp::{max, min};
-use std::collections::BTreeMap;
+use std::collections::btree_map::BTreeMap;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
@@ -138,11 +138,6 @@ impl<B: Backend + Send> CommandBar<B> {
 
     fn handle_key_input(&mut self, key: KeyEvent, _term_size: Rect) -> Result<(), ()> {
         match key.code {
-            KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
-                // TODO Mostrar Pop-Up de salvo
-                self.set_error_pop_up("Snapshot Salvo!".to_string());
-                self.views[self.view].save_snapshot();
-            }
             KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => self.clear_views(),
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.error_pop_up.take();
@@ -176,7 +171,7 @@ impl<B: Backend + Send> CommandBar<B> {
                         let key = command_line.strip_prefix('/').unwrap();
 
                         if !yaml_content.contains_key(key) {
-                            self.set_error_pop_up(format!("Command </{key}> not found"));
+                            self.set_error_pop_up(format!("Command </{}> not found", key));
                             return Ok(());
                         }
 
@@ -201,7 +196,8 @@ impl<B: Backend + Send> CommandBar<B> {
                             }
                             _ => {
                                 self.set_error_pop_up(format!(
-                                    "Command <!{command_line}> not found"
+                                    "Command <!{}> not found",
+                                    command_line
                                 ));
                             }
                         }
@@ -210,7 +206,7 @@ impl<B: Backend + Send> CommandBar<B> {
                         let command_line = command_line.strip_prefix('$').unwrap().to_uppercase();
 
                         let Ok(bytes) = CommandBar::<B>::hex_string_to_bytes(&command_line) else {
-                            self.set_error_pop_up(format!("Invalid hex string: {command_line}"));
+                            self.set_error_pop_up(format!("Invalid hex string: {}", command_line));
                             return Ok(());
                         };
 
@@ -286,17 +282,17 @@ impl<B: Backend + Send> CommandBar<B> {
 
     fn load_commands(&mut self, filepath: &PathBuf) -> BTreeMap<String, String> {
         let Ok(yaml) = std::fs::read(filepath) else {
-            self.set_error_pop_up(format!("Cannot find {filepath:?} filepath"));
+            self.set_error_pop_up(format!("Cannot find {:?} filepath", filepath));
             return BTreeMap::new();
         };
 
         let Ok(yaml_str) = std::str::from_utf8(yaml.as_slice()) else {
-            self.set_error_pop_up(format!("The file {filepath:?} has non UTF-8 characters"));
+            self.set_error_pop_up(format!("The file {:?} has non UTF-8 characters", filepath));
             return BTreeMap::new();
         };
 
         let Ok(commands) = serde_yaml::from_str(yaml_str) else {
-            self.set_error_pop_up(format!("The YAML from {filepath:?} has an incorret format"));
+            self.set_error_pop_up(format!("The YAML from {:?} has an incorret format", filepath));
             return BTreeMap::new();
         };
 

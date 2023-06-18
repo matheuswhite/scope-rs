@@ -102,26 +102,6 @@ const MARKERS: [(Color, Marker); 12] = [
 impl<B: Backend> View for GraphView<B> {
     type Backend = B;
 
-    fn set_frame_height(&mut self, _frame_height: u16) {
-        todo!();
-    }
-
-    fn up_scroll(&mut self) {
-        todo!();
-    }
-
-    fn down_scroll(&mut self) {
-        todo!();
-    }
-
-    fn left_scroll(&mut self) {
-        todo!();
-    }
-
-    fn right_scroll(&mut self) {
-        todo!();
-    }
-
     fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect) {
         let x_limit = |data: Option<&GraphData>| {
             if let Some(data) = data {
@@ -158,12 +138,13 @@ impl<B: Backend> View for GraphView<B> {
                 let marker = MARKERS[marker_idx].1;
                 Dataset::default()
                     .name(format!(
-                        "{} data{i}",
+                        "{} data{}",
                         match marker {
                             Marker::Dot => "•",
                             Marker::Block => "▮",
                             Marker::Braille => "",
-                        }
+                        },
+                        i
                     ))
                     .marker(marker)
                     .style(Style::default().fg(MARKERS[marker_idx].0))
@@ -215,12 +196,24 @@ impl<B: Backend> View for GraphView<B> {
         self.history.clear();
     }
 
-    fn save_snapshot(&mut self) {
-        todo!()
+    fn up_scroll(&mut self) {
+        todo!();
     }
 
-    fn toggle_snapshot_mode(&mut self) {
-        todo!()
+    fn down_scroll(&mut self) {
+        todo!();
+    }
+
+    fn left_scroll(&mut self) {
+        todo!();
+    }
+
+    fn right_scroll(&mut self) {
+        todo!();
+    }
+
+    fn set_frame_height(&mut self, _frame_height: u16) {
+        todo!();
     }
 
     fn update_scroll(&mut self) {
