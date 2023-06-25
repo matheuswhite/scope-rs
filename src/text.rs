@@ -15,8 +15,6 @@ pub struct TextView<'a, B: Backend> {
     capacity: usize,
     _marker: PhantomData<B>,
     auto_scroll: bool,
-    snapshot_mode_en: bool,
-    snapshot: Vec<ViewData<'a>>,
     scroll: (u16, u16),
     frame_height: u16,
 }
@@ -28,8 +26,6 @@ impl<'a, B: Backend> TextView<'a, B> {
             capacity,
             _marker: PhantomData,
             auto_scroll: true,
-            snapshot_mode_en: false,
-            snapshot: vec![],
             scroll: (0, 0),
             frame_height: u16::MAX,
         }
@@ -50,45 +46,6 @@ impl<'a, B: Backend> TextView<'a, B> {
 impl<'a, B: Backend> View for TextView<'a, B> {
     type Backend = B;
 
-    fn set_frame_height(&mut self, frame_height: u16) {
-        self.frame_height = frame_height;
-    }
-
-    fn up_scroll(&mut self) {
-        if self.max_main_axis() > 0 {
-            self.auto_scroll = false;
-        }
-
-        if self.scroll.0 < 3 {
-            self.scroll.0 = 0;
-        } else {
-            self.scroll.0 -= 3;
-        }
-    }
-
-    fn down_scroll(&mut self) {
-        let max_main_axis = self.max_main_axis() as u16;
-
-        self.scroll.0 += 3;
-        self.scroll.0 = self.scroll.0.clamp(0, max_main_axis);
-
-        if self.scroll.0 == max_main_axis {
-            self.auto_scroll = true;
-        }
-    }
-
-    fn left_scroll(&mut self) {
-        if self.scroll.1 < 3 {
-            self.scroll.1 = 0;
-        } else {
-            self.scroll.1 -= 3;
-        }
-    }
-
-    fn right_scroll(&mut self) {
-        self.scroll.1 += 3;
-    }
-
     fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect) {
         let scroll = if self.auto_scroll {
             (self.max_main_axis(), self.scroll.1)
@@ -96,21 +53,12 @@ impl<'a, B: Backend> View for TextView<'a, B> {
             self.scroll
         };
 
-        let (coll, title, max, coll_size) = if self.snapshot_mode_en {
-            (
-                &self.snapshot[(scroll.0 as usize)..],
-                "Snapshot",
-                format!("/{}", self.snapshot.len()),
-                self.snapshot.len(),
-            )
-        } else {
-            (
-                &self.history[(scroll.0 as usize)..],
-                "Normal",
-                "".to_string(),
-                self.history.len(),
-            )
-        };
+        let (coll, title, max, coll_size) = (
+            &self.history[(scroll.0 as usize)..],
+            "Normal",
+            "".to_string(),
+            self.history.len(),
+        );
 
         let block = if self.auto_scroll {
             Block::default()
@@ -192,25 +140,56 @@ impl<'a, B: Backend> View for TextView<'a, B> {
     }
 
     fn clear(&mut self) {
+        self.scroll = (0, 0);
+        self.auto_scroll = true;
         self.history.clear();
-    } 
-
-    fn save_snapshot(&mut self) {
-        let snapshot_capacity = self.capacity / 4;
-        let last_index = self.history.len();
-        let start = if snapshot_capacity > last_index {
-            0
-        } else {
-            last_index - snapshot_capacity
-        };
-
-        self.snapshot = self.history[start..].to_vec();
     }
 
-    fn toggle_snapshot_mode(&mut self) {
-        self.snapshot_mode_en = !self.snapshot_mode_en;
+    fn up_scroll(&mut self) {
+        if self.max_main_axis() > 0 {
+            self.auto_scroll = false;
+        }
 
-        self.auto_scroll = !self.snapshot_mode_en;
+        if self.scroll.0 < 3 {
+            self.scroll.0 = 0;
+        } else {
+            self.scroll.0 -= 3;
+        }
+    }
+
+    fn down_scroll(&mut self) {
+        let max_main_axis = self.max_main_axis();
+
+        self.scroll.0 += 3;
+        self.scroll.0 = self.scroll.0.clamp(0, max_main_axis);
+
+        if self.scroll.0 == max_main_axis {
+            self.auto_scroll = true;
+        }
+    }
+
+    fn left_scroll(&mut self) {
+        if self.scroll.1 < 3 {
+            self.scroll.1 = 0;
+        } else {
+            self.scroll.1 -= 3;
+        }
+    }
+
+    fn right_scroll(&mut self) {
+        self.scroll.1 += 3;
+    }
+
+    fn set_frame_height(&mut self, frame_height: u16) {
+        self.frame_height = frame_height;
+    }
+
+    fn update_scroll(&mut self) {
+        self.scroll = if self.auto_scroll {
+            (self.max_main_axis(), self.scroll.1)
+        } else {
+            self.scroll
+        };
     }
 }
 
@@ -319,7 +298,7 @@ impl<'a> ViewData<'a> {
     }
 
     fn user_command(timestamp: DateTime<Local>, cmd_name: String, content: String) -> Self {
-        let content = format!("</{cmd_name}> {content}");
+        let content = format!("</{}> {}", cmd_name, content);
 
         Self {
             timestamp: ViewData::build_timestmap_span(timestamp, Color::Black, Color::LightGreen),
@@ -341,7 +320,7 @@ impl<'a> ViewData<'a> {
     }
 
     fn fail_data(timestamp: DateTime<Local>, content: String) -> Self {
-        let content = format!("Cannot send \"{content}\"");
+        let content = format!("Cannot send \"{}\"", content);
 
         Self {
             timestamp: ViewData::build_timestmap_span(timestamp, Color::White, Color::LightRed),
@@ -352,7 +331,7 @@ impl<'a> ViewData<'a> {
     }
 
     fn fail_command(timestamp: DateTime<Local>, cmd_name: String) -> Self {
-        let content = format!("Cannot send </{cmd_name}>");
+        let content = format!("Cannot send </{}>", cmd_name);
 
         Self {
             timestamp: ViewData::build_timestmap_span(timestamp, Color::White, Color::LightRed),
