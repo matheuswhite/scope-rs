@@ -41,6 +41,75 @@ impl<'a, B: Backend> TextView<'a, B> {
             0
         }
     }
+
+    fn is_visible(x: char) -> bool {
+        0x20 <= x as u8 && x as u8 <= 0x7E
+    }
+
+    fn print_invisible(data: String) -> String {
+        data.chars()
+            .map(|x| {
+                if TextView::<B>::is_visible(x) {
+                    x.to_string()
+                } else if x == '\n' {
+                    "\\n".to_string()
+                } else {
+                    format!("\\x{:02x}", x as u8)
+                }
+            })
+            .collect::<Vec<String>>()
+            .join("")
+    }
+
+    fn highlight_invisible(in_text: &str, color: Color) -> Vec<(String, Color)> {
+        #[derive(PartialEq)]
+        enum Mode {
+            Visible,
+            Invisible,
+        }
+
+        let highlight_color = if color == Color::Magenta {
+            Color::Cyan
+        } else {
+            Color::LightMagenta
+        };
+        let mut output = vec![];
+        let mut text = "".to_string();
+        let mut highlight_text = "".to_string();
+        let mut mode = Mode::Visible;
+
+        for ch in in_text.chars() {
+            if TextView::<B>::is_visible(ch) {
+                text.push(ch);
+                if mode == Mode::Invisible {
+                    output.push((
+                        TextView::<B>::print_invisible(highlight_text.clone()),
+                        highlight_color,
+                    ));
+                    highlight_text.clear();
+                }
+                mode = Mode::Visible;
+            } else {
+                highlight_text.push(ch);
+                if mode == Mode::Visible {
+                    output.push((text.clone(), color));
+                    text.clear();
+                }
+                mode = Mode::Invisible;
+            }
+        }
+
+        if !text.is_empty() {
+            output.push((text.clone(), color));
+        } else if !highlight_text.is_empty() {
+            output.push((
+                TextView::<B>::print_invisible(highlight_text.clone()),
+                highlight_color,
+            ));
+        }
+
+        output
+    }
 }
 
 impl<'a, B: Backend> View for TextView<'a, B> {
@@ -53,22 +122,21 @@ impl<'a, B: Backend> View for TextView<'a, B> {
             self.scroll
         };
 
-        let (coll, title, max, coll_size) = (
+        let (coll, max, coll_size) = (
             &self.history[(scroll.0 as usize)..],
-            "Normal",
             "".to_string(),
             self.history.len(),
         );
 
         let block = if self.auto_scroll {
             Block::default()
-                .title(format!("[{:03}{}] Text UTF-8 <{}>", coll_size, max, title))
+                .title(format!("[{:03}{}] Text UTF-8", coll_size, max))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Thick)
                 .border_style(Style::default().fg(Color::White))
         } else {
             Block::default()
-                .title(format!("[{:03}{}] Text UTF-8 <{}>", coll_size, max, title))
+                .title(format!("[{:03}{}] Text UTF-8", coll_size, max))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Double)
                 .border_style(
@@ -78,29 +146,26 @@ impl<'a, B: Backend> View for TextView<'a, B> {
                 )
         };
 
-        let text = coll
-            .iter()
-            .map(|x| {
-                let scroll = scroll.1 as usize;
-                let content = if scroll >= x.data.len() {
-                    ""
-                } else {
-                    &x.data[scroll..]
-                };
+        let text =
+            coll.iter()
+                .map(|x| {
+                    let scroll = scroll.1 as usize;
+                    let content = if scroll >= x.data.len() {
+                        ""
+                    } else {
+                        &x.data[scroll..]
+                    };
 
-                Spans::from(vec![
-                    x.timestamp.clone(),
-                    Span::styled(
-                        format!(
-                            "{}{} ",
-                            if x.bg != Color::Reset { " " } else { "" },
-                            content
-                        ),
-                        Style::default().bg(x.bg).fg(x.fg),
-                    ),
-                ])
-            })
-            .collect::<Vec<_>>();
+                    let texts_colors = TextView::<B>::highlight_invisible(content, x.fg);
+                    let mut content = vec![x.timestamp.clone()];
+
+                    content.extend(texts_colors.into_iter().map(|(text, color)| {
+                        Span::styled(text, Style::default().bg(x.bg).fg(color))
+                    }));
+
+                    Spans::from(content)
+                })
+                .collect::<Vec<_>>();
         let paragraph = Paragraph::new(text).block(block);
         f.render_widget(paragraph, rect);
     }

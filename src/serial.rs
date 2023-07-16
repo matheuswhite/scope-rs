@@ -173,13 +173,12 @@ impl SerialIF {
 
             match serial.read(&mut buffer) {
                 Ok(_) => {
+                    line.push(buffer[0] as char);
                     if buffer[0] == b'\n' {
                         data_tx
                             .send(DataOut::Data(Local::now(), line.clone()))
                             .expect("Cannot forward message read from serial");
                         line.clear();
-                    } else {
-                        line.push(buffer[0] as char);
                     }
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {}
