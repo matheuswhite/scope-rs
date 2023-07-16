@@ -7,6 +7,7 @@ use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{io, thread};
+use tokio::time::Instant;
 use tui::style::Color;
 
 pub struct SerialIF {
@@ -116,6 +117,7 @@ impl SerialIF {
 
         let mut line = String::new();
         let mut buffer = [0u8];
+        let mut now = Instant::now();
 
         'task: loop {
             if let Ok(data_to_send) = serial_rx.try_recv() {
@@ -193,6 +195,17 @@ impl SerialIF {
                 }
                 Err(_e) => {
                     // eprint!("{:?}", e.kind())
+                }
+            }
+
+            if now.elapsed().as_millis() > 1_000 {
+                now = Instant::now();
+
+                if !line.is_empty() {
+                    data_tx
+                        .send(DataOut::Data(Local::now(), line.clone()))
+                        .expect("Cannot forward message read from serial");
+                    line.clear();
                 }
             }
         }
