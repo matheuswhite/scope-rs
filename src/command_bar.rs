@@ -5,9 +5,12 @@ use crate::text::TextView;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use std::cmp::{max, min};
 use std::collections::btree_map::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
+use std::thread::sleep;
+use std::time::Duration;
 use tui::backend::Backend;
 use tui::layout::{Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Style};
@@ -185,6 +188,14 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                                 self.interface
                                     .set_baudrate(command_line_split[1].parse::<u32>().unwrap());
                             }
+                            "send_file" => {
+                                let delay = command_line_split
+                                    .get(2)
+                                    .and_then(|delay| u64::from_str(delay).ok())
+                                    .map(Duration::from_millis);
+
+                                self.send_file(command_line_split[1], delay);
+                            }
                             _ => {
                                 self.set_error_pop_up(format!(
                                     "Command <!{}> not found",
@@ -274,6 +285,33 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         };
 
         commands
+    }
+
+    fn load_file(&mut self, filepath: &Path) -> Result<String, ()> {
+        let Ok(file_read) = std::fs::read(filepath) else {
+            self.set_error_pop_up(format!("Cannot find {:?} filepath", filepath));
+            return Err(());
+        };
+
+        let Ok(file_str) = std::str::from_utf8(file_read.as_slice()) else {
+            self.set_error_pop_up(format!("The file {:?} has non UTF-8 characters", filepath));
+            return Err(());
+        };
+
+        Ok(file_str.to_string())
+    }
+
+    fn send_file(&mut self, filepath: &str, delay: Option<Duration>) {
+        if let Ok(str_send) = self.load_file(Path::new(filepath)) {
+            for str_split in str_send.split('\n') {
+                self.interface
+                    .send(DataIn::Command(filepath.to_string(), str_split.to_string()));
+
+                if let Some(delay) = delay {
+                    sleep(delay);
+                }
+            }
+        }
     }
 }
 
