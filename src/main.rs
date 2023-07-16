@@ -2,12 +2,9 @@ extern crate core;
 
 use crate::ble::BleIF;
 use crate::command_bar::CommandBar;
-use crate::graph::GraphView;
 use crate::interface::Interface;
 use crate::loop_back::LoopBackIF;
 use crate::serial::SerialIF;
-use crate::text::TextView;
-use crate::view::View;
 use btleplug::api::bleuuid::uuid_from_u16;
 use chrono::Local;
 use clap::{Parser, Subcommand};
@@ -27,12 +24,10 @@ use uuid::Uuid;
 mod ble;
 mod command_bar;
 mod error_pop_up;
-mod graph;
 mod interface;
 mod loop_back;
 mod serial;
 mod text;
-mod view;
 
 type ConcreteBackend = CrosstermBackend<Stdout>;
 
@@ -89,11 +84,6 @@ fn main() -> Result<(), io::Error> {
 
     let view_length = cli.view_length.unwrap_or(CAPACITY);
 
-    let views: Vec<Box<dyn View<Backend = ConcreteBackend>>> = vec![
-        Box::new(TextView::new(view_length)),
-        Box::new(GraphView::new(view_length)),
-    ];
-
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen, EnableMouseCapture)?;
@@ -101,7 +91,7 @@ fn main() -> Result<(), io::Error> {
     let mut terminal = Terminal::new(backend)?;
 
     let mut command_bar =
-        CommandBar::<ConcreteBackend>::new(interface, views).with_command_file(CMD_FILEPATH);
+        CommandBar::<ConcreteBackend>::new(interface, view_length).with_command_file(CMD_FILEPATH);
 
     'main: loop {
         terminal.draw(|f| command_bar.draw(f))?;

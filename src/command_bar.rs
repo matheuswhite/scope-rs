@@ -1,7 +1,7 @@
 use crate::command_bar::InputEvent::{HorizontalScroll, Key, VerticalScroll};
 use crate::error_pop_up::ErrorPopUp;
 use crate::interface::{DataIn, Interface};
-use crate::view::View;
+use crate::text::TextView;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use std::cmp::{max, min};
 use std::collections::btree_map::BTreeMap;
@@ -15,10 +15,9 @@ use tui::text::{Span, Spans};
 use tui::widgets::{Block, Borders, Clear, Paragraph};
 use tui::Frame;
 
-pub struct CommandBar<B: Backend> {
+pub struct CommandBar<'a, B: Backend> {
     interface: Box<dyn Interface>,
-    view: usize,
-    views: Vec<Box<dyn View<Backend = B>>>,
+    text_view: TextView<'a, B>,
     command_line: String,
     command_filepath: Option<PathBuf>,
     history: Vec<String>,
@@ -27,12 +26,10 @@ pub struct CommandBar<B: Backend> {
     key_receiver: Receiver<InputEvent>,
 }
 
-impl<B: Backend + Send> CommandBar<B> {
+impl<'a, B: Backend + Send> CommandBar<'a, B> {
     const HEIGHT: u16 = 3;
 
     pub fn draw(&self, f: &mut Frame<B>) {
-        let view = self.views[self.view].as_ref();
-
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(
@@ -44,7 +41,7 @@ impl<B: Backend + Send> CommandBar<B> {
             )
             .split(f.size());
 
-        view.draw(f, chunks[0]);
+        self.text_view.draw(f, chunks[0]);
 
         let cursor_pos = (
             chunks[1].x + self.command_line.chars().count() as u16 + 1,
@@ -71,12 +68,6 @@ impl<B: Backend + Send> CommandBar<B> {
 
         if let Some(pop_up) = self.error_pop_up.as_ref() {
             pop_up.draw(f, chunks[1].y);
-        }
-    }
-
-    fn clear_views(&mut self) {
-        for view in self.views.iter_mut() {
-            view.clear();
         }
     }
 
@@ -138,7 +129,7 @@ impl<B: Backend + Send> CommandBar<B> {
 
     fn handle_key_input(&mut self, key: KeyEvent, _term_size: Rect) -> Result<(), ()> {
         match key.code {
-            KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => self.clear_views(),
+            KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => self.text_view.clear(),
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.error_pop_up.take();
             }
@@ -186,7 +177,7 @@ impl<B: Backend + Send> CommandBar<B> {
                             .split_whitespace()
                             .collect::<Vec<_>>();
                         match command_line_split[0].to_lowercase().as_ref() {
-                            "clear" | "clean" => self.clear_views(),
+                            "clear" | "clean" => self.text_view.clear(),
                             "port" => {
                                 self.interface.set_port(command_line_split[1].to_string());
                             }
@@ -219,13 +210,6 @@ impl<B: Backend + Send> CommandBar<B> {
 
                 self.error_pop_up.take();
             }
-            KeyCode::Tab if key.modifiers == KeyModifiers::SHIFT => {
-                if self.view == self.views.len() - 1 {
-                    self.view = 0;
-                } else {
-                    self.view += 1;
-                }
-            }
             _ => {}
         }
 
@@ -234,9 +218,8 @@ impl<B: Backend + Send> CommandBar<B> {
 
     pub fn update(&mut self, term_size: Rect) -> Result<(), ()> {
         {
-            let view = &mut self.views[self.view];
-            view.set_frame_height(term_size.height);
-            view.update_scroll();
+            self.text_view.set_frame_height(term_size.height);
+            self.text_view.update_scroll();
         }
 
         if let Some(error_pop_up) = self.error_pop_up.as_ref() {
@@ -246,9 +229,7 @@ impl<B: Backend + Send> CommandBar<B> {
         }
 
         if let Ok(data_out) = self.interface.try_recv() {
-            for view in self.views.iter_mut() {
-                view.add_data_out(data_out.clone());
-            }
+            self.text_view.add_data_out(data_out.clone());
         }
 
         let Ok(input_evt) = self.key_receiver.try_recv() else {
@@ -258,21 +239,17 @@ impl<B: Backend + Send> CommandBar<B> {
         match input_evt {
             Key(key) => return self.handle_key_input(key, term_size),
             VerticalScroll(direction) => {
-                let view = &mut self.views[self.view];
-
                 if direction < 0 {
-                    view.up_scroll();
+                    self.text_view.up_scroll();
                 } else {
-                    view.down_scroll();
+                    self.text_view.down_scroll();
                 }
             }
             HorizontalScroll(direction) => {
-                let view = &mut self.views[self.view];
-
                 if direction < 0 {
-                    view.left_scroll();
+                    self.text_view.left_scroll();
                 } else {
-                    view.right_scroll();
+                    self.text_view.right_scroll();
                 }
             }
         }
@@ -300,18 +277,15 @@ impl<B: Backend + Send> CommandBar<B> {
     }
 }
 
-impl<B: Backend> CommandBar<B> {
-    pub fn new(interface: Box<dyn Interface>, views: Vec<Box<dyn View<Backend = B>>>) -> Self {
-        assert!(!views.is_empty(), "Views cannot be empty");
-
+impl<'a, B: Backend> CommandBar<'a, B> {
+    pub fn new(interface: Box<dyn Interface>, view_capacity: usize) -> Self {
         let (key_sender, key_receiver) = channel();
 
         thread::spawn(move || CommandBar::<B>::task(key_sender));
 
         Self {
             interface,
-            view: 0,
-            views,
+            text_view: TextView::new(view_capacity),
             command_line: String::new(),
             history: vec![],
             key_receiver,
