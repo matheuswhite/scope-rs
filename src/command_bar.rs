@@ -204,7 +204,12 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                         }
                     }
                     '$' => {
-                        let command_line = command_line.strip_prefix('$').unwrap().to_uppercase();
+                        let command_line = command_line
+                            .strip_prefix('$')
+                            .unwrap()
+                            .replace(",", "")
+                            .replace(" ", "")
+                            .to_uppercase();
 
                         let Ok(bytes) = CommandBar::<B>::hex_string_to_bytes(&command_line) else {
                             self.set_error_pop_up(format!("Invalid hex string: {}", command_line));
