@@ -2,7 +2,9 @@ use crate::command_bar::InputEvent::{HorizontalScroll, Key, VerticalScroll};
 use crate::error_pop_up::ErrorPopUp;
 use crate::interface::{DataIn, Interface};
 use crate::text::TextView;
+use crate::theme::Theme;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use rand::seq::SliceRandom;
 use std::cmp::{max, min};
 use std::collections::btree_map::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +17,7 @@ use tui::backend::Backend;
 use tui::layout::{Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Style};
 use tui::text::{Span, Spans};
-use tui::widgets::{Block, Borders, Clear, Paragraph};
+use tui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use tui::Frame;
 
 pub struct CommandBar<'a, B: Backend> {
@@ -27,6 +29,9 @@ pub struct CommandBar<'a, B: Backend> {
     error_pop_up: Option<ErrorPopUp<B>>,
     command_list: CommandList,
     key_receiver: Receiver<InputEvent>,
+    current_hint: Option<&'static str>,
+    hints: Vec<&'static str>,
+    theme: Theme,
 }
 
 impl<'a, B: Backend + Send> CommandBar<'a, B> {
@@ -47,7 +52,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         self.text_view.draw(f, chunks[0]);
 
         let cursor_pos = (
-            chunks[1].x + self.command_line.chars().count() as u16 + 1,
+            chunks[1].x + self.command_line.chars().count() as u16 + 2,
             chunks[1].y + 1,
         );
         let block = Block::default()
@@ -57,16 +62,30 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 self.interface.description()
             ))
             .borders(Borders::ALL)
+            .border_type(BorderType::Thick)
             .border_style(Style::default().fg(if self.interface.is_connected() {
-                Color::Green
+                self.theme.green()
             } else {
-                Color::LightRed
+                self.theme.red()
             }));
-        let paragraph = Paragraph::new(Span::from(self.command_line.clone())).block(block);
+        let paragraph = Paragraph::new(Span::from({
+            " ".to_string()
+                + if let Some(hint) = self.current_hint {
+                    hint
+                } else {
+                    &self.command_line
+                }
+        }))
+        .style(Style::default().fg(if self.current_hint.is_some() {
+            self.theme.gray()
+        } else {
+            Color::Reset
+        }))
+        .block(block);
         f.render_widget(paragraph, chunks[1]);
         f.set_cursor(cursor_pos.0, cursor_pos.1);
 
-        self.command_list.draw(f, chunks[1].y, Color::Green);
+        self.command_list.draw(f, chunks[1].y, self.theme.green());
 
         if let Some(pop_up) = self.error_pop_up.as_ref() {
             pop_up.draw(f, chunks[1].y);
@@ -129,6 +148,14 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         Ok(res)
     }
 
+    fn show_hint(&mut self) {
+        self.current_hint = Some(self.hints.choose(&mut rand::thread_rng()).unwrap());
+    }
+
+    fn clear_hint(&mut self) {
+        self.current_hint = None;
+    }
+
     fn handle_key_input(&mut self, key: KeyEvent, _term_size: Rect) -> Result<(), ()> {
         match key.code {
             KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => self.text_view.clear(),
@@ -136,16 +163,21 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 self.error_pop_up.take();
             }
             KeyCode::Char(c) => {
+                self.clear_hint();
                 self.command_line.push(c);
                 self.update_command_list();
             }
             KeyCode::Backspace => {
+                if self.command_line.len() == 1 {
+                    self.show_hint();
+                }
                 self.command_line.pop();
                 self.update_command_list();
             }
             KeyCode::Esc => return Err(()),
             KeyCode::Enter if !self.command_line.is_empty() => {
                 let command_line = self.command_line.clone();
+                self.show_hint();
                 self.command_line.clear();
                 self.command_list.clear();
 
@@ -320,20 +352,29 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
 }
 
 impl<'a, B: Backend> CommandBar<'a, B> {
-    pub fn new(interface: Box<dyn Interface>, view_capacity: usize) -> Self {
+    pub fn new(interface: Box<dyn Interface>, view_capacity: usize, theme: Theme) -> Self {
         let (key_sender, key_receiver) = channel();
 
         thread::spawn(move || CommandBar::<B>::task(key_sender));
 
+        let hints = vec![
+            "Type / to send a command",
+            "Type $ to start a hex sequence",
+            "Type here and hit <Enter> to send",
+        ];
+
         Self {
             interface,
-            text_view: TextView::new(view_capacity),
+            text_view: TextView::new(view_capacity, theme),
             command_line: String::new(),
             history: vec![],
             key_receiver,
             error_pop_up: None,
             command_filepath: None,
-            command_list: CommandList::new(),
+            command_list: CommandList::new(theme),
+            hints: hints.clone(),
+            current_hint: Some(hints.choose(&mut rand::thread_rng()).unwrap()),
+            theme,
         }
     }
 
@@ -373,13 +414,15 @@ enum InputEvent {
 struct CommandList {
     commands: Vec<String>,
     pattern: String,
+    theme: Theme,
 }
 
 impl CommandList {
-    pub fn new() -> Self {
+    pub fn new(theme: Theme) -> Self {
         Self {
             commands: vec![],
             pattern: String::new(),
+            theme,
         }
     }
 
@@ -416,6 +459,7 @@ impl CommandList {
         );
         let block = Block::default()
             .borders(Borders::ALL)
+            .border_type(BorderType::Thick)
             .style(Style::default().fg(color));
         let text = commands
             .iter()
@@ -430,7 +474,7 @@ impl CommandList {
                     ),
                     Span::styled(
                         x[self.pattern.len() - 1..].to_string(),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(self.theme.gray()),
                     ),
                 ])
             })

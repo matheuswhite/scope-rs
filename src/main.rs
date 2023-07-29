@@ -5,6 +5,7 @@ use crate::command_bar::CommandBar;
 use crate::interface::Interface;
 use crate::loop_back::LoopBackIF;
 use crate::serial::SerialIF;
+use crate::theme::Theme;
 use btleplug::api::bleuuid::uuid_from_u16;
 use chrono::Local;
 use clap::{Parser, Subcommand};
@@ -28,6 +29,7 @@ mod interface;
 mod loop_back;
 mod serial;
 mod text;
+mod theme;
 
 type ConcreteBackend = CrosstermBackend<Stdout>;
 
@@ -91,7 +93,10 @@ fn main() -> Result<(), io::Error> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut command_bar = CommandBar::<ConcreteBackend>::new(interface, view_length)
+    let is_light = terminal_light::luma().map_or(false, |luma| luma >= 0.6);
+    let theme = Theme::new(is_light);
+
+    let mut command_bar = CommandBar::<ConcreteBackend>::new(interface, view_length, theme)
         .with_command_file(cmd_file.as_path().to_str().unwrap());
 
     'main: loop {

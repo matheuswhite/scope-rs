@@ -1,6 +1,6 @@
 use crate::interface::DataOut;
+use crate::theme::Theme;
 use chrono::{DateTime, Local};
-use std::fmt::Write;
 use std::marker::PhantomData;
 use tui::backend::Backend;
 use tui::layout::Rect;
@@ -16,10 +16,11 @@ pub struct TextView<'a, B: Backend> {
     auto_scroll: bool,
     scroll: (u16, u16),
     frame_height: u16,
+    theme: Theme,
 }
 
 impl<'a, B: Backend> TextView<'a, B> {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, theme: Theme) -> Self {
         Self {
             history: vec![],
             capacity,
@@ -27,6 +28,7 @@ impl<'a, B: Backend> TextView<'a, B> {
             auto_scroll: true,
             scroll: (0, 0),
             frame_height: u16::MAX,
+            theme,
         }
     }
 
@@ -58,17 +60,17 @@ impl<'a, B: Backend> TextView<'a, B> {
             .join("")
     }
 
-    fn highlight_invisible(in_text: &str, color: Color) -> Vec<(String, Color)> {
+    fn highlight_invisible(&self, in_text: &str, color: Color) -> Vec<(String, Color)> {
         #[derive(PartialEq)]
         enum Mode {
             Visible,
             Invisible,
         }
 
-        let highlight_color = if color == Color::Magenta {
-            Color::Cyan
+        let highlight_color = if color == self.theme.magenta() {
+            self.theme.blue()
         } else {
-            Color::LightMagenta
+            self.theme.magenta()
         };
         let mut output = vec![];
         let mut text = "".to_string();
@@ -149,7 +151,7 @@ impl<'a, B: Backend> TextView<'a, B> {
                         &x.data[scroll..]
                     };
 
-                    let texts_colors = TextView::<B>::highlight_invisible(content, x.fg);
+                    let texts_colors = self.highlight_invisible(content, x.fg);
                     let mut content = vec![x.timestamp.clone()];
 
                     content.extend(texts_colors.into_iter().map(|(text, color)| {
@@ -176,24 +178,24 @@ impl<'a, B: Backend> TextView<'a, B> {
                         .push(ViewData::if_data(timestamp, content, color));
                 }
             }
-            DataOut::ConfirmData(timestamp, data) => {
-                self.history.push(ViewData::user_data(timestamp, data))
-            }
-            DataOut::ConfirmCommand(timestamp, cmd_name, data) => self
+            DataOut::ConfirmData(timestamp, data) => self
                 .history
-                .push(ViewData::user_command(timestamp, cmd_name, data)),
+                .push(ViewData::user_data(timestamp, data, self.theme)),
+            DataOut::ConfirmCommand(timestamp, cmd_name, data) => self.history.push(
+                ViewData::user_command(timestamp, cmd_name, data, self.theme),
+            ),
             DataOut::ConfirmHexString(timestamp, bytes) => self
                 .history
-                .push(ViewData::user_hex_string(timestamp, bytes)),
-            DataOut::FailData(timestamp, data) => {
-                self.history.push(ViewData::fail_data(timestamp, data))
-            }
+                .push(ViewData::user_hex_string(timestamp, bytes, self.theme)),
+            DataOut::FailData(timestamp, data) => self
+                .history
+                .push(ViewData::fail_data(timestamp, data, self.theme)),
             DataOut::FailCommand(timestamp, cmd_name, _data) => self
                 .history
-                .push(ViewData::fail_command(timestamp, cmd_name)),
+                .push(ViewData::fail_command(timestamp, cmd_name, self.theme)),
             DataOut::FailHexString(timestamp, bytes) => self
                 .history
-                .push(ViewData::fail_hex_string(timestamp, bytes)),
+                .push(ViewData::fail_hex_string(timestamp, bytes, self.theme)),
         };
     }
 
@@ -318,16 +320,6 @@ impl<'a> ViewData<'a> {
         res
     }
 
-    fn bytes_to_hex_string(bytes: &[u8]) -> String {
-        let mut hex_string = String::new();
-
-        for byte in bytes {
-            write!(&mut hex_string, "{:02X}", byte).unwrap();
-        }
-
-        hex_string
-    }
-
     fn build_timestmap_span(timestamp: DateTime<Local>, fg: Color, bg: Color) -> Span<'a> {
         let tm_fg = if bg != Color::Reset { bg } else { fg };
 
@@ -346,67 +338,72 @@ impl<'a> ViewData<'a> {
         }
     }
 
-    fn user_data(timestamp: DateTime<Local>, content: String) -> Self {
+    fn user_data(timestamp: DateTime<Local>, content: String, theme: Theme) -> Self {
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, Color::LightCyan),
+            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, theme.blue()),
             data: content,
-            fg: Color::White,
-            bg: Color::LightCyan,
+            fg: theme.primary(),
+            bg: theme.blue(),
         }
     }
 
-    fn user_command(timestamp: DateTime<Local>, cmd_name: String, content: String) -> Self {
+    fn user_command(
+        timestamp: DateTime<Local>,
+        cmd_name: String,
+        content: String,
+        theme: Theme,
+    ) -> Self {
         let content = format!("</{}> {}", cmd_name, content);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, Color::LightGreen),
+            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, theme.green()),
             data: content,
-            fg: Color::White,
-            bg: Color::LightGreen,
+            fg: theme.primary(),
+            bg: theme.green(),
         }
     }
 
-    fn user_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>) -> Self {
-        let content = format!("{:02X?}", &bytes);
+    fn user_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>, theme: Theme) -> Self {
+        let content = format!("{:02x?}", &bytes);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, Color::Yellow),
+            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, theme.yellow()),
             data: content,
             fg: Color::Black,
-            bg: Color::Yellow,
+            bg: theme.yellow(),
         }
     }
 
-    fn fail_data(timestamp: DateTime<Local>, content: String) -> Self {
+    fn fail_data(timestamp: DateTime<Local>, content: String, theme: Theme) -> Self {
         let content = format!("Cannot send \"{}\"", content);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, Color::LightRed),
+            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, theme.red()),
             data: content,
             fg: Color::White,
-            bg: Color::LightRed,
+            bg: theme.red(),
         }
     }
 
-    fn fail_command(timestamp: DateTime<Local>, cmd_name: String) -> Self {
+    fn fail_command(timestamp: DateTime<Local>, cmd_name: String, theme: Theme) -> Self {
         let content = format!("Cannot send </{}>", cmd_name);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, Color::LightRed),
+            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, theme.red()),
             data: content,
             fg: Color::White,
-            bg: Color::LightRed,
+            bg: theme.red(),
         }
     }
 
-    fn fail_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>) -> Self {
-        let content = format!("Cannot send <${}>", ViewData::bytes_to_hex_string(&bytes));
+    fn fail_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>, theme: Theme) -> Self {
+        let content = format!("Cannot send {:02x?}", &bytes);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, Color::LightRed),
+            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, theme.red()),
             data: content,
             fg: Color::White,
-            bg: Color::LightRed,
+            bg: theme.red(),
         }
     }
 }
