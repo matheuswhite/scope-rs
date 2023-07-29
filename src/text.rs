@@ -47,14 +47,12 @@ impl<'a, B: Backend> TextView<'a, B> {
 
     fn print_invisible(data: String) -> String {
         data.chars()
-            .map(|x| {
-                if TextView::<B>::is_visible(x) {
-                    x.to_string()
-                } else if x == '\n' {
-                    "\\n".to_string()
-                } else {
-                    format!("\\x{:02x}", x as u8)
-                }
+            .map(|x| match x {
+                x if TextView::<B>::is_visible(x) => x.to_string(),
+                '\0' => "\\0".to_string(),
+                '\n' => "\\n".to_string(),
+                '\r' => "\\r".to_string(),
+                _ => format!("\\x{:02x}", x as u8),
             })
             .collect::<Vec<String>>()
             .join("")
@@ -128,7 +126,7 @@ impl<'a, B: Backend> TextView<'a, B> {
                 .title(format!("[{:03}{}] Text UTF-8", coll_size, max))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Thick)
-                .border_style(Style::default().fg(Color::White))
+                .border_style(Style::default().fg(Color::Reset))
         } else {
             Block::default()
                 .title(format!("[{:03}{}] Text UTF-8", coll_size, max))
@@ -136,7 +134,7 @@ impl<'a, B: Backend> TextView<'a, B> {
                 .border_type(BorderType::Double)
                 .border_style(
                     Style::default()
-                        .fg(Color::White)
+                        .fg(Color::Reset)
                         .add_modifier(Modifier::RAPID_BLINK),
                 )
         };
@@ -271,7 +269,7 @@ impl<'a> ViewData<'a> {
         let mut res = vec![];
 
         let pattern_n_color = [
-            ("0m", Color::White),
+            ("0m", Color::Reset),
             ("30m", Color::Black),
             ("0;30m", Color::Black),
             ("31m", Color::Red),
@@ -313,7 +311,7 @@ impl<'a> ViewData<'a> {
                 true
             }) && !splitted_str.starts_with("0m")
             {
-                res.push((splitted_str.to_string(), Color::White));
+                res.push((splitted_str.to_string(), Color::Reset));
             }
         }
 
@@ -350,9 +348,9 @@ impl<'a> ViewData<'a> {
 
     fn user_data(timestamp: DateTime<Local>, content: String) -> Self {
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Black, Color::LightCyan),
+            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, Color::LightCyan),
             data: content,
-            fg: Color::Black,
+            fg: Color::White,
             bg: Color::LightCyan,
         }
     }
@@ -361,18 +359,18 @@ impl<'a> ViewData<'a> {
         let content = format!("</{}> {}", cmd_name, content);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Black, Color::LightGreen),
+            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, Color::LightGreen),
             data: content,
-            fg: Color::Black,
+            fg: Color::White,
             bg: Color::LightGreen,
         }
     }
 
     fn user_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>) -> Self {
-        let content = format!("<${}> {:?}", ViewData::bytes_to_hex_string(&bytes), &bytes);
+        let content = format!("{:02X?}", &bytes);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Black, Color::Yellow),
+            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, Color::Yellow),
             data: content,
             fg: Color::Black,
             bg: Color::Yellow,

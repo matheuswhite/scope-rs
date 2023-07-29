@@ -58,7 +58,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
             ))
             .borders(Borders::ALL)
             .border_style(Style::default().fg(if self.interface.is_connected() {
-                self.interface.color()
+                Color::Green
             } else {
                 Color::LightRed
             }));
@@ -66,8 +66,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         f.render_widget(paragraph, chunks[1]);
         f.set_cursor(cursor_pos.0, cursor_pos.1);
 
-        self.command_list
-            .draw(f, chunks[1].y, self.interface.color());
+        self.command_list.draw(f, chunks[1].y, Color::Green);
 
         if let Some(pop_up) = self.error_pop_up.as_ref() {
             pop_up.draw(f, chunks[1].y);

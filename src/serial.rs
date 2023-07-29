@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use std::{io, thread};
 use tokio::time::Instant;
-use tui::style::Color;
 
 pub struct SerialIF {
     serial_tx: Sender<DataIn>,
@@ -41,9 +40,6 @@ impl Interface for SerialIF {
         format!("Serial {}:{}bps", self.port, self.baudrate)
     }
 
-    fn color(&self) -> Color {
-        Color::Yellow
-    }
     fn set_port(&mut self, _port: String) {
         self.port = _port;
     }

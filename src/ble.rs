@@ -2,7 +2,7 @@ use crate::interface::{DataIn, DataOut, Interface};
 use btleplug::api::bleuuid::BleUuid;
 use btleplug::api::{
     Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
-}; 
+};
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use chrono::Local;
 use futures::stream::StreamExt;
@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tokio::{sync::Mutex, time::sleep};
-use tui::style::Color;
 use uuid::Uuid;
 
 static IS_CONNECTED: AtomicBool = AtomicBool::new(false);
@@ -51,10 +50,6 @@ impl Interface for BleIF {
             self.tx_uuid.to_short_string(),
             self.rx_uuid.to_short_string(),
         )
-    }
-
-    fn color(&self) -> Color {
-        Color::LightBlue
     }
 }
 

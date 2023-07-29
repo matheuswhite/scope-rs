@@ -78,11 +78,12 @@ fn main() -> Result<(), io::Error> {
         InterfacesArgs::Ble { name } => Box::new(BleIF::new(BLE_TX_UUID, BLE_RX_UUID, &name)),
         InterfacesArgs::Loopback {} => Box::new(LoopBackIF::new(
             loopback_graph_fn,
-            Duration::from_millis(50),
+            Duration::from_millis(1000),
         )),
     };
 
     let view_length = cli.view_length.unwrap_or(CAPACITY);
+    let cmd_file = cli.cmd_file.unwrap_or(PathBuf::from(CMD_FILEPATH));
 
     enable_raw_mode()?;
     let mut stdout = io::stdout();
@@ -90,8 +91,8 @@ fn main() -> Result<(), io::Error> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let mut command_bar =
-        CommandBar::<ConcreteBackend>::new(interface, view_length).with_command_file(CMD_FILEPATH);
+    let mut command_bar = CommandBar::<ConcreteBackend>::new(interface, view_length)
+        .with_command_file(cmd_file.as_path().to_str().unwrap());
 
     'main: loop {
         terminal.draw(|f| command_bar.draw(f))?;

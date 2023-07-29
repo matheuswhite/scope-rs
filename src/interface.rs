@@ -1,6 +1,5 @@
 use chrono::{DateTime, Local};
 use std::sync::mpsc::TryRecvError;
-use tui::style::Color;
 
 pub enum DataIn {
     Exit,
@@ -26,7 +25,6 @@ pub trait Interface: Drop {
     fn send(&self, data: DataIn);
     fn try_recv(&self) -> Result<DataOut, TryRecvError>;
     fn description(&self) -> String;
-    fn color(&self) -> Color;
     fn set_port(&mut self, _port: String) {}
     fn set_baudrate(&mut self, _baudarate: u32) {}
 }
