@@ -2,7 +2,7 @@ use crate::interface::{DataIn, DataOut, Interface};
 use btleplug::api::bleuuid::BleUuid;
 use btleplug::api::{
     Central, Characteristic, Manager as _, Peripheral as _, ScanFilter, WriteType,
-}; 
+};
 use btleplug::platform::{Adapter, Manager, Peripheral};
 use chrono::Local;
 use futures::stream::StreamExt;
@@ -12,7 +12,6 @@ use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use tokio::{sync::Mutex, time::sleep};
-use tui::style::Color;
 use uuid::Uuid;
 
 static IS_CONNECTED: AtomicBool = AtomicBool::new(false);
@@ -51,10 +50,6 @@ impl Interface for BleIF {
             self.tx_uuid.to_short_string(),
             self.rx_uuid.to_short_string(),
         )
-    }
-
-    fn color(&self) -> Color {
-        Color::LightBlue
     }
 }
 
@@ -216,7 +211,7 @@ impl BleIF {
                                 command_name,
                                 data_to_send,
                             ))
-                            .expect("Cannot send data confirm"),
+                            .expect("Cannot send command confirm"),
                         Err(_) => {
                             data_tx
                                 .send(DataOut::FailCommand(
@@ -224,7 +219,7 @@ impl BleIF {
                                     command_name,
                                     data_to_send,
                                 ))
-                                .expect("Canot send data fail");
+                                .expect("Canot send command fail");
                         }
                     },
                     DataIn::HexString(bytes) => match dev_guard
@@ -233,11 +228,40 @@ impl BleIF {
                     {
                         Ok(_) => data_tx
                             .send(DataOut::ConfirmHexString(Local::now(), bytes))
-                            .expect("Cannot send data confirm"),
+                            .expect("Cannot send hex data confirm"),
                         Err(_) => {
                             data_tx
                                 .send(DataOut::FailHexString(Local::now(), bytes))
-                                .expect("Canot send data fail");
+                                .expect("Canot send hex data fail");
+                        }
+                    },
+                    DataIn::File(idx, total, filename, content) => match dev_guard
+                        .write(
+                            &tx_char,
+                            format!("{}\n", content).as_bytes(),
+                            WriteType::WithoutResponse,
+                        )
+                        .await
+                    {
+                        Ok(_) => data_tx
+                            .send(DataOut::ConfirmFile(
+                                Local::now(),
+                                idx,
+                                total,
+                                filename,
+                                content,
+                            ))
+                            .expect("Cannot send file confirm"),
+                        Err(_) => {
+                            data_tx
+                                .send(DataOut::FailFile(
+                                    Local::now(),
+                                    idx,
+                                    total,
+                                    filename,
+                                    content,
+                                ))
+                                .expect("Canot send file fail");
                         }
                     },
                 }

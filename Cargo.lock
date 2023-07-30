@@ -269,6 +269,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "coolor"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ad6ac2088e244fd157068daf566f17f7b46d5c543273582bc8b2875233bdfb86"
+
+[[package]]
 name = "core-foundation"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -307,6 +313,22 @@ dependencies = [
  "core-foundation",
  "foreign-types",
  "libc",
+]
+
+[[package]]
+name = "crossterm"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2102ea4f781910f8a5b98dd061f4c2023f479ce7bb1236330099ceb5a93cf17"
+dependencies = [
+ "bitflags",
+ "crossterm_winapi",
+ "libc",
+ "mio",
+ "parking_lot",
+ "signal-hook",
+ "signal-hook-mio",
+ "winapi",
 ]
 
 [[package]]
@@ -803,6 +825,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2dffe52ecf27772e601905b7522cb4ef790d2cc203488bbd0e2fe85fcb74566d"
 
 [[package]]
+name = "memoffset"
+version = "0.6.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5aa361d4faea93603064a027415f07bd8e1d5c88c9fbf68bf56a285428fd79ce"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "mio"
 version = "0.8.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -812,6 +843,19 @@ dependencies = [
  "log",
  "wasi 0.11.0+wasi-snapshot-preview1",
  "windows-sys",
+]
+
+[[package]]
+name = "nix"
+version = "0.22.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e4916f159ed8e5de0082076562152a76b7a1f64a01fd9d1e0fea002c37624faf"
+dependencies = [
+ "bitflags",
+ "cc",
+ "cfg-if",
+ "libc",
+ "memoffset",
 ]
 
 [[package]]
@@ -1056,12 +1100,13 @@ dependencies = [
  "btleplug",
  "chrono",
  "clap",
- "crossterm",
+ "crossterm 0.25.0",
  "futures",
  "rand",
  "serde",
  "serde_yaml",
  "serialport",
+ "terminal-light",
  "tokio",
  "tui",
  "uuid",
@@ -1145,7 +1190,7 @@ dependencies = [
  "cfg-if",
  "libudev",
  "mach 0.3.2",
- "nix",
+ "nix 0.24.3",
  "regex",
  "winapi",
 ]
@@ -1235,6 +1280,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "be55cf8942feac5c765c2c993422806843c9a9a45d4d5c407ad6dd2ea95eb9b6"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "terminal-light"
+version = "1.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9077b39afb70f12391e4c1fcf46319999cfc32b45d605a668052bc4d1b4511af"
+dependencies = [
+ "coolor",
+ "crossterm 0.23.2",
+ "thiserror",
+ "xterm-query",
 ]
 
 [[package]]
@@ -1332,7 +1389,7 @@ checksum = "ccdd26cbd674007e649a272da4475fb666d3aa0ad0531da7136db6fab0e5bad1"
 dependencies = [
  "bitflags",
  "cassowary",
- "crossterm",
+ "crossterm 0.25.0",
  "unicode-segmentation",
  "unicode-width",
 ]
@@ -1569,3 +1626,14 @@ name = "xml-rs"
 version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d2d7d3948613f75c98fd9328cfdcc45acc4d360655289d0a7d4ec931392200a3"
+
+[[package]]
+name = "xterm-query"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec02abe9c7efbcb010adc0d90bc4a054653477cd4a3eb8eef5a689799c146a13"
+dependencies = [
+ "mio",
+ "nix 0.22.3",
+ "thiserror",
+]

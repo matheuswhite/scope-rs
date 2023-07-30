@@ -18,3 +18,4 @@ btleplug = { version = "0.10", features = ["serde"] }
 uuid = "1.2.2"
 tokio = { version = "1", features = ["full"] }
 futures = "0.3.27"
+terminal-light = "1.1.1"

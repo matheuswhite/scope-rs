@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
-use tui::style::Color;
 
 pub struct LoopBackIF {
     if_tx: Sender<DataIn>,
@@ -39,17 +38,6 @@ impl Interface for LoopBackIF {
     fn description(&self) -> String {
         format!("LoopBack {}ms", self.send_interval.as_millis())
     }
-
-    fn color(&self) -> Color {
-        Color::LightGreen
-    }
-    fn set_port(&mut self, _port: String) {
-
-        todo!()
-    }
-    fn set_baudrate(&mut self, _baudarate: u32) {
-        todo!()
-    }
 }
 
 impl LoopBackIF {
@@ -58,9 +46,9 @@ impl LoopBackIF {
     const UPDATE_CONNECTION_INTERVAL: Duration = Duration::from_secs(2);
 
     pub fn new<F>(data_to_send: F, send_interval: Duration) -> Self
-        where
-            F: Fn() -> String,
-            F: Send + Clone + 'static,
+    where
+        F: Fn() -> String,
+        F: Send + Clone + 'static,
     {
         let (if_tx, if_rx) = channel();
         let (data_tx, data_rx) = channel();
@@ -149,7 +137,40 @@ impl LoopBackIF {
                                 .expect("Cannot send command fail");
                         }
                     }
-                    DataIn::HexString(_) => todo!(),
+                    DataIn::HexString(data) => {
+                        if is_connected.load(Ordering::SeqCst) {
+                            data_tx
+                                .send(DataOut::ConfirmHexString(Local::now(), data))
+                                .expect("Cannot send hex confirm")
+                        } else {
+                            data_tx
+                                .send(DataOut::FailHexString(Local::now(), data))
+                                .expect("Cannot send hex fail")
+                        }
+                    }
+                    DataIn::File(idx, total, filename, content) => {
+                        if is_connected.load(Ordering::SeqCst) {
+                            data_tx
+                                .send(DataOut::ConfirmFile(
+                                    Local::now(),
+                                    idx,
+                                    total,
+                                    filename,
+                                    content,
+                                ))
+                                .expect("Cannot send file confirm");
+                        } else {
+                            data_tx
+                                .send(DataOut::FailFile(
+                                    Local::now(),
+                                    idx,
+                                    total,
+                                    filename,
+                                    content,
+                                ))
+                                .expect("Cannot send file fail");
+                        }
+                    }
                 }
             };
         }

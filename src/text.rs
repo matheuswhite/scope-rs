@@ -1,7 +1,6 @@
 use crate::interface::DataOut;
-use crate::view::View;
+use crate::theme::Theme;
 use chrono::{DateTime, Local};
-use std::fmt::Write;
 use std::marker::PhantomData;
 use tui::backend::Backend;
 use tui::layout::Rect;
@@ -17,10 +16,11 @@ pub struct TextView<'a, B: Backend> {
     auto_scroll: bool,
     scroll: (u16, u16),
     frame_height: u16,
+    theme: Theme,
 }
 
 impl<'a, B: Backend> TextView<'a, B> {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, theme: Theme) -> Self {
         Self {
             history: vec![],
             capacity,
@@ -28,6 +28,7 @@ impl<'a, B: Backend> TextView<'a, B> {
             auto_scroll: true,
             scroll: (0, 0),
             frame_height: u16::MAX,
+            theme,
         }
     }
 
@@ -41,71 +42,130 @@ impl<'a, B: Backend> TextView<'a, B> {
             0
         }
     }
-}
 
-impl<'a, B: Backend> View for TextView<'a, B> {
-    type Backend = B;
+    fn is_visible(x: char) -> bool {
+        0x20 <= x as u8 && x as u8 <= 0x7E
+    }
 
-    fn draw(&self, f: &mut Frame<Self::Backend>, rect: Rect) {
+    fn print_invisible(data: String) -> String {
+        data.chars()
+            .map(|x| match x {
+                x if TextView::<B>::is_visible(x) => x.to_string(),
+                '\0' => "\\0".to_string(),
+                '\n' => "\\n".to_string(),
+                '\r' => "\\r".to_string(),
+                _ => format!("\\x{:02x}", x as u8),
+            })
+            .collect::<Vec<String>>()
+            .join("")
+    }
+
+    fn highlight_invisible(&self, in_text: &str, color: Color) -> Vec<(String, Color)> {
+        #[derive(PartialEq)]
+        enum Mode {
+            Visible,
+            Invisible,
+        }
+
+        let highlight_color = if color == self.theme.magenta() {
+            self.theme.blue()
+        } else {
+            self.theme.magenta()
+        };
+        let mut output = vec![];
+        let mut text = "".to_string();
+        let mut highlight_text = "".to_string();
+        let mut mode = Mode::Visible;
+
+        for ch in in_text.chars() {
+            if TextView::<B>::is_visible(ch) {
+                text.push(ch);
+                if mode == Mode::Invisible {
+                    output.push((
+                        TextView::<B>::print_invisible(highlight_text.clone()),
+                        highlight_color,
+                    ));
+                    highlight_text.clear();
+                }
+                mode = Mode::Visible;
+            } else {
+                highlight_text.push(ch);
+                if mode == Mode::Visible {
+                    output.push((text.clone(), color));
+                    text.clear();
+                }
+                mode = Mode::Invisible;
+            }
+        }
+
+        if !text.is_empty() {
+            output.push((text.clone(), color));
+        } else if !highlight_text.is_empty() {
+            output.push((
+                TextView::<B>::print_invisible(highlight_text.clone()),
+                highlight_color,
+            ));
+        }
+
+        output
+    }
+
+    pub fn draw(&self, f: &mut Frame<B>, rect: Rect) {
         let scroll = if self.auto_scroll {
             (self.max_main_axis(), self.scroll.1)
         } else {
             self.scroll
         };
 
-        let (coll, title, max, coll_size) = (
+        let (coll, max, coll_size) = (
             &self.history[(scroll.0 as usize)..],
-            "Normal",
             "".to_string(),
             self.history.len(),
         );
 
         let block = if self.auto_scroll {
             Block::default()
-                .title(format!("[{:03}{}] Text UTF-8 <{}>", coll_size, max, title))
+                .title(format!("[{:03}{}] Text UTF-8", coll_size, max))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Thick)
-                .border_style(Style::default().fg(Color::White))
+                .border_style(Style::default().fg(Color::Reset))
         } else {
             Block::default()
-                .title(format!("[{:03}{}] Text UTF-8 <{}>", coll_size, max, title))
+                .title(format!("[{:03}{}] Text UTF-8", coll_size, max))
                 .borders(Borders::ALL)
                 .border_type(BorderType::Double)
                 .border_style(
                     Style::default()
-                        .fg(Color::White)
+                        .fg(Color::Reset)
                         .add_modifier(Modifier::RAPID_BLINK),
                 )
         };
 
-        let text = coll
-            .iter()
-            .map(|x| {
-                let scroll = scroll.1 as usize;
-                let content = if scroll >= x.data.len() {
-                    ""
-                } else {
-                    &x.data[scroll..]
-                };
+        let text =
+            coll.iter()
+                .map(|x| {
+                    let scroll = scroll.1 as usize;
+                    let content = if scroll >= x.data.len() {
+                        ""
+                    } else {
+                        &x.data[scroll..]
+                    };
 
-                Spans::from(vec![
-                    x.timestamp.clone(),
-                    Span::styled(
-                        format!(
-                            "{}{} ",
-                            if x.bg != Color::Reset { " " } else { "" },
-                            content
-                        ),
-                        Style::default().bg(x.bg).fg(x.fg),
-                    ),
-                ])
-            })
-            .collect::<Vec<_>>();
+                    let texts_colors = self.highlight_invisible(content, x.fg);
+                    let mut content = vec![x.timestamp.clone()];
+
+                    content.extend(texts_colors.into_iter().map(|(text, color)| {
+                        Span::styled(text, Style::default().bg(x.bg).fg(color))
+                    }));
+
+                    Spans::from(content)
+                })
+                .collect::<Vec<_>>();
         let paragraph = Paragraph::new(text).block(block);
         f.render_widget(paragraph, rect);
     }
 
-    fn add_data_out(&mut self, data: DataOut) {
+    pub fn add_data_out(&mut self, data: DataOut) {
         if self.history.len() >= self.capacity {
             self.history.remove(0);
         }
@@ -115,37 +175,43 @@ impl<'a, B: Backend> View for TextView<'a, B> {
                 let contents = ViewData::decode_ansi_color(&data);
                 for (content, color) in contents {
                     self.history
-                        .push(ViewData::if_data(timestamp, content, color));
+                        .push(ViewData::if_data(timestamp, content, color, self.theme));
                 }
             }
-            DataOut::ConfirmData(timestamp, data) => {
-                self.history.push(ViewData::user_data(timestamp, data))
-            }
-            DataOut::ConfirmCommand(timestamp, cmd_name, data) => self
+            DataOut::ConfirmData(timestamp, data) => self
                 .history
-                .push(ViewData::user_command(timestamp, cmd_name, data)),
+                .push(ViewData::user_data(timestamp, data, self.theme)),
+            DataOut::ConfirmCommand(timestamp, cmd_name, data) => self.history.push(
+                ViewData::user_command(timestamp, cmd_name, data, self.theme),
+            ),
             DataOut::ConfirmHexString(timestamp, bytes) => self
                 .history
-                .push(ViewData::user_hex_string(timestamp, bytes)),
-            DataOut::FailData(timestamp, data) => {
-                self.history.push(ViewData::fail_data(timestamp, data))
-            }
+                .push(ViewData::user_hex_string(timestamp, bytes, self.theme)),
+            DataOut::FailData(timestamp, data) => self
+                .history
+                .push(ViewData::fail_data(timestamp, data, self.theme)),
             DataOut::FailCommand(timestamp, cmd_name, _data) => self
                 .history
-                .push(ViewData::fail_command(timestamp, cmd_name)),
+                .push(ViewData::fail_command(timestamp, cmd_name, self.theme)),
             DataOut::FailHexString(timestamp, bytes) => self
                 .history
-                .push(ViewData::fail_hex_string(timestamp, bytes)),
+                .push(ViewData::fail_hex_string(timestamp, bytes, self.theme)),
+            DataOut::ConfirmFile(timestamp, idx, total, filename, content) => self.history.push(
+                ViewData::user_file(timestamp, idx, total, filename, content, self.theme),
+            ),
+            DataOut::FailFile(timestamp, idx, total, filename, content) => self.history.push(
+                ViewData::fail_file(timestamp, idx, total, filename, content, self.theme),
+            ),
         };
     }
 
-    fn clear(&mut self) {
+    pub fn clear(&mut self) {
         self.scroll = (0, 0);
         self.auto_scroll = true;
         self.history.clear();
     }
 
-    fn up_scroll(&mut self) {
+    pub fn up_scroll(&mut self) {
         if self.max_main_axis() > 0 {
             self.auto_scroll = false;
         }
@@ -157,7 +223,7 @@ impl<'a, B: Backend> View for TextView<'a, B> {
         }
     }
 
-    fn down_scroll(&mut self) {
+    pub fn down_scroll(&mut self) {
         let max_main_axis = self.max_main_axis();
 
         self.scroll.0 += 3;
@@ -168,7 +234,7 @@ impl<'a, B: Backend> View for TextView<'a, B> {
         }
     }
 
-    fn left_scroll(&mut self) {
+    pub fn left_scroll(&mut self) {
         if self.scroll.1 < 3 {
             self.scroll.1 = 0;
         } else {
@@ -176,15 +242,15 @@ impl<'a, B: Backend> View for TextView<'a, B> {
         }
     }
 
-    fn right_scroll(&mut self) {
+    pub fn right_scroll(&mut self) {
         self.scroll.1 += 3;
     }
 
-    fn set_frame_height(&mut self, frame_height: u16) {
+    pub fn set_frame_height(&mut self, frame_height: u16) {
         self.frame_height = frame_height;
     }
 
-    fn update_scroll(&mut self) {
+    pub fn update_scroll(&mut self) {
         self.scroll = if self.auto_scroll {
             (self.max_main_axis(), self.scroll.1)
         } else {
@@ -211,7 +277,7 @@ impl<'a> ViewData<'a> {
         let mut res = vec![];
 
         let pattern_n_color = [
-            ("0m", Color::White),
+            ("0m", Color::Reset),
             ("30m", Color::Black),
             ("0;30m", Color::Black),
             ("31m", Color::Red),
@@ -253,102 +319,131 @@ impl<'a> ViewData<'a> {
                 true
             }) && !splitted_str.starts_with("0m")
             {
-                res.push((splitted_str.to_string(), Color::White));
+                res.push((splitted_str.to_string(), Color::Reset));
             }
         }
 
         res
     }
 
-    fn bytes_to_hex_string(bytes: &[u8]) -> String {
-        let mut hex_string = String::new();
-
-        for byte in bytes {
-            write!(&mut hex_string, "{:02X}", byte).unwrap();
-        }
-
-        hex_string
-    }
-
-    fn build_timestmap_span(timestamp: DateTime<Local>, fg: Color, bg: Color) -> Span<'a> {
-        let tm_fg = if bg != Color::Reset { bg } else { fg };
-
+    fn build_timestamp_span(timestamp: DateTime<Local>, theme: Theme) -> Span<'a> {
         Span::styled(
-            format!("[{}] ", timestamp.format("%d/%m/%Y %H:%M:%S")),
-            Style::default().fg(tm_fg),
+            format!("{} ", timestamp.format("%H:%M:%S.%3f")),
+            Style::default().fg(theme.gray()),
         )
     }
 
-    fn if_data(timestamp: DateTime<Local>, content: String, color: Color) -> Self {
+    fn if_data(timestamp: DateTime<Local>, content: String, color: Color, theme: Theme) -> Self {
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, color, Color::Reset),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: color,
             bg: Color::Reset,
         }
     }
 
-    fn user_data(timestamp: DateTime<Local>, content: String) -> Self {
+    fn user_data(timestamp: DateTime<Local>, content: String, theme: Theme) -> Self {
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Black, Color::LightCyan),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
-            fg: Color::Black,
-            bg: Color::LightCyan,
+            fg: theme.primary(),
+            bg: theme.blue(),
         }
     }
 
-    fn user_command(timestamp: DateTime<Local>, cmd_name: String, content: String) -> Self {
+    fn user_command(
+        timestamp: DateTime<Local>,
+        cmd_name: String,
+        content: String,
+        theme: Theme,
+    ) -> Self {
         let content = format!("</{}> {}", cmd_name, content);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Black, Color::LightGreen),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
-            fg: Color::Black,
-            bg: Color::LightGreen,
+            fg: theme.primary(),
+            bg: theme.green(),
         }
     }
 
-    fn user_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>) -> Self {
-        let content = format!("<${}> {:?}", ViewData::bytes_to_hex_string(&bytes), &bytes);
+    fn user_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>, theme: Theme) -> Self {
+        let content = format!("{:02x?}", &bytes);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Black, Color::Yellow),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: Color::Black,
-            bg: Color::Yellow,
+            bg: theme.yellow(),
         }
     }
 
-    fn fail_data(timestamp: DateTime<Local>, content: String) -> Self {
+    fn user_file(
+        timestamp: DateTime<Local>,
+        idx: usize,
+        total: usize,
+        filename: String,
+        content: String,
+        theme: Theme,
+    ) -> Self {
+        let content = format!("{}[{}/{}]: <{}>", filename, idx, total, content);
+
+        Self {
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
+            data: content,
+            fg: Color::Black,
+            bg: theme.magenta(),
+        }
+    }
+
+    fn fail_data(timestamp: DateTime<Local>, content: String, theme: Theme) -> Self {
         let content = format!("Cannot send \"{}\"", content);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, Color::LightRed),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: Color::White,
-            bg: Color::LightRed,
+            bg: theme.red(),
         }
     }
 
-    fn fail_command(timestamp: DateTime<Local>, cmd_name: String) -> Self {
+    fn fail_command(timestamp: DateTime<Local>, cmd_name: String, theme: Theme) -> Self {
         let content = format!("Cannot send </{}>", cmd_name);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, Color::LightRed),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: Color::White,
-            bg: Color::LightRed,
+            bg: theme.red(),
         }
     }
 
-    fn fail_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>) -> Self {
-        let content = format!("Cannot send <${}>", ViewData::bytes_to_hex_string(&bytes));
+    fn fail_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>, theme: Theme) -> Self {
+        let content = format!("Cannot send {:02x?}", &bytes);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, Color::LightRed),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: Color::White,
-            bg: Color::LightRed,
+            bg: theme.red(),
+        }
+    }
+
+    fn fail_file(
+        timestamp: DateTime<Local>,
+        idx: usize,
+        total: usize,
+        filename: String,
+        content: String,
+        theme: Theme,
+    ) -> Self {
+        let content = format!("Cannot send {}[{}/{}]: <{}>", filename, idx, total, content);
+
+        Self {
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
+            data: content,
+            fg: Color::White,
+            bg: theme.red(),
         }
     }
 }

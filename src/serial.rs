@@ -7,7 +7,7 @@ use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::Duration;
 use std::{io, thread};
-use tui::style::Color;
+use tokio::time::Instant;
 
 pub struct SerialIF {
     serial_tx: Sender<DataIn>,
@@ -40,9 +40,6 @@ impl Interface for SerialIF {
         format!("Serial {}:{}bps", self.port, self.baudrate)
     }
 
-    fn color(&self) -> Color {
-        Color::Yellow
-    }
     fn set_port(&mut self, _port: String) {
         self.port = _port;
     }
@@ -116,6 +113,7 @@ impl SerialIF {
 
         let mut line = String::new();
         let mut buffer = [0u8];
+        let mut now = Instant::now();
 
         'task: loop {
             if let Ok(data_to_send) = serial_rx.try_recv() {
@@ -168,18 +166,44 @@ impl SerialIF {
                                 .expect("Cannot send hex string fail"),
                         }
                     }
+                    DataIn::File(idx, total, filename, content) => {
+                        match serial.write(format!("{content}\n").as_bytes()) {
+                            Ok(_) => {
+                                data_tx
+                                    .send(DataOut::ConfirmFile(
+                                        Local::now(),
+                                        idx,
+                                        total,
+                                        filename,
+                                        content,
+                                    ))
+                                    .expect("Cannot send file confirm");
+                            }
+                            Err(_) => {
+                                data_tx
+                                    .send(DataOut::FailFile(
+                                        Local::now(),
+                                        idx,
+                                        total,
+                                        filename,
+                                        content,
+                                    ))
+                                    .expect("Cannot send file fail");
+                            }
+                        }
+                    }
                 }
             }
 
             match serial.read(&mut buffer) {
                 Ok(_) => {
+                    line.push(buffer[0] as char);
                     if buffer[0] == b'\n' {
                         data_tx
                             .send(DataOut::Data(Local::now(), line.clone()))
                             .expect("Cannot forward message read from serial");
                         line.clear();
-                    } else {
-                        line.push(buffer[0] as char);
+                        now = Instant::now();
                     }
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {}
@@ -194,6 +218,17 @@ impl SerialIF {
                 }
                 Err(_e) => {
                     // eprint!("{:?}", e.kind())
+                }
+            }
+
+            if now.elapsed().as_millis() > 1_000 {
+                now = Instant::now();
+
+                if !line.is_empty() {
+                    data_tx
+                        .send(DataOut::Data(Local::now(), line.clone()))
+                        .expect("Cannot forward message read from serial");
+                    line.clear();
                 }
             }
         }

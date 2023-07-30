@@ -1,38 +1,46 @@
 use crate::command_bar::InputEvent::{HorizontalScroll, Key, VerticalScroll};
 use crate::error_pop_up::ErrorPopUp;
 use crate::interface::{DataIn, Interface};
-use crate::view::View;
+use crate::text::TextView;
+use crate::theme::Theme;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use rand::seq::SliceRandom;
 use std::cmp::{max, min};
 use std::collections::btree_map::BTreeMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::str::FromStr;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::thread;
+use std::thread::sleep;
+use std::time::Duration;
 use tui::backend::Backend;
 use tui::layout::{Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Style};
 use tui::text::{Span, Spans};
-use tui::widgets::{Block, Borders, Clear, Paragraph};
+use tui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use tui::Frame;
 
-pub struct CommandBar<B: Backend> {
+pub struct CommandBar<'a, B: Backend> {
     interface: Box<dyn Interface>,
-    view: usize,
-    views: Vec<Box<dyn View<Backend = B>>>,
+    text_view: TextView<'a, B>,
     command_line: String,
+    command_line_idx: usize,
     command_filepath: Option<PathBuf>,
     history: Vec<String>,
+    history_index: Option<usize>,
+    backup_command_line: String,
     error_pop_up: Option<ErrorPopUp<B>>,
     command_list: CommandList,
     key_receiver: Receiver<InputEvent>,
+    current_hint: Option<&'static str>,
+    hints: Vec<&'static str>,
+    theme: Theme,
 }
 
-impl<B: Backend + Send> CommandBar<B> {
+impl<'a, B: Backend + Send> CommandBar<'a, B> {
     const HEIGHT: u16 = 3;
 
     pub fn draw(&self, f: &mut Frame<B>) {
-        let view = self.views[self.view].as_ref();
-
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(
@@ -44,10 +52,10 @@ impl<B: Backend + Send> CommandBar<B> {
             )
             .split(f.size());
 
-        view.draw(f, chunks[0]);
+        self.text_view.draw(f, chunks[0]);
 
         let cursor_pos = (
-            chunks[1].x + self.command_line.chars().count() as u16 + 1,
+            chunks[1].x + self.command_line_idx as u16 + 2,
             chunks[1].y + 1,
         );
         let block = Block::default()
@@ -57,26 +65,33 @@ impl<B: Backend + Send> CommandBar<B> {
                 self.interface.description()
             ))
             .borders(Borders::ALL)
+            .border_type(BorderType::Thick)
             .border_style(Style::default().fg(if self.interface.is_connected() {
-                self.interface.color()
+                self.theme.green()
             } else {
-                Color::LightRed
+                self.theme.red()
             }));
-        let paragraph = Paragraph::new(Span::from(self.command_line.clone())).block(block);
+        let paragraph = Paragraph::new(Span::from({
+            " ".to_string()
+                + if let Some(hint) = self.current_hint {
+                    hint
+                } else {
+                    &self.command_line
+                }
+        }))
+        .style(Style::default().fg(if self.current_hint.is_some() {
+            self.theme.gray()
+        } else {
+            Color::Reset
+        }))
+        .block(block);
         f.render_widget(paragraph, chunks[1]);
         f.set_cursor(cursor_pos.0, cursor_pos.1);
 
-        self.command_list
-            .draw(f, chunks[1].y, self.interface.color());
+        self.command_list.draw(f, chunks[1].y, self.theme.green());
 
         if let Some(pop_up) = self.error_pop_up.as_ref() {
             pop_up.draw(f, chunks[1].y);
-        }
-    }
-
-    fn clear_views(&mut self) {
-        for view in self.views.iter_mut() {
-            view.clear();
         }
     }
 
@@ -136,25 +151,104 @@ impl<B: Backend + Send> CommandBar<B> {
         Ok(res)
     }
 
+    fn show_hint(&mut self) {
+        self.current_hint = Some(self.hints.choose(&mut rand::thread_rng()).unwrap());
+    }
+
+    fn clear_hint(&mut self) {
+        self.current_hint = None;
+    }
+
     fn handle_key_input(&mut self, key: KeyEvent, _term_size: Rect) -> Result<(), ()> {
         match key.code {
-            KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => self.clear_views(),
+            KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => self.text_view.clear(),
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.error_pop_up.take();
             }
             KeyCode::Char(c) => {
-                self.command_line.push(c);
+                self.clear_hint();
+                self.command_line.insert(self.command_line_idx, c);
+                self.command_line_idx += 1;
                 self.update_command_list();
+                self.history_index = None;
             }
             KeyCode::Backspace => {
+                if self.command_line.len() == 1 {
+                    self.show_hint();
+                }
                 self.command_line.pop();
+                self.update_command_list();
+                if self.command_line_idx > 0 {
+                    self.command_line_idx -= 1;
+                }
+            }
+            KeyCode::Right => {
+                if self.command_line_idx == self.command_line.len() {
+                    return Ok(());
+                }
+
+                self.command_line_idx += 1;
+            }
+            KeyCode::Left => {
+                if self.command_line_idx == 0 {
+                    return Ok(());
+                }
+
+                self.command_line_idx -= 1;
+            }
+            KeyCode::Up => {
+                if self.history.is_empty() {
+                    return Ok(());
+                }
+
+                match &mut self.history_index {
+                    None => {
+                        self.history_index = Some(self.history.len() - 1);
+                        self.backup_command_line = self.command_line.clone();
+                    }
+                    Some(0) => {}
+                    Some(idx) => {
+                        *idx -= 1;
+                    }
+                }
+
+                self.clear_hint();
+                self.command_line = self.history[self.history_index.unwrap()].clone();
+                self.command_line_idx = self.command_line.len();
+                self.update_command_list();
+            }
+            KeyCode::Down => {
+                if self.history.is_empty() {
+                    return Ok(());
+                }
+
+                match &mut self.history_index {
+                    None => {}
+                    Some(idx) if *idx == (self.history.len() - 1) => {
+                        self.history_index = None;
+                        self.command_line = self.backup_command_line.clone();
+                        if self.command_line.is_empty() {
+                            self.show_hint();
+                        }
+                    }
+                    Some(idx) => {
+                        *idx += 1;
+                        self.command_line = self.history[*idx].clone();
+                    }
+                }
+
+                self.command_line_idx = self.command_line.len();
                 self.update_command_list();
             }
             KeyCode::Esc => return Err(()),
             KeyCode::Enter if !self.command_line.is_empty() => {
                 let command_line = self.command_line.clone();
+                self.show_hint();
+                self.history.push(self.command_line.clone());
                 self.command_line.clear();
                 self.command_list.clear();
+                self.history_index = None;
+                self.command_line_idx = 0;
 
                 match command_line.chars().next().unwrap() {
                     '/' => {
@@ -186,13 +280,28 @@ impl<B: Backend + Send> CommandBar<B> {
                             .split_whitespace()
                             .collect::<Vec<_>>();
                         match command_line_split[0].to_lowercase().as_ref() {
-                            "clear" | "clean" => self.clear_views(),
+                            "clear" | "clean" => self.text_view.clear(),
                             "port" => {
                                 self.interface.set_port(command_line_split[1].to_string());
                             }
                             "baudrate" => {
                                 self.interface
                                     .set_baudrate(command_line_split[1].parse::<u32>().unwrap());
+                            }
+                            "send_file" => {
+                                let delay = command_line_split
+                                    .get(2)
+                                    .and_then(|delay| u64::from_str(delay).ok())
+                                    .map(Duration::from_millis);
+
+                                if command_line_split.len() < 2 {
+                                    self.set_error_pop_up(
+                                        "The !send_file needs a filename".to_string(),
+                                    );
+                                    return Ok(());
+                                }
+
+                                self.send_file(command_line_split[1], delay);
                             }
                             _ => {
                                 self.set_error_pop_up(format!(
@@ -203,7 +312,11 @@ impl<B: Backend + Send> CommandBar<B> {
                         }
                     }
                     '$' => {
-                        let command_line = command_line.strip_prefix('$').unwrap().to_uppercase();
+                        let command_line = command_line
+                            .strip_prefix('$')
+                            .unwrap()
+                            .replace([',', ' '], "")
+                            .to_uppercase();
 
                         let Ok(bytes) = CommandBar::<B>::hex_string_to_bytes(&command_line) else {
                             self.set_error_pop_up(format!("Invalid hex string: {}", command_line));
@@ -219,13 +332,6 @@ impl<B: Backend + Send> CommandBar<B> {
 
                 self.error_pop_up.take();
             }
-            KeyCode::Tab if key.modifiers == KeyModifiers::SHIFT => {
-                if self.view == self.views.len() - 1 {
-                    self.view = 0;
-                } else {
-                    self.view += 1;
-                }
-            }
             _ => {}
         }
 
@@ -234,9 +340,8 @@ impl<B: Backend + Send> CommandBar<B> {
 
     pub fn update(&mut self, term_size: Rect) -> Result<(), ()> {
         {
-            let view = &mut self.views[self.view];
-            view.set_frame_height(term_size.height);
-            view.update_scroll();
+            self.text_view.set_frame_height(term_size.height);
+            self.text_view.update_scroll();
         }
 
         if let Some(error_pop_up) = self.error_pop_up.as_ref() {
@@ -246,9 +351,7 @@ impl<B: Backend + Send> CommandBar<B> {
         }
 
         if let Ok(data_out) = self.interface.try_recv() {
-            for view in self.views.iter_mut() {
-                view.add_data_out(data_out.clone());
-            }
+            self.text_view.add_data_out(data_out);
         }
 
         let Ok(input_evt) = self.key_receiver.try_recv() else {
@@ -258,21 +361,17 @@ impl<B: Backend + Send> CommandBar<B> {
         match input_evt {
             Key(key) => return self.handle_key_input(key, term_size),
             VerticalScroll(direction) => {
-                let view = &mut self.views[self.view];
-
                 if direction < 0 {
-                    view.up_scroll();
+                    self.text_view.up_scroll();
                 } else {
-                    view.down_scroll();
+                    self.text_view.down_scroll();
                 }
             }
             HorizontalScroll(direction) => {
-                let view = &mut self.views[self.view];
-
                 if direction < 0 {
-                    view.left_scroll();
+                    self.text_view.left_scroll();
                 } else {
-                    view.right_scroll();
+                    self.text_view.right_scroll();
                 }
             }
         }
@@ -298,26 +397,68 @@ impl<B: Backend + Send> CommandBar<B> {
 
         commands
     }
+
+    fn load_file(&mut self, filepath: &Path) -> Result<String, ()> {
+        let Ok(file_read) = std::fs::read(filepath) else {
+            self.set_error_pop_up(format!("Cannot find {:?} filepath", filepath));
+            return Err(());
+        };
+
+        let Ok(file_str) = std::str::from_utf8(file_read.as_slice()) else {
+            self.set_error_pop_up(format!("The file {:?} has non UTF-8 characters", filepath));
+            return Err(());
+        };
+
+        Ok(file_str.to_string())
+    }
+
+    fn send_file(&mut self, filepath: &str, delay: Option<Duration>) {
+        if let Ok(str_send) = self.load_file(Path::new(filepath)) {
+            let str_send_splitted = str_send.split('\n');
+            let total = str_send_splitted.clone().collect::<Vec<_>>().len();
+            for (i, str_split) in str_send_splitted.enumerate() {
+                self.interface.send(DataIn::File(
+                    i,
+                    total,
+                    filepath.to_string(),
+                    str_split.to_string(),
+                ));
+
+                if let Some(delay) = delay {
+                    sleep(delay);
+                }
+            }
+        }
+    }
 }
 
-impl<B: Backend> CommandBar<B> {
-    pub fn new(interface: Box<dyn Interface>, views: Vec<Box<dyn View<Backend = B>>>) -> Self {
-        assert!(!views.is_empty(), "Views cannot be empty");
-
+impl<'a, B: Backend> CommandBar<'a, B> {
+    pub fn new(interface: Box<dyn Interface>, view_capacity: usize, theme: Theme) -> Self {
         let (key_sender, key_receiver) = channel();
 
         thread::spawn(move || CommandBar::<B>::task(key_sender));
 
+        let hints = vec![
+            "Type / to send a command",
+            "Type $ to start a hex sequence",
+            "Type here and hit <Enter> to send",
+        ];
+
         Self {
             interface,
-            view: 0,
-            views,
+            text_view: TextView::new(view_capacity, theme),
             command_line: String::new(),
+            command_line_idx: 0,
             history: vec![],
+            history_index: None,
+            backup_command_line: String::new(),
             key_receiver,
             error_pop_up: None,
             command_filepath: None,
-            command_list: CommandList::new(),
+            command_list: CommandList::new(theme),
+            hints: hints.clone(),
+            current_hint: Some(hints.choose(&mut rand::thread_rng()).unwrap()),
+            theme,
         }
     }
 
@@ -357,13 +498,15 @@ enum InputEvent {
 struct CommandList {
     commands: Vec<String>,
     pattern: String,
+    theme: Theme,
 }
 
 impl CommandList {
-    pub fn new() -> Self {
+    pub fn new(theme: Theme) -> Self {
         Self {
             commands: vec![],
             pattern: String::new(),
+            theme,
         }
     }
 
@@ -400,6 +543,7 @@ impl CommandList {
         );
         let block = Block::default()
             .borders(Borders::ALL)
+            .border_type(BorderType::Thick)
             .style(Style::default().fg(color));
         let text = commands
             .iter()
@@ -414,7 +558,7 @@ impl CommandList {
                     ),
                     Span::styled(
                         x[self.pattern.len() - 1..].to_string(),
-                        Style::default().fg(Color::White),
+                        Style::default().fg(self.theme.gray()),
                     ),
                 ])
             })
