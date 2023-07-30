@@ -294,6 +294,13 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                                     .and_then(|delay| u64::from_str(delay).ok())
                                     .map(Duration::from_millis);
 
+                                if command_line_split.len() < 2 {
+                                    self.set_error_pop_up(
+                                        "The !send_file needs a filename".to_string(),
+                                    );
+                                    return Ok(());
+                                }
+
                                 self.send_file(command_line_split[1], delay);
                             }
                             _ => {
@@ -407,9 +414,15 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
 
     fn send_file(&mut self, filepath: &str, delay: Option<Duration>) {
         if let Ok(str_send) = self.load_file(Path::new(filepath)) {
-            for str_split in str_send.split('\n') {
-                self.interface
-                    .send(DataIn::Command(filepath.to_string(), str_split.to_string()));
+            let str_send_splitted = str_send.split('\n');
+            let total = str_send_splitted.clone().collect::<Vec<_>>().len();
+            for (i, str_split) in str_send_splitted.enumerate() {
+                self.interface.send(DataIn::File(
+                    i,
+                    total,
+                    filepath.to_string(),
+                    str_split.to_string(),
+                ));
 
                 if let Some(delay) = delay {
                     sleep(delay);

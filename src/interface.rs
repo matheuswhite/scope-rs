@@ -6,6 +6,7 @@ pub enum DataIn {
     Data(String),
     Command(String, String),
     HexString(Vec<u8>),
+    File(usize, usize, String, String),
 }
 
 #[derive(Clone)]
@@ -14,9 +15,11 @@ pub enum DataOut {
     ConfirmData(DateTime<Local>, String),
     ConfirmCommand(DateTime<Local>, String, String),
     ConfirmHexString(DateTime<Local>, Vec<u8>),
+    ConfirmFile(DateTime<Local>, usize, usize, String, String),
     FailData(DateTime<Local>, String),
     FailCommand(DateTime<Local>, String, String),
     FailHexString(DateTime<Local>, Vec<u8>),
+    FailFile(DateTime<Local>, usize, usize, String, String),
 }
 
 #[allow(drop_bounds)]

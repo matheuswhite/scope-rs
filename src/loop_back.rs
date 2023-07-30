@@ -148,6 +148,29 @@ impl LoopBackIF {
                                 .expect("Cannot send hex fail")
                         }
                     }
+                    DataIn::File(idx, total, filename, content) => {
+                        if is_connected.load(Ordering::SeqCst) {
+                            data_tx
+                                .send(DataOut::ConfirmFile(
+                                    Local::now(),
+                                    idx,
+                                    total,
+                                    filename,
+                                    content,
+                                ))
+                                .expect("Cannot send file confirm");
+                        } else {
+                            data_tx
+                                .send(DataOut::FailFile(
+                                    Local::now(),
+                                    idx,
+                                    total,
+                                    filename,
+                                    content,
+                                ))
+                                .expect("Cannot send file fail");
+                        }
+                    }
                 }
             };
         }

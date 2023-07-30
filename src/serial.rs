@@ -166,6 +166,32 @@ impl SerialIF {
                                 .expect("Cannot send hex string fail"),
                         }
                     }
+                    DataIn::File(idx, total, filename, content) => {
+                        match serial.write(format!("{content}\n").as_bytes()) {
+                            Ok(_) => {
+                                data_tx
+                                    .send(DataOut::ConfirmFile(
+                                        Local::now(),
+                                        idx,
+                                        total,
+                                        filename,
+                                        content,
+                                    ))
+                                    .expect("Cannot send file confirm");
+                            }
+                            Err(_) => {
+                                data_tx
+                                    .send(DataOut::FailFile(
+                                        Local::now(),
+                                        idx,
+                                        total,
+                                        filename,
+                                        content,
+                                    ))
+                                    .expect("Cannot send file fail");
+                            }
+                        }
+                    }
                 }
             }
 

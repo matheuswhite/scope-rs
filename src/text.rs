@@ -196,6 +196,12 @@ impl<'a, B: Backend> TextView<'a, B> {
             DataOut::FailHexString(timestamp, bytes) => self
                 .history
                 .push(ViewData::fail_hex_string(timestamp, bytes, self.theme)),
+            DataOut::ConfirmFile(timestamp, idx, total, filename, content) => self.history.push(
+                ViewData::user_file(timestamp, idx, total, filename, content, self.theme),
+            ),
+            DataOut::FailFile(timestamp, idx, total, filename, content) => self.history.push(
+                ViewData::fail_file(timestamp, idx, total, filename, content, self.theme),
+            ),
         };
     }
 
@@ -372,6 +378,24 @@ impl<'a> ViewData<'a> {
         }
     }
 
+    fn user_file(
+        timestamp: DateTime<Local>,
+        idx: usize,
+        total: usize,
+        filename: String,
+        content: String,
+        theme: Theme,
+    ) -> Self {
+        let content = format!("{}[{}/{}]: <{}>", filename, idx, total, content);
+
+        Self {
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
+            data: content,
+            fg: Color::Black,
+            bg: theme.magenta(),
+        }
+    }
+
     fn fail_data(timestamp: DateTime<Local>, content: String, theme: Theme) -> Self {
         let content = format!("Cannot send \"{}\"", content);
 
@@ -396,6 +420,24 @@ impl<'a> ViewData<'a> {
 
     fn fail_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>, theme: Theme) -> Self {
         let content = format!("Cannot send {:02x?}", &bytes);
+
+        Self {
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
+            data: content,
+            fg: Color::White,
+            bg: theme.red(),
+        }
+    }
+
+    fn fail_file(
+        timestamp: DateTime<Local>,
+        idx: usize,
+        total: usize,
+        filename: String,
+        content: String,
+        theme: Theme,
+    ) -> Self {
+        let content = format!("Cannot send {}[{}/{}]: <{}>", filename, idx, total, content);
 
         Self {
             timestamp: ViewData::build_timestamp_span(timestamp, theme),
