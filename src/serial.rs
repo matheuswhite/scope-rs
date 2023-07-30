@@ -203,6 +203,7 @@ impl SerialIF {
                             .send(DataOut::Data(Local::now(), line.clone()))
                             .expect("Cannot forward message read from serial");
                         line.clear();
+                        now = Instant::now();
                     }
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {}
