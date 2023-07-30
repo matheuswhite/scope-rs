@@ -175,7 +175,7 @@ impl<'a, B: Backend> TextView<'a, B> {
                 let contents = ViewData::decode_ansi_color(&data);
                 for (content, color) in contents {
                     self.history
-                        .push(ViewData::if_data(timestamp, content, color));
+                        .push(ViewData::if_data(timestamp, content, color, self.theme));
                 }
             }
             DataOut::ConfirmData(timestamp, data) => self
@@ -320,18 +320,16 @@ impl<'a> ViewData<'a> {
         res
     }
 
-    fn build_timestmap_span(timestamp: DateTime<Local>, fg: Color, bg: Color) -> Span<'a> {
-        let tm_fg = if bg != Color::Reset { bg } else { fg };
-
+    fn build_timestamp_span(timestamp: DateTime<Local>, theme: Theme) -> Span<'a> {
         Span::styled(
-            format!("[{}] ", timestamp.format("%d/%m/%Y %H:%M:%S")),
-            Style::default().fg(tm_fg),
+            format!("{} ", timestamp.format("%H:%M:%S.%3f")),
+            Style::default().fg(theme.gray()),
         )
     }
 
-    fn if_data(timestamp: DateTime<Local>, content: String, color: Color) -> Self {
+    fn if_data(timestamp: DateTime<Local>, content: String, color: Color, theme: Theme) -> Self {
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, color, Color::Reset),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: color,
             bg: Color::Reset,
@@ -340,7 +338,7 @@ impl<'a> ViewData<'a> {
 
     fn user_data(timestamp: DateTime<Local>, content: String, theme: Theme) -> Self {
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, theme.blue()),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: theme.primary(),
             bg: theme.blue(),
@@ -356,7 +354,7 @@ impl<'a> ViewData<'a> {
         let content = format!("</{}> {}", cmd_name, content);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, theme.green()),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: theme.primary(),
             bg: theme.green(),
@@ -367,7 +365,7 @@ impl<'a> ViewData<'a> {
         let content = format!("{:02x?}", &bytes);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::Reset, theme.yellow()),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: Color::Black,
             bg: theme.yellow(),
@@ -378,7 +376,7 @@ impl<'a> ViewData<'a> {
         let content = format!("Cannot send \"{}\"", content);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, theme.red()),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: Color::White,
             bg: theme.red(),
@@ -389,7 +387,7 @@ impl<'a> ViewData<'a> {
         let content = format!("Cannot send </{}>", cmd_name);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, theme.red()),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: Color::White,
             bg: theme.red(),
@@ -400,7 +398,7 @@ impl<'a> ViewData<'a> {
         let content = format!("Cannot send {:02x?}", &bytes);
 
         Self {
-            timestamp: ViewData::build_timestmap_span(timestamp, Color::White, theme.red()),
+            timestamp: ViewData::build_timestamp_span(timestamp, theme),
             data: content,
             fg: Color::White,
             bg: theme.red(),
