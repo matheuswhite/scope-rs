@@ -53,12 +53,4 @@ impl Theme {
             Color::Black
         }
     }
-
-    pub fn secondary(&self) -> Color {
-        if self.is_light {
-            Color::Black
-        } else {
-            Color::White
-        }
-    }
 }

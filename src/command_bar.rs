@@ -26,6 +26,8 @@ pub struct CommandBar<'a, B: Backend> {
     command_line: String,
     command_filepath: Option<PathBuf>,
     history: Vec<String>,
+    history_index: Option<usize>,
+    backup_command_line: String,
     error_pop_up: Option<ErrorPopUp<B>>,
     command_list: CommandList,
     key_receiver: Receiver<InputEvent>,
@@ -166,6 +168,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 self.clear_hint();
                 self.command_line.push(c);
                 self.update_command_list();
+                self.history_index = None;
             }
             KeyCode::Backspace => {
                 if self.command_line.len() == 1 {
@@ -174,12 +177,56 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 self.command_line.pop();
                 self.update_command_list();
             }
+            KeyCode::Up => {
+                if self.history.is_empty() {
+                    return Ok(());
+                }
+
+                match &mut self.history_index {
+                    None => {
+                        self.history_index = Some(self.history.len() - 1);
+                        self.backup_command_line = self.command_line.clone();
+                    }
+                    Some(0) => {}
+                    Some(idx) => {
+                        *idx -= 1;
+                    }
+                }
+
+                self.clear_hint();
+                self.command_line = self.history[self.history_index.unwrap()].clone();
+                self.update_command_list();
+            }
+            KeyCode::Down => {
+                if self.history.is_empty() {
+                    return Ok(());
+                }
+
+                match &mut self.history_index {
+                    None => {}
+                    Some(idx) if *idx == (self.history.len() - 1) => {
+                        self.history_index = None;
+                        self.command_line = self.backup_command_line.clone();
+                        if self.command_line.is_empty() {
+                            self.show_hint();
+                        }
+                    }
+                    Some(idx) => {
+                        *idx += 1;
+                        self.command_line = self.history[*idx].clone();
+                    }
+                }
+
+                self.update_command_list();
+            }
             KeyCode::Esc => return Err(()),
             KeyCode::Enter if !self.command_line.is_empty() => {
                 let command_line = self.command_line.clone();
                 self.show_hint();
+                self.history.push(self.command_line.clone());
                 self.command_line.clear();
                 self.command_list.clear();
+                self.history_index = None;
 
                 match command_line.chars().next().unwrap() {
                     '/' => {
@@ -368,6 +415,8 @@ impl<'a, B: Backend> CommandBar<'a, B> {
             text_view: TextView::new(view_capacity, theme),
             command_line: String::new(),
             history: vec![],
+            history_index: None,
+            backup_command_line: String::new(),
             key_receiver,
             error_pop_up: None,
             command_filepath: None,
