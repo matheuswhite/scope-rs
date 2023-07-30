@@ -24,6 +24,7 @@ pub struct CommandBar<'a, B: Backend> {
     interface: Box<dyn Interface>,
     text_view: TextView<'a, B>,
     command_line: String,
+    command_line_idx: usize,
     command_filepath: Option<PathBuf>,
     history: Vec<String>,
     history_index: Option<usize>,
@@ -54,7 +55,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         self.text_view.draw(f, chunks[0]);
 
         let cursor_pos = (
-            chunks[1].x + self.command_line.chars().count() as u16 + 2,
+            chunks[1].x + self.command_line_idx as u16 + 2,
             chunks[1].y + 1,
         );
         let block = Block::default()
@@ -166,7 +167,8 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
             }
             KeyCode::Char(c) => {
                 self.clear_hint();
-                self.command_line.push(c);
+                self.command_line.insert(self.command_line_idx, c);
+                self.command_line_idx += 1;
                 self.update_command_list();
                 self.history_index = None;
             }
@@ -176,6 +178,23 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 }
                 self.command_line.pop();
                 self.update_command_list();
+                if self.command_line_idx > 0 {
+                    self.command_line_idx -= 1;
+                }
+            }
+            KeyCode::Right => {
+                if self.command_line_idx == self.command_line.len() {
+                    return Ok(());
+                }
+
+                self.command_line_idx += 1;
+            }
+            KeyCode::Left => {
+                if self.command_line_idx == 0 {
+                    return Ok(());
+                }
+
+                self.command_line_idx -= 1;
             }
             KeyCode::Up => {
                 if self.history.is_empty() {
@@ -195,6 +214,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
 
                 self.clear_hint();
                 self.command_line = self.history[self.history_index.unwrap()].clone();
+                self.command_line_idx = self.command_line.len();
                 self.update_command_list();
             }
             KeyCode::Down => {
@@ -217,6 +237,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                     }
                 }
 
+                self.command_line_idx = self.command_line.len();
                 self.update_command_list();
             }
             KeyCode::Esc => return Err(()),
@@ -227,6 +248,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 self.command_line.clear();
                 self.command_list.clear();
                 self.history_index = None;
+                self.command_line_idx = 0;
 
                 match command_line.chars().next().unwrap() {
                     '/' => {
@@ -286,8 +308,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                         let command_line = command_line
                             .strip_prefix('$')
                             .unwrap()
-                            .replace(",", "")
-                            .replace(" ", "")
+                            .replace([',', ' '], "")
                             .to_uppercase();
 
                         let Ok(bytes) = CommandBar::<B>::hex_string_to_bytes(&command_line) else {
@@ -323,7 +344,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         }
 
         if let Ok(data_out) = self.interface.try_recv() {
-            self.text_view.add_data_out(data_out.clone());
+            self.text_view.add_data_out(data_out);
         }
 
         let Ok(input_evt) = self.key_receiver.try_recv() else {
@@ -414,6 +435,7 @@ impl<'a, B: Backend> CommandBar<'a, B> {
             interface,
             text_view: TextView::new(view_capacity, theme),
             command_line: String::new(),
+            command_line_idx: 0,
             history: vec![],
             history_index: None,
             backup_command_line: String::new(),
