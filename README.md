@@ -3,7 +3,7 @@
     <br><img src="logo_text.png" width="400">
 </p>
 <p align="center">
-    Focus in what matters
+    Focus on what matters
 </p>
 
 ### Send Data
