@@ -2,9 +2,6 @@
     <img src="scope_running.gif" width="500">
     <br><img src="logo_text.png" width="400">
 </p>
-<h3 align="center">
-    Terminal Serial Monitor
-</h3>
 <p align="center">
     Focus in what matters
 </p>
