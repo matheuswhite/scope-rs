@@ -19,7 +19,7 @@ pub struct SerialIF {
 
 impl Drop for SerialIF {
     fn drop(&mut self) {
-        self.serial_tx.send(DataIn::Exit).unwrap()
+        let _ = self.serial_tx.send(DataIn::Exit);
     }
 }
 
@@ -126,10 +126,13 @@ impl SerialIF {
                                     .send(DataOut::ConfirmData(Local::now(), data_to_send))
                                     .expect("Cannot send data confirm");
                             }
-                            Err(_) => {
+                            Err(err) => {
                                 data_tx
-                                    .send(DataOut::FailData(Local::now(), data_to_send))
-                                    .expect("Canot send data fail");
+                                    .send(DataOut::FailData(
+                                        Local::now(),
+                                        data_to_send + &err.to_string(),
+                                    ))
+                                    .expect("Cannot send data fail");
                             }
                         }
                     }
@@ -216,19 +219,17 @@ impl SerialIF {
                         is_connected.clone(),
                     );
                 }
-                Err(_e) => {
-                    // eprint!("{:?}", e.kind())
-                }
+                Err(_e) => {}
             }
 
             if now.elapsed().as_millis() > 1_000 {
                 now = Instant::now();
 
                 if !line.is_empty() {
-                    data_tx
-                        .send(DataOut::Data(Local::now(), line.clone()))
-                        .expect("Cannot forward message read from serial");
-                    line.clear();
+                    // data_tx
+                    //     .send(DataOut::Data(Local::now(), line.clone()))
+                    //     .expect("Cannot forward message read from serial");
+                    // line.clear();
                 }
             }
         }

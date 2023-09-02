@@ -240,7 +240,11 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 self.command_line_idx = self.command_line.len();
                 self.update_command_list();
             }
-            KeyCode::Esc => return Err(()),
+            KeyCode::Esc => {
+                self.interface.send(DataIn::Exit);
+                sleep(Duration::from_millis(100));
+                return Err(());
+            }
             KeyCode::Enter if !self.command_line.is_empty() => {
                 let command_line = self.command_line.clone();
                 self.show_hint();

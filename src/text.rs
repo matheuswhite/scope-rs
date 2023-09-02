@@ -110,6 +110,68 @@ impl<'a, B: Backend> TextView<'a, B> {
         output
     }
 
+    fn decode_ansi_color(&self, text: &str, color: Color) -> Vec<(String, Color)> {
+        if text.is_empty() {
+            return vec![];
+        }
+
+        let splitted = text.split("\x1B[").collect::<Vec<_>>();
+        let mut res = vec![];
+
+        let pattern_n_color = [
+            ("0m", Color::Reset),
+            ("30m", Color::Black),
+            ("0;30m", Color::Black),
+            ("31m", Color::Red),
+            ("0;31m", Color::Red),
+            ("32m", Color::Green),
+            ("0;32m", Color::Green),
+            ("33m", Color::Yellow),
+            ("0;33m", Color::Yellow),
+            ("34m", Color::Blue),
+            ("0;34m", Color::Blue),
+            ("35m", Color::Magenta),
+            ("0;35m", Color::Magenta),
+            ("36m", Color::Cyan),
+            ("0;36m", Color::Cyan),
+            ("37m", Color::Gray),
+            ("0;37m", Color::Gray),
+        ];
+
+        for splitted_str in splitted.iter() {
+            if splitted_str.is_empty() {
+                continue;
+            }
+
+            if pattern_n_color.iter().all(|(pattern, color)| {
+                if splitted_str.starts_with(pattern) {
+                    let final_str = splitted_str
+                        .to_string()
+                        .replace(pattern, "")
+                        .trim()
+                        .to_string();
+                    if final_str.is_empty() {
+                        return true;
+                    }
+
+                    res.push((final_str, *color));
+                    return false;
+                }
+
+                true
+            }) {
+                let fmt_splitted_str = if splitted_str.starts_with("0m") {
+                    splitted_str.replace("0m", "")
+                } else {
+                    splitted_str.to_string()
+                };
+                res.push((fmt_splitted_str, color));
+            }
+        }
+
+        res
+    }
+
     pub fn draw(&self, f: &mut Frame<B>, rect: Rect) {
         let scroll = if self.auto_scroll {
             (self.max_main_axis(), self.scroll.1)
@@ -151,7 +213,11 @@ impl<'a, B: Backend> TextView<'a, B> {
                         &x.data[scroll..]
                     };
 
-                    let texts_colors = self.highlight_invisible(content, x.fg);
+                    let texts_colors = self.decode_ansi_color(content, x.fg);
+                    let texts_colors = texts_colors
+                        .into_iter()
+                        .flat_map(|(text, color)| self.highlight_invisible(&text, color))
+                        .collect::<Vec<(String, Color)>>();
                     let mut content = vec![x.timestamp.clone()];
 
                     content.extend(texts_colors.into_iter().map(|(text, color)| {
@@ -172,11 +238,8 @@ impl<'a, B: Backend> TextView<'a, B> {
 
         match data {
             DataOut::Data(timestamp, data) => {
-                let contents = ViewData::decode_ansi_color(&data);
-                for (content, color) in contents {
-                    self.history
-                        .push(ViewData::if_data(timestamp, content, color, self.theme));
-                }
+                self.history
+                    .push(ViewData::if_data(timestamp, data, Color::Reset, self.theme));
             }
             DataOut::ConfirmData(timestamp, data) => self
                 .history
@@ -268,64 +331,6 @@ struct ViewData<'a> {
 }
 
 impl<'a> ViewData<'a> {
-    fn decode_ansi_color(text: &str) -> Vec<(String, Color)> {
-        if text.is_empty() {
-            return vec![];
-        }
-
-        let splitted = text.split("\x1B[").collect::<Vec<_>>();
-        let mut res = vec![];
-
-        let pattern_n_color = [
-            ("0m", Color::Reset),
-            ("30m", Color::Black),
-            ("0;30m", Color::Black),
-            ("31m", Color::Red),
-            ("0;31m", Color::Red),
-            ("32m", Color::Green),
-            ("0;32m", Color::Green),
-            ("33m", Color::Yellow),
-            ("0;33m", Color::Yellow),
-            ("34m", Color::Blue),
-            ("0;34m", Color::Blue),
-            ("35m", Color::Magenta),
-            ("0;35m", Color::Magenta),
-            ("36m", Color::Cyan),
-            ("0;36m", Color::Cyan),
-            ("37m", Color::Gray),
-            ("0;37m", Color::Gray),
-        ];
-
-        for splitted_str in splitted.iter() {
-            if splitted_str.is_empty() {
-                continue;
-            }
-
-            if pattern_n_color.iter().all(|(pattern, color)| {
-                if splitted_str.starts_with(pattern) {
-                    let final_str = splitted_str
-                        .to_string()
-                        .replace(pattern, "")
-                        .trim()
-                        .to_string();
-                    if final_str.is_empty() {
-                        return true;
-                    }
-
-                    res.push((final_str, *color));
-                    return false;
-                }
-
-                true
-            }) && !splitted_str.starts_with("0m")
-            {
-                res.push((splitted_str.to_string(), Color::Reset));
-            }
-        }
-
-        res
-    }
-
     fn build_timestamp_span(timestamp: DateTime<Local>, theme: Theme) -> Span<'a> {
         Span::styled(
             format!("{} ", timestamp.format("%H:%M:%S.%3f")),
