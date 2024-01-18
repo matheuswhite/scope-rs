@@ -49,6 +49,7 @@ enum InterfacesArgs {
     Serial { port: String, baudrate: u32 },
     Ble { name: String },
     Loopback {},
+    Version {},
 }
 
 const CMD_FILEPATH: &str = "cmds.yaml";
@@ -82,6 +83,10 @@ fn main() -> Result<(), io::Error> {
             loopback_graph_fn,
             Duration::from_millis(1000),
         )),
+        InterfacesArgs::Version {} => {
+            println!("Version 0.1.0");
+            return Ok(());
+        }
     };
 
     let view_length = cli.view_length.unwrap_or(CAPACITY);
