@@ -5,9 +5,8 @@ use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{io, thread};
-use tokio::time::Instant;
 
 pub struct SerialIF {
     serial_tx: Sender<DataIn>,
@@ -226,10 +225,10 @@ impl SerialIF {
                 now = Instant::now();
 
                 if !line.is_empty() {
-                    // data_tx
-                    //     .send(DataOut::Data(Local::now(), line.clone()))
-                    //     .expect("Cannot forward message read from serial");
-                    // line.clear();
+                    data_tx
+                        .send(DataOut::Data(Local::now(), line.clone()))
+                        .expect("Cannot forward message read from serial");
+                    line.clear();
                 }
             }
         }

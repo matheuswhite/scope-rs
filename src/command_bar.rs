@@ -274,8 +274,9 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                         }
 
                         let data_to_send = yaml_content.get(key).unwrap();
+                        let data_to_send = data_to_send.replace("\\r", "\r").replace("\\n", "\n");
                         self.interface
-                            .send(DataIn::Command(key.to_string(), data_to_send.to_string()));
+                            .send(DataIn::Command(key.to_string(), data_to_send));
                     }
                     '!' => {
                         let command_line_split = command_line

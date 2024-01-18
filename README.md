@@ -1,9 +1,5 @@
 <p align="center">
-    <img src="scope_running.gif" width="500">
-    <br><img src="logo_text.png" width="400">
-</p>
-<p align="center">
-    Focus on what matters
+    <br><img src="imgs/scope-logo.png" width="800">
 </p>
 
 ### Send Data
