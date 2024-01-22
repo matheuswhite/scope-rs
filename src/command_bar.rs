@@ -1,8 +1,8 @@
 use crate::command_bar::InputEvent::{HorizontalScroll, Key, VerticalScroll};
 use crate::error_pop_up::ErrorPopUp;
-use crate::interface::{DataIn, Interface};
+use crate::messages::UserTxData;
+use crate::serial::SerialIF;
 use crate::text::TextView;
-use crate::theme::Theme;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use rand::seq::SliceRandom;
 use std::cmp::{max, min};
@@ -21,7 +21,7 @@ use tui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use tui::Frame;
 
 pub struct CommandBar<'a, B: Backend> {
-    interface: Box<dyn Interface>,
+    interface: SerialIF,
     text_view: TextView<'a, B>,
     command_line: String,
     command_line_idx: usize,
@@ -34,7 +34,6 @@ pub struct CommandBar<'a, B: Backend> {
     key_receiver: Receiver<InputEvent>,
     current_hint: Option<&'static str>,
     hints: Vec<&'static str>,
-    theme: Theme,
 }
 
 impl<'a, B: Backend + Send> CommandBar<'a, B> {
@@ -67,9 +66,9 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
             .border_style(Style::default().fg(if self.interface.is_connected() {
-                self.theme.green()
+                Color::LightGreen
             } else {
-                self.theme.red()
+                Color::LightRed
             }));
         let paragraph = Paragraph::new(Span::from({
             " ".to_string()
@@ -80,7 +79,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 }
         }))
         .style(Style::default().fg(if self.current_hint.is_some() {
-            self.theme.gray()
+            Color::DarkGray
         } else {
             Color::Reset
         }))
@@ -88,7 +87,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         f.render_widget(paragraph, chunks[1]);
         f.set_cursor(cursor_pos.0, cursor_pos.1);
 
-        self.command_list.draw(f, chunks[1].y, self.theme.green());
+        self.command_list.draw(f, chunks[1].y, Color::LightGreen);
 
         if let Some(pop_up) = self.error_pop_up.as_ref() {
             pop_up.draw(f, chunks[1].y);
@@ -241,7 +240,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 self.update_command_list();
             }
             KeyCode::Esc => {
-                self.interface.send(DataIn::Exit);
+                self.interface.send(UserTxData::Exit);
                 sleep(Duration::from_millis(100));
                 return Err(());
             }
@@ -276,7 +275,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                         let data_to_send = yaml_content.get(key).unwrap();
                         let data_to_send = data_to_send.replace("\\r", "\r").replace("\\n", "\n");
                         self.interface
-                            .send(DataIn::Command(key.to_string(), data_to_send));
+                            .send(UserTxData::Command(key.to_string(), data_to_send));
                     }
                     '!' => {
                         let command_line_split = command_line
@@ -328,10 +327,10 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                             return Ok(());
                         };
 
-                        self.interface.send(DataIn::HexString(bytes));
+                        self.interface.send(UserTxData::HexString(bytes));
                     }
                     _ => {
-                        self.interface.send(DataIn::Data(command_line));
+                        self.interface.send(UserTxData::Data(command_line));
                     }
                 }
 
@@ -396,7 +395,10 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         };
 
         let Ok(commands) = serde_yaml::from_str(yaml_str) else {
-            self.set_error_pop_up(format!("The YAML from {:?} has an incorret format", filepath));
+            self.set_error_pop_up(format!(
+                "The YAML from {:?} has an incorret format",
+                filepath
+            ));
             return BTreeMap::new();
         };
 
@@ -422,7 +424,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
             let str_send_splitted = str_send.split('\n');
             let total = str_send_splitted.clone().collect::<Vec<_>>().len();
             for (i, str_split) in str_send_splitted.enumerate() {
-                self.interface.send(DataIn::File(
+                self.interface.send(UserTxData::File(
                     i,
                     total,
                     filepath.to_string(),
@@ -438,7 +440,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
 }
 
 impl<'a, B: Backend> CommandBar<'a, B> {
-    pub fn new(interface: Box<dyn Interface>, view_capacity: usize, theme: Theme) -> Self {
+    pub fn new(interface: SerialIF, view_capacity: usize) -> Self {
         let (key_sender, key_receiver) = channel();
 
         thread::spawn(move || CommandBar::<B>::task(key_sender));
@@ -451,7 +453,7 @@ impl<'a, B: Backend> CommandBar<'a, B> {
 
         Self {
             interface,
-            text_view: TextView::new(view_capacity, theme),
+            text_view: TextView::new(view_capacity),
             command_line: String::new(),
             command_line_idx: 0,
             history: vec![],
@@ -460,10 +462,9 @@ impl<'a, B: Backend> CommandBar<'a, B> {
             key_receiver,
             error_pop_up: None,
             command_filepath: None,
-            command_list: CommandList::new(theme),
+            command_list: CommandList::new(),
             hints: hints.clone(),
             current_hint: Some(hints.choose(&mut rand::thread_rng()).unwrap()),
-            theme,
         }
     }
 
@@ -503,15 +504,13 @@ enum InputEvent {
 struct CommandList {
     commands: Vec<String>,
     pattern: String,
-    theme: Theme,
 }
 
 impl CommandList {
-    pub fn new(theme: Theme) -> Self {
+    pub fn new() -> Self {
         Self {
             commands: vec![],
             pattern: String::new(),
-            theme,
         }
     }
 
@@ -563,7 +562,7 @@ impl CommandList {
                     ),
                     Span::styled(
                         x[self.pattern.len() - 1..].to_string(),
-                        Style::default().fg(self.theme.gray()),
+                        Style::default().fg(Color::DarkGray),
                     ),
                 ])
             })
