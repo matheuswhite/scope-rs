@@ -1,4 +1,4 @@
-use crate::interface::{DataIn, DataOut, Interface};
+use crate::messages::{SerialRxData, UserTxData};
 use chrono::Local;
 use serialport::SerialPort;
 use std::io::{Read, Write};
@@ -9,8 +9,8 @@ use std::time::{Duration, Instant};
 use std::{io, thread};
 
 pub struct SerialIF {
-    serial_tx: Sender<DataIn>,
-    data_rx: Receiver<DataOut>,
+    serial_tx: Sender<UserTxData>,
+    data_rx: Receiver<SerialRxData>,
     port: String,
     baudrate: u32,
     is_connected: Arc<AtomicBool>,
@@ -18,38 +18,36 @@ pub struct SerialIF {
 
 impl Drop for SerialIF {
     fn drop(&mut self) {
-        let _ = self.serial_tx.send(DataIn::Exit);
-    }
-}
-
-impl Interface for SerialIF {
-    fn is_connected(&self) -> bool {
-        self.is_connected.load(Ordering::SeqCst)
-    }
-
-    fn send(&self, data: DataIn) {
-        self.serial_tx.send(data).unwrap();
-    }
-
-    fn try_recv(&self) -> Result<DataOut, TryRecvError> {
-        self.data_rx.try_recv()
-    }
-
-    fn description(&self) -> String {
-        format!("Serial {}:{}bps", self.port, self.baudrate)
-    }
-
-    fn set_port(&mut self, _port: String) {
-        self.port = _port;
-    }
-    fn set_baudrate(&mut self, _baudrate: u32) {
-        self.baudrate = _baudrate;
+        let _ = self.serial_tx.send(UserTxData::Exit);
     }
 }
 
 impl SerialIF {
     const SERIAL_TIMEOUT: Duration = Duration::from_millis(10);
     const RECONNECT_INTERVAL: Duration = Duration::from_millis(200);
+
+    pub fn is_connected(&self) -> bool {
+        self.is_connected.load(Ordering::SeqCst)
+    }
+
+    pub fn send(&self, data: UserTxData) {
+        self.serial_tx.send(data).unwrap();
+    }
+
+    pub fn try_recv(&self) -> Result<SerialRxData, TryRecvError> {
+        self.data_rx.try_recv()
+    }
+
+    pub fn description(&self) -> String {
+        format!("Serial {}:{}bps", self.port, self.baudrate)
+    }
+
+    pub fn set_port(&mut self, _port: String) {
+        self.port = _port;
+    }
+    pub fn set_baudrate(&mut self, _baudrate: u32) {
+        self.baudrate = _baudrate;
+    }
 
     pub fn new(port: &str, baudrate: u32) -> Self {
         let (serial_tx, serial_rx) = channel();
@@ -99,8 +97,8 @@ impl SerialIF {
     fn send_task(
         port: &str,
         baudrate: u32,
-        serial_rx: Receiver<DataIn>,
-        data_tx: Sender<DataOut>,
+        serial_rx: Receiver<UserTxData>,
+        data_tx: Sender<SerialRxData>,
         is_connected: Arc<AtomicBool>,
     ) {
         let mut serial = SerialIF::reconnect(
@@ -117,17 +115,17 @@ impl SerialIF {
         'task: loop {
             if let Ok(data_to_send) = serial_rx.try_recv() {
                 match data_to_send {
-                    DataIn::Exit => break 'task,
-                    DataIn::Data(data_to_send) => {
+                    UserTxData::Exit => break 'task,
+                    UserTxData::Data(data_to_send) => {
                         match serial.write(format!("{data_to_send}\r\n").as_bytes()) {
                             Ok(_) => {
                                 data_tx
-                                    .send(DataOut::ConfirmData(Local::now(), data_to_send))
+                                    .send(SerialRxData::ConfirmData(Local::now(), data_to_send))
                                     .expect("Cannot send data confirm");
                             }
                             Err(err) => {
                                 data_tx
-                                    .send(DataOut::FailData(
+                                    .send(SerialRxData::FailData(
                                         Local::now(),
                                         data_to_send + &err.to_string(),
                                     ))
@@ -135,11 +133,11 @@ impl SerialIF {
                             }
                         }
                     }
-                    DataIn::Command(command_name, data_to_send) => {
+                    UserTxData::Command(command_name, data_to_send) => {
                         match serial.write(format!("{data_to_send}\r\n").as_bytes()) {
                             Ok(_) => {
                                 data_tx
-                                    .send(DataOut::ConfirmCommand(
+                                    .send(SerialRxData::ConfirmCommand(
                                         Local::now(),
                                         command_name,
                                         data_to_send,
@@ -148,7 +146,7 @@ impl SerialIF {
                             }
                             Err(_) => {
                                 data_tx
-                                    .send(DataOut::FailCommand(
+                                    .send(SerialRxData::FailCommand(
                                         Local::now(),
                                         command_name,
                                         data_to_send,
@@ -157,22 +155,22 @@ impl SerialIF {
                             }
                         }
                     }
-                    DataIn::HexString(bytes) => {
+                    UserTxData::HexString(bytes) => {
                         let content = [bytes.clone(), b"\r\n".to_vec()].concat();
                         match serial.write(&content) {
                             Ok(_) => data_tx
-                                .send(DataOut::ConfirmHexString(Local::now(), bytes))
+                                .send(SerialRxData::ConfirmHexString(Local::now(), bytes))
                                 .expect("Cannot send hex string comfirm"),
                             Err(_) => data_tx
-                                .send(DataOut::FailHexString(Local::now(), bytes))
+                                .send(SerialRxData::FailHexString(Local::now(), bytes))
                                 .expect("Cannot send hex string fail"),
                         }
                     }
-                    DataIn::File(idx, total, filename, content) => {
+                    UserTxData::File(idx, total, filename, content) => {
                         match serial.write(format!("{content}\n").as_bytes()) {
                             Ok(_) => {
                                 data_tx
-                                    .send(DataOut::ConfirmFile(
+                                    .send(SerialRxData::ConfirmFile(
                                         Local::now(),
                                         idx,
                                         total,
@@ -183,7 +181,7 @@ impl SerialIF {
                             }
                             Err(_) => {
                                 data_tx
-                                    .send(DataOut::FailFile(
+                                    .send(SerialRxData::FailFile(
                                         Local::now(),
                                         idx,
                                         total,
@@ -202,7 +200,7 @@ impl SerialIF {
                     line.push(buffer[0] as char);
                     if buffer[0] == b'\n' {
                         data_tx
-                            .send(DataOut::Data(Local::now(), line.clone()))
+                            .send(SerialRxData::Data(Local::now(), line.clone()))
                             .expect("Cannot forward message read from serial");
                         line.clear();
                         now = Instant::now();
@@ -226,7 +224,7 @@ impl SerialIF {
 
                 if !line.is_empty() {
                     data_tx
-                        .send(DataOut::Data(Local::now(), line.clone()))
+                        .send(SerialRxData::Data(Local::now(), line.clone()))
                         .expect("Cannot forward message read from serial");
                     line.clear();
                 }

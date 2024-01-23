@@ -1,5 +1,4 @@
-use crate::interface::DataOut;
-use crate::theme::Theme;
+use crate::messages::SerialRxData;
 use chrono::{DateTime, Local};
 use std::marker::PhantomData;
 use tui::backend::Backend;
@@ -16,11 +15,10 @@ pub struct TextView<'a, B: Backend> {
     auto_scroll: bool,
     scroll: (u16, u16),
     frame_height: u16,
-    theme: Theme,
 }
 
 impl<'a, B: Backend> TextView<'a, B> {
-    pub fn new(capacity: usize, theme: Theme) -> Self {
+    pub fn new(capacity: usize) -> Self {
         Self {
             history: vec![],
             capacity,
@@ -28,7 +26,6 @@ impl<'a, B: Backend> TextView<'a, B> {
             auto_scroll: true,
             scroll: (0, 0),
             frame_height: u16::MAX,
-            theme,
         }
     }
 
@@ -67,10 +64,10 @@ impl<'a, B: Backend> TextView<'a, B> {
             Invisible,
         }
 
-        let highlight_color = if color == self.theme.magenta() {
-            self.theme.blue()
+        let highlight_color = if color == Color::LightMagenta {
+            Color::LightCyan
         } else {
-            self.theme.magenta()
+            Color::LightMagenta
         };
         let mut output = vec![];
         let mut text = "".to_string();
@@ -231,41 +228,12 @@ impl<'a, B: Backend> TextView<'a, B> {
         f.render_widget(paragraph, rect);
     }
 
-    pub fn add_data_out(&mut self, data: DataOut) {
+    pub fn add_data_out(&mut self, data: SerialRxData) {
         if self.history.len() >= self.capacity {
             self.history.remove(0);
         }
 
-        match data {
-            DataOut::Data(timestamp, data) => {
-                self.history
-                    .push(ViewData::if_data(timestamp, data, Color::Reset, self.theme));
-            }
-            DataOut::ConfirmData(timestamp, data) => self
-                .history
-                .push(ViewData::user_data(timestamp, data, self.theme)),
-            DataOut::ConfirmCommand(timestamp, cmd_name, data) => self.history.push(
-                ViewData::user_command(timestamp, cmd_name, data, self.theme),
-            ),
-            DataOut::ConfirmHexString(timestamp, bytes) => self
-                .history
-                .push(ViewData::user_hex_string(timestamp, bytes, self.theme)),
-            DataOut::FailData(timestamp, data) => self
-                .history
-                .push(ViewData::fail_data(timestamp, data, self.theme)),
-            DataOut::FailCommand(timestamp, cmd_name, _data) => self
-                .history
-                .push(ViewData::fail_command(timestamp, cmd_name, self.theme)),
-            DataOut::FailHexString(timestamp, bytes) => self
-                .history
-                .push(ViewData::fail_hex_string(timestamp, bytes, self.theme)),
-            DataOut::ConfirmFile(timestamp, idx, total, filename, content) => self.history.push(
-                ViewData::user_file(timestamp, idx, total, filename, content, self.theme),
-            ),
-            DataOut::FailFile(timestamp, idx, total, filename, content) => self.history.push(
-                ViewData::fail_file(timestamp, idx, total, filename, content, self.theme),
-            ),
-        };
+        self.history.push(data.into());
     }
 
     pub fn clear(&mut self) {
@@ -323,7 +291,7 @@ impl<'a, B: Backend> TextView<'a, B> {
 }
 
 #[derive(Clone)]
-struct ViewData<'a> {
+pub struct ViewData<'a> {
     timestamp: Span<'a>,
     data: String,
     fg: Color,
@@ -331,124 +299,19 @@ struct ViewData<'a> {
 }
 
 impl<'a> ViewData<'a> {
-    fn build_timestamp_span(timestamp: DateTime<Local>, theme: Theme) -> Span<'a> {
+    pub fn new(timestamp: DateTime<Local>, data: String, fg: Color, bg: Color) -> Self {
+        Self {
+            timestamp: ViewData::build_timestamp_span(timestamp),
+            data,
+            fg,
+            bg,
+        }
+    }
+
+    fn build_timestamp_span(timestamp: DateTime<Local>) -> Span<'a> {
         Span::styled(
             format!("{} ", timestamp.format("%H:%M:%S.%3f")),
-            Style::default().fg(theme.gray()),
+            Style::default().fg(Color::DarkGray),
         )
-    }
-
-    fn if_data(timestamp: DateTime<Local>, content: String, color: Color, theme: Theme) -> Self {
-        Self {
-            timestamp: ViewData::build_timestamp_span(timestamp, theme),
-            data: content,
-            fg: color,
-            bg: Color::Reset,
-        }
-    }
-
-    fn user_data(timestamp: DateTime<Local>, content: String, theme: Theme) -> Self {
-        Self {
-            timestamp: ViewData::build_timestamp_span(timestamp, theme),
-            data: content,
-            fg: theme.primary(),
-            bg: theme.blue(),
-        }
-    }
-
-    fn user_command(
-        timestamp: DateTime<Local>,
-        cmd_name: String,
-        content: String,
-        theme: Theme,
-    ) -> Self {
-        let content = format!("</{}> {}", cmd_name, content);
-
-        Self {
-            timestamp: ViewData::build_timestamp_span(timestamp, theme),
-            data: content,
-            fg: theme.primary(),
-            bg: theme.green(),
-        }
-    }
-
-    fn user_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>, theme: Theme) -> Self {
-        let content = format!("{:02x?}", &bytes);
-
-        Self {
-            timestamp: ViewData::build_timestamp_span(timestamp, theme),
-            data: content,
-            fg: Color::Black,
-            bg: theme.yellow(),
-        }
-    }
-
-    fn user_file(
-        timestamp: DateTime<Local>,
-        idx: usize,
-        total: usize,
-        filename: String,
-        content: String,
-        theme: Theme,
-    ) -> Self {
-        let content = format!("{}[{}/{}]: <{}>", filename, idx, total, content);
-
-        Self {
-            timestamp: ViewData::build_timestamp_span(timestamp, theme),
-            data: content,
-            fg: Color::Black,
-            bg: theme.magenta(),
-        }
-    }
-
-    fn fail_data(timestamp: DateTime<Local>, content: String, theme: Theme) -> Self {
-        let content = format!("Cannot send \"{}\"", content);
-
-        Self {
-            timestamp: ViewData::build_timestamp_span(timestamp, theme),
-            data: content,
-            fg: Color::White,
-            bg: theme.red(),
-        }
-    }
-
-    fn fail_command(timestamp: DateTime<Local>, cmd_name: String, theme: Theme) -> Self {
-        let content = format!("Cannot send </{}>", cmd_name);
-
-        Self {
-            timestamp: ViewData::build_timestamp_span(timestamp, theme),
-            data: content,
-            fg: Color::White,
-            bg: theme.red(),
-        }
-    }
-
-    fn fail_hex_string(timestamp: DateTime<Local>, bytes: Vec<u8>, theme: Theme) -> Self {
-        let content = format!("Cannot send {:02x?}", &bytes);
-
-        Self {
-            timestamp: ViewData::build_timestamp_span(timestamp, theme),
-            data: content,
-            fg: Color::White,
-            bg: theme.red(),
-        }
-    }
-
-    fn fail_file(
-        timestamp: DateTime<Local>,
-        idx: usize,
-        total: usize,
-        filename: String,
-        content: String,
-        theme: Theme,
-    ) -> Self {
-        let content = format!("Cannot send {}[{}/{}]: <{}>", filename, idx, total, content);
-
-        Self {
-            timestamp: ViewData::build_timestamp_span(timestamp, theme),
-            data: content,
-            fg: Color::White,
-            bg: theme.red(),
-        }
     }
 }

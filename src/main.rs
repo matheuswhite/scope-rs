@@ -4,7 +4,6 @@ extern crate core;
 
 use crate::command_bar::CommandBar;
 use crate::serial::SerialIF;
-use crate::theme::Theme;
 use clap::Parser;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
@@ -19,10 +18,9 @@ use tui::Terminal;
 
 mod command_bar;
 mod error_pop_up;
-mod interface;
+mod messages;
 mod serial;
 mod text;
-mod theme;
 
 type ConcreteBackend = CrosstermBackend<Stdout>;
 
@@ -43,7 +41,7 @@ const CAPACITY: usize = 2000;
 fn main() -> Result<(), io::Error> {
     let cli = Cli::parse();
 
-    let interface = Box::new(SerialIF::new(&cli.port, cli.baudrate));
+    let interface = SerialIF::new(&cli.port, cli.baudrate);
 
     let view_length = cli.view_length.unwrap_or(CAPACITY);
     let cmd_file = cli.cmd_file.unwrap_or(PathBuf::from(CMD_FILEPATH));
@@ -54,10 +52,7 @@ fn main() -> Result<(), io::Error> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    let is_light = terminal_light::luma().map_or(false, |luma| luma >= 0.6);
-    let theme = Theme::new(is_light);
-
-    let mut command_bar = CommandBar::<ConcreteBackend>::new(interface, view_length, theme)
+    let mut command_bar = CommandBar::<ConcreteBackend>::new(interface, view_length)
         .with_command_file(cmd_file.as_path().to_str().unwrap());
 
     'main: loop {
