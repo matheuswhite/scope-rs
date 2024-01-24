@@ -19,6 +19,7 @@ use tui::Terminal;
 mod command_bar;
 mod error_pop_up;
 mod messages;
+mod plugin;
 mod serial;
 mod text;
 
