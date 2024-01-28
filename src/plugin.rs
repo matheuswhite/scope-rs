@@ -60,17 +60,15 @@ impl<'a> TryFrom<Table<'a>> for PluginRequest {
 }
 
 impl Plugin {
-    const SCOPE_LUA: &'static str = include_str!("../plugins/scope.lua");
-
-    pub fn new(filepath: PathBuf) -> Result<Plugin> {
+    pub fn new(filepath: PathBuf) -> Result<Plugin, String> {
         let name = filepath
             .with_extension("")
             .file_name()
-            .ok_or(Error::from(ErrorKind::Other))?
+            .ok_or("Cannot get filename of plugin".to_string())?
             .to_str()
-            .ok_or(Error::from(ErrorKind::Other))?
+            .ok_or("Cannot convert plugin name to string".to_string())?
             .to_string();
-        let code = std::fs::read_to_string(filepath)?;
+        let code = std::fs::read_to_string(filepath).map_err(|_| "Cannot read plugin file")?;
 
         let lua = Lua::new();
 
@@ -88,13 +86,21 @@ impl Plugin {
         let lua = Lua::new();
         let code = self.code.as_str();
 
-        let serial_rx_reg: Result<RegistryKey> = lua.context(move |lua_ctx| {
+        let serial_rx_reg: Result<RegistryKey, String> = lua.context(move |lua_ctx| {
             Plugin::append_plugins_dir(&lua_ctx)?;
 
-            lua_ctx.load(code).exec()?;
+            lua_ctx
+                .load(code)
+                .exec()
+                .map_err(|_| "Fail to load Lua code".to_string())?;
 
-            let serial_rx: Thread = lua_ctx.load(r#"coroutine.create(serial_rx)"#).eval()?;
-            let reg = lua_ctx.create_registry_value(serial_rx)?;
+            let serial_rx: Thread = lua_ctx
+                .load(r#"coroutine.create(serial_rx)"#)
+                .eval()
+                .map_err(|_| "Fail to create coroutine for serial_rx".to_string())?;
+            let reg = lua_ctx
+                .create_registry_value(serial_rx)
+                .map_err(|_| "Fail to create register for serial_rx coroutines".to_string())?;
             Ok(reg)
         });
 
@@ -109,13 +115,21 @@ impl Plugin {
         let lua = Lua::new();
         let code = self.code.as_str();
 
-        let user_command_reg: Result<RegistryKey> = lua.context(move |lua_ctx| {
+        let user_command_reg: Result<RegistryKey, String> = lua.context(move |lua_ctx| {
             Plugin::append_plugins_dir(&lua_ctx)?;
 
-            lua_ctx.load(code).exec()?;
+            lua_ctx
+                .load(code)
+                .exec()
+                .map_err(|_| "Fail to load Lua code".to_string())?;
 
-            let user_command: Thread = lua_ctx.load(r#"coroutine.create(user_command)"#).eval()?;
-            let reg = lua_ctx.create_registry_value(user_command)?;
+            let user_command: Thread = lua_ctx
+                .load(r#"coroutine.create(user_command)"#)
+                .eval()
+                .map_err(|_| "Fail to create coroutine for user_command".to_string())?;
+            let reg = lua_ctx
+                .create_registry_value(user_command)
+                .map_err(|_| "Fail to create register for user_command coroutines".to_string())?;
             Ok(reg)
         });
 
@@ -126,14 +140,15 @@ impl Plugin {
         }
     }
 
-    fn append_plugins_dir(lua_ctx: &Context) -> rlua::Result<()> {
+    fn append_plugins_dir(lua_ctx: &Context) -> Result<(), String> {
         let home_dir = get_my_home()
             .unwrap()
             .unwrap()
             .to_str()
             .unwrap()
             .to_string();
-        lua_ctx
+
+        if lua_ctx
             .load(
                 format!(
                     "package.path = package.path .. ';{}/.config/scope/plugins/?.lua'",
@@ -142,19 +157,31 @@ impl Plugin {
                 .as_str(),
             )
             .exec()
+            .is_err()
+        {
+            return Err("Cannot get default plugin path".to_string());
+        }
+
+        Ok(())
     }
 
-    fn check_integrity(lua: &Lua, code: &str) -> Result<()> {
+    fn check_integrity(lua: &Lua, code: &str) -> Result<(), String> {
         lua.context(|lua_ctx| {
             let globals = lua_ctx.globals();
 
             Plugin::append_plugins_dir(&lua_ctx)?;
 
-            lua_ctx.load(Plugin::SCOPE_LUA).exec()?;
-            lua_ctx.load(code).exec()?;
+            lua_ctx
+                .load(code)
+                .exec()
+                .map_err(|_| "Fail to load Lua code".to_string())?;
 
-            globals.get::<_, Function>("serial_rx")?;
-            globals.get::<_, Function>("user_command")?;
+            globals
+                .get::<_, Function>("serial_rx")
+                .map_err(|_| "serial_rx function not found in Lua code")?;
+            globals
+                .get::<_, Function>("user_command")
+                .map_err(|_| "user_command function not found in Lua code")?;
 
             Ok(())
         })

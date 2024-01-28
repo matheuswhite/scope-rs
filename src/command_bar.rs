@@ -264,8 +264,9 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
 
                 plugin_path.push(PathBuf::from(arg_list[1].as_str()));
 
-                let Ok(plugin) = Plugin::new(plugin_path.clone()) else {
-                    return Err("Fail to load plugin".to_string());
+                let plugin = match Plugin::new(plugin_path.clone()) {
+                    Ok(plugin) => plugin,
+                    Err(err) => return Err(err),
                 };
 
                 let plugin_name = plugin.name().to_string();
@@ -288,8 +289,9 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
 
                 plugin_path.push(PathBuf::from(arg_list[1].as_str()));
 
-                let Ok(plugin) = Plugin::new(plugin_path.clone()) else {
-                    return Err("Fail to load plugin".to_string());
+                let plugin = match Plugin::new(plugin_path.clone()) {
+                    Ok(plugin) => plugin,
+                    Err(err) => return Err(err),
                 };
 
                 let plugin_name = plugin.name().to_string();
