@@ -1,8 +1,10 @@
 use anyhow::Result;
-use rlua::{Function, Lua, RegistryKey, Table, Thread};
+use homedir::get_my_home;
+use rlua::{Context, Function, Lua, RegistryKey, Table, Thread};
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 
+#[derive(Clone)]
 pub struct Plugin {
     name: String,
     code: String,
@@ -81,11 +83,14 @@ impl Plugin {
         self.name.as_str()
     }
 
+    #[allow(unused)]
     pub fn serial_rx_call(&self, msg: Vec<u8>) -> SerialRxCall {
         let lua = Lua::new();
         let code = self.code.as_str();
 
         let serial_rx_reg: Result<RegistryKey> = lua.context(move |lua_ctx| {
+            Plugin::append_plugins_dir(&lua_ctx)?;
+
             lua_ctx.load(code).exec()?;
 
             let serial_rx: Thread = lua_ctx.load(r#"coroutine.create(serial_rx)"#).eval()?;
@@ -105,6 +110,8 @@ impl Plugin {
         let code = self.code.as_str();
 
         let user_command_reg: Result<RegistryKey> = lua.context(move |lua_ctx| {
+            Plugin::append_plugins_dir(&lua_ctx)?;
+
             lua_ctx.load(code).exec()?;
 
             let user_command: Thread = lua_ctx.load(r#"coroutine.create(user_command)"#).eval()?;
@@ -119,9 +126,29 @@ impl Plugin {
         }
     }
 
+    fn append_plugins_dir(lua_ctx: &Context) -> rlua::Result<()> {
+        let home_dir = get_my_home()
+            .unwrap()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+        lua_ctx
+            .load(
+                format!(
+                    "package.path = package.path .. ';{}/.config/scope/plugins/?.lua'",
+                    home_dir
+                )
+                .as_str(),
+            )
+            .exec()
+    }
+
     fn check_integrity(lua: &Lua, code: &str) -> Result<()> {
         lua.context(|lua_ctx| {
             let globals = lua_ctx.globals();
+
+            Plugin::append_plugins_dir(&lua_ctx)?;
 
             lua_ctx.load(Plugin::SCOPE_LUA).exec()?;
             lua_ctx.load(code).exec()?;
@@ -180,6 +207,11 @@ impl Iterator for UserCommandCall {
 mod tests {
     use crate::plugin::{Plugin, PluginRequest};
     use std::path::PathBuf;
+
+    #[test]
+    fn test_echo() {
+        Plugin::new(PathBuf::from("plugins/echo.lua")).unwrap();
+    }
 
     #[test]
     fn test_get_name() {

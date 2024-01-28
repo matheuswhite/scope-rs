@@ -3,7 +3,7 @@ use chrono::Local;
 use serialport::SerialPort;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::sync::mpsc::{channel, Receiver, RecvError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use std::{io, thread};
@@ -38,13 +38,19 @@ impl SerialIF {
         self.data_rx.try_recv()
     }
 
+    pub fn recv(&self) -> Result<SerialRxData, RecvError> {
+        self.data_rx.recv()
+    }
+
     pub fn description(&self) -> String {
         format!("Serial {}:{}bps", self.port, self.baudrate)
     }
 
+    #[allow(unused)]
     pub fn set_port(&mut self, _port: String) {
         self.port = _port;
     }
+    #[allow(unused)]
     pub fn set_baudrate(&mut self, _baudrate: u32) {
         self.baudrate = _baudrate;
     }
@@ -155,14 +161,29 @@ impl SerialIF {
                             }
                         }
                     }
-                    UserTxData::HexString(bytes) => {
-                        let content = [bytes.clone(), b"\r\n".to_vec()].concat();
+                    UserTxData::HexString(bytes) => match serial.write(&bytes) {
+                        Ok(_) => data_tx
+                            .send(SerialRxData::ConfirmHexString(Local::now(), bytes))
+                            .expect("Cannot send hex string comfirm"),
+                        Err(_) => data_tx
+                            .send(SerialRxData::FailHexString(Local::now(), bytes))
+                            .expect("Cannot send hex string fail"),
+                    },
+                    UserTxData::PluginSerialTx(plugin_name, content) => {
                         match serial.write(&content) {
                             Ok(_) => data_tx
-                                .send(SerialRxData::ConfirmHexString(Local::now(), bytes))
+                                .send(SerialRxData::ConfirmPluginSerialTx(
+                                    Local::now(),
+                                    plugin_name,
+                                    content,
+                                ))
                                 .expect("Cannot send hex string comfirm"),
                             Err(_) => data_tx
-                                .send(SerialRxData::FailHexString(Local::now(), bytes))
+                                .send(SerialRxData::FailPluginSerialTx(
+                                    Local::now(),
+                                    plugin_name,
+                                    content,
+                                ))
                                 .expect("Cannot send hex string fail"),
                         }
                     }

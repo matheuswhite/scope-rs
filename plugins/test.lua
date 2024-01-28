@@ -4,7 +4,7 @@
 --- DateTime: 23/01/24 18:49
 ---
 
-require "plugins/scope"
+require "scope"
 
 function serial_rx(msg)
     scope.connect('/dev/ttyACM0', 115200)

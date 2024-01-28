@@ -1,18 +1,20 @@
 use crate::command_bar::InputEvent::{HorizontalScroll, Key, VerticalScroll};
 use crate::error_pop_up::ErrorPopUp;
-use crate::messages::UserTxData;
+use crate::messages::{SerialRxData, UserTxData};
+use crate::plugin::{Plugin, PluginRequest};
 use crate::serial::SerialIF;
 use crate::text::TextView;
+use chrono::Local;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use rand::seq::SliceRandom;
 use std::cmp::{max, min};
 use std::collections::btree_map::BTreeMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::mpsc::{channel, Receiver, Sender};
-use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
+use std::{env, thread};
 use tui::backend::Backend;
 use tui::layout::{Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Style};
@@ -34,10 +36,66 @@ pub struct CommandBar<'a, B: Backend> {
     key_receiver: Receiver<InputEvent>,
     current_hint: Option<&'static str>,
     hints: Vec<&'static str>,
+    plugins: HashMap<String, Plugin>,
 }
 
-impl<'a, B: Backend + Send> CommandBar<'a, B> {
+impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
     const HEIGHT: u16 = 3;
+
+    pub fn new(interface: SerialIF, view_capacity: usize) -> Self {
+        let (key_sender, key_receiver) = channel();
+
+        thread::spawn(move || CommandBar::<B>::task(key_sender));
+
+        let hints = vec![
+            "Type / to send a command",
+            "Type $ to start a hex sequence",
+            "Type here and hit <Enter> to send",
+        ];
+
+        Self {
+            interface,
+            text_view: TextView::new(view_capacity),
+            command_line: String::new(),
+            command_line_idx: 0,
+            history: vec![],
+            history_index: None,
+            backup_command_line: String::new(),
+            key_receiver,
+            error_pop_up: None,
+            command_filepath: None,
+            command_list: CommandList::new(),
+            hints: hints.clone(),
+            current_hint: Some(hints.choose(&mut rand::thread_rng()).unwrap()),
+            plugins: HashMap::new(),
+        }
+    }
+
+    pub fn with_command_file(mut self, filepath: &str) -> Self {
+        self.command_filepath = Some(PathBuf::from(filepath));
+        self
+    }
+
+    fn task(sender: Sender<InputEvent>) {
+        loop {
+            match crossterm::event::read().unwrap() {
+                Event::Mouse(mouse_evt) if mouse_evt.modifiers == KeyModifiers::CONTROL => {
+                    match mouse_evt.kind {
+                        MouseEventKind::ScrollUp => sender.send(HorizontalScroll(-1)).unwrap(),
+                        MouseEventKind::ScrollDown => sender.send(HorizontalScroll(1)).unwrap(),
+                        _ => {}
+                    }
+                }
+                Event::Key(key) => sender.send(Key(key)).unwrap(),
+                Event::Mouse(mouse_evt) => match mouse_evt.kind {
+                    MouseEventKind::ScrollUp => sender.send(VerticalScroll(-1)).unwrap(),
+                    MouseEventKind::ScrollDown => sender.send(VerticalScroll(1)).unwrap(),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
 
     pub fn draw(&self, f: &mut Frame<B>) {
         let chunks = Layout::default()
@@ -156,6 +214,103 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
 
     fn clear_hint(&mut self) {
         self.current_hint = None;
+    }
+
+    fn exec_plugin_request(&mut self, plugin_name: String, req: PluginRequest) {
+        match req {
+            PluginRequest::Println { msg } => {
+                self.text_view
+                    .add_data_out(SerialRxData::Plugin(Local::now(), plugin_name, msg))
+            }
+            PluginRequest::Eprintln { msg } => self
+                .text_view
+                .add_data_out(SerialRxData::FailPlugin(Local::now(), plugin_name, msg)),
+            PluginRequest::Connect { .. } => {}
+            PluginRequest::Disconnect => {}
+            PluginRequest::Reconnect => {}
+            PluginRequest::SerialTx { msg } => {
+                self.interface
+                    .send(UserTxData::PluginSerialTx(plugin_name, msg));
+
+                'plugin_serial_tx: loop {
+                    match self.interface.recv() {
+                        Ok(x) if x.is_plugin_serial_tx() => {
+                            self.text_view.add_data_out(x);
+                            break 'plugin_serial_tx;
+                        }
+                        Ok(x) => self.text_view.add_data_out(x),
+                        Err(_) => {
+                            break 'plugin_serial_tx;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn handle_plugin_command(&mut self, arg_list: Vec<String>) -> Result<(String, String), String> {
+        if arg_list.is_empty() {
+            return Err("Please, use !plugin followed by a command".to_string());
+        }
+
+        let command = arg_list[0].as_str();
+        let mut plugin_path = env::current_dir().expect("Cannot get the current directory");
+
+        let plugin_name = match command {
+            "load" => {
+                if arg_list.len() < 2 {
+                    return Err("Please, inform the plugin path to be loaded".to_string());
+                }
+
+                plugin_path.push(PathBuf::from(arg_list[1].as_str()));
+
+                let Ok(plugin) = Plugin::new(plugin_path.clone()) else {
+                    return Err("Fail to load plugin".to_string());
+                };
+
+                let plugin_name = plugin.name().to_string();
+
+                if self.plugins.contains_key(plugin_name.as_str()) {
+                    return Err(format!(
+                        "Plugin {} already loaded. Use the reload command instead.",
+                        plugin_name
+                    ));
+                }
+
+                self.plugins.insert(plugin_name.clone(), plugin.clone());
+
+                plugin_name
+            }
+            "reload" => {
+                if arg_list.len() < 2 {
+                    return Err("Please, inform the plugin path to be loaded".to_string());
+                }
+
+                plugin_path.push(PathBuf::from(arg_list[1].as_str()));
+
+                let Ok(plugin) = Plugin::new(plugin_path.clone()) else {
+                    return Err("Fail to load plugin".to_string());
+                };
+
+                let plugin_name = plugin.name().to_string();
+
+                if !self.plugins.contains_key(plugin_name.as_str()) {
+                    return Err(format!(
+                        "Plugin {} already loaded. Use the reload command instead.",
+                        plugin_name
+                    ));
+                } else {
+                    self.plugins.remove(plugin_name.as_str());
+                }
+
+                self.plugins.insert(plugin_name.clone(), plugin.clone());
+
+                plugin_name
+            }
+            _ => return Err(format!("Unknown command {} for !plugin", command)),
+        };
+
+        Ok((command.to_string(), plugin_name))
     }
 
     fn handle_key_input(&mut self, key: KeyEvent, _term_size: Rect) -> Result<(), ()> {
@@ -282,36 +437,51 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                             .strip_prefix('!')
                             .unwrap()
                             .split_whitespace()
+                            .map(|arg| arg.to_string())
                             .collect::<Vec<_>>();
-                        match command_line_split[0].to_lowercase().as_ref() {
-                            "clear" | "clean" => self.text_view.clear(),
-                            "port" => {
-                                self.interface.set_port(command_line_split[1].to_string());
-                            }
-                            "baudrate" => {
-                                self.interface
-                                    .set_baudrate(command_line_split[1].parse::<u32>().unwrap());
-                            }
-                            "send_file" => {
-                                let delay = command_line_split
-                                    .get(2)
-                                    .and_then(|delay| u64::from_str(delay).ok())
-                                    .map(Duration::from_millis);
+                        let name = command_line_split[0].to_lowercase();
 
-                                if command_line_split.len() < 2 {
-                                    self.set_error_pop_up(
-                                        "The !send_file needs a filename".to_string(),
-                                    );
+                        match name.as_str() {
+                            "plugin" => {
+                                match self.handle_plugin_command(command_line_split[1..].to_vec()) {
+                                    Ok((cmd, plugin_name)) => {
+                                        let mut msg_lut = HashMap::new();
+                                        msg_lut.insert("load".to_string(), "Plugin loaded!");
+                                        msg_lut.insert("reload".to_string(), "Plugin reloaded!");
+
+                                        self.text_view.add_data_out(SerialRxData::Plugin(
+                                            Local::now(),
+                                            plugin_name,
+                                            msg_lut[&cmd].to_string(),
+                                        ))
+                                    }
+                                    Err(err_msg) => {
+                                        self.set_error_pop_up(err_msg);
+                                        return Ok(());
+                                    }
+                                }
+                            }
+                            _ => {
+                                if !self.plugins.contains_key(&name) {
+                                    self.set_error_pop_up(format!(
+                                        "Command <!{}> not found",
+                                        &name
+                                    ));
                                     return Ok(());
                                 }
 
-                                self.send_file(command_line_split[1], delay);
-                            }
-                            _ => {
-                                self.set_error_pop_up(format!(
-                                    "Command <!{}> not found",
-                                    command_line
-                                ));
+                                let plugin = self.plugins.get(&name).unwrap();
+                                let user_command_call = plugin.user_command_call(
+                                    command_line_split[1..]
+                                        .iter()
+                                        .map(|arg| arg.to_string())
+                                        .collect(),
+                                );
+
+                                let plugin_name = plugin.name().to_string();
+                                for req in user_command_call {
+                                    self.exec_plugin_request(plugin_name.clone(), req);
+                                }
                             }
                         }
                     }
@@ -355,7 +525,19 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         }
 
         if let Ok(data_out) = self.interface.try_recv() {
-            self.text_view.add_data_out(data_out);
+            self.text_view.add_data_out(data_out.clone());
+
+            for plugin in self.plugins.values().cloned().collect::<Vec<_>>() {
+                let SerialRxData::Data(_timestamp, line) = &data_out else {
+                    continue;
+                };
+
+                let serial_rx_call = plugin.serial_rx_call(line.as_bytes().to_vec());
+                let plugin_name = plugin.name().to_string();
+                for req in serial_rx_call {
+                    self.exec_plugin_request(plugin_name.clone(), req);
+                }
+            }
         }
 
         let Ok(input_evt) = self.key_receiver.try_recv() else {
@@ -405,6 +587,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         commands
     }
 
+    #[allow(unused)]
     fn load_file(&mut self, filepath: &Path) -> Result<String, ()> {
         let Ok(file_read) = std::fs::read(filepath) else {
             self.set_error_pop_up(format!("Cannot find {:?} filepath", filepath));
@@ -434,62 +617,6 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 if let Some(delay) = delay {
                     sleep(delay);
                 }
-            }
-        }
-    }
-}
-
-impl<'a, B: Backend> CommandBar<'a, B> {
-    pub fn new(interface: SerialIF, view_capacity: usize) -> Self {
-        let (key_sender, key_receiver) = channel();
-
-        thread::spawn(move || CommandBar::<B>::task(key_sender));
-
-        let hints = vec![
-            "Type / to send a command",
-            "Type $ to start a hex sequence",
-            "Type here and hit <Enter> to send",
-        ];
-
-        Self {
-            interface,
-            text_view: TextView::new(view_capacity),
-            command_line: String::new(),
-            command_line_idx: 0,
-            history: vec![],
-            history_index: None,
-            backup_command_line: String::new(),
-            key_receiver,
-            error_pop_up: None,
-            command_filepath: None,
-            command_list: CommandList::new(),
-            hints: hints.clone(),
-            current_hint: Some(hints.choose(&mut rand::thread_rng()).unwrap()),
-        }
-    }
-
-    pub fn with_command_file(mut self, filepath: &str) -> Self {
-        self.command_filepath = Some(PathBuf::from(filepath));
-        self
-    }
-
-    fn task(sender: Sender<InputEvent>) {
-        loop {
-            match crossterm::event::read().unwrap() {
-                Event::Mouse(mouse_evt) if mouse_evt.modifiers == KeyModifiers::CONTROL => {
-                    match mouse_evt.kind {
-                        MouseEventKind::ScrollUp => sender.send(HorizontalScroll(-1)).unwrap(),
-                        MouseEventKind::ScrollDown => sender.send(HorizontalScroll(1)).unwrap(),
-                        _ => {}
-                    }
-                }
-                Event::Key(key) => sender.send(Key(key)).unwrap(),
-                Event::Mouse(mouse_evt) => match mouse_evt.kind {
-                    MouseEventKind::ScrollUp => sender.send(VerticalScroll(-1)).unwrap(),
-                    MouseEventKind::ScrollDown => sender.send(VerticalScroll(1)).unwrap(),
-                    _ => {}
-                },
-                _ => {}
             }
         }
     }
