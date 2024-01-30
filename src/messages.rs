@@ -39,8 +39,8 @@ impl SerialRxData {
 }
 
 #[allow(clippy::from_over_into)]
-impl<'a> Into<ViewData<'a>> for SerialRxData {
-    fn into(self) -> ViewData<'a> {
+impl Into<ViewData> for SerialRxData {
+    fn into(self) -> ViewData {
         match self {
             SerialRxData::Data(timestamp, content) => {
                 ViewData::new(timestamp, content, Color::Reset, Color::Reset)

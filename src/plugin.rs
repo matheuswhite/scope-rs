@@ -3,6 +3,7 @@ use homedir::get_my_home;
 use rlua::{Context, Function, Lua, RegistryKey, Table, Thread};
 use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
+use std::time::Duration;
 
 #[derive(Clone)]
 pub struct Plugin {
@@ -18,6 +19,7 @@ pub enum PluginRequest {
     Disconnect,
     Reconnect,
     SerialTx { msg: Vec<u8> },
+    Sleep { time: Duration },
 }
 
 pub struct SerialRxCall {
@@ -54,6 +56,12 @@ impl<'a> TryFrom<Table<'a>> for PluginRequest {
             ":serial_tx" => Ok(PluginRequest::SerialTx {
                 msg: value.get(2).unwrap(),
             }),
+            ":sleep" => {
+                let time: i32 = value.get(2).unwrap();
+                Ok(PluginRequest::Sleep {
+                    time: Duration::from_millis(time as u64),
+                })
+            }
             _ => Err(Error::from(ErrorKind::Other)),
         }
     }
@@ -233,15 +241,18 @@ impl Iterator for UserCommandCall {
 #[cfg(test)]
 mod tests {
     use crate::plugin::{Plugin, PluginRequest};
+    use crate::plugin_installer::PluginInstaller;
     use std::path::PathBuf;
 
     #[test]
     fn test_echo() {
+        PluginInstaller.post().unwrap();
         Plugin::new(PathBuf::from("plugins/echo.lua")).unwrap();
     }
 
     #[test]
     fn test_get_name() {
+        PluginInstaller.post().unwrap();
         let plugin = Plugin::new(PathBuf::from("plugins/test.lua")).unwrap();
         let expected = "test";
 
@@ -250,6 +261,7 @@ mod tests {
 
     #[test]
     fn test_serial_rx_iter() {
+        PluginInstaller.post().unwrap();
         let msg = "Hello, World!";
         let plugin = Plugin::new(PathBuf::from("plugins/test.lua")).unwrap();
         let serial_rx_call = plugin.serial_rx_call(msg.as_bytes().to_vec());
@@ -278,6 +290,7 @@ mod tests {
 
     #[test]
     fn test_2_serial_rx_iter() {
+        PluginInstaller.post().unwrap();
         let msg = ["Hello, World!", "Other Message"];
         let plugin = [
             Plugin::new(PathBuf::from("plugins/test.lua")).unwrap(),
@@ -337,6 +350,7 @@ mod tests {
 
     #[test]
     fn test_user_command_iter() {
+        PluginInstaller.post().unwrap();
         let arg_list = vec!["Hello", "World!"]
             .into_iter()
             .map(|arg| arg.to_string())
@@ -368,6 +382,7 @@ mod tests {
 
     #[test]
     fn test_2_user_command_iter() {
+        PluginInstaller.post().unwrap();
         let arg_list = [vec!["Hello", "World!"], vec!["Other", "Message"]]
             .into_iter()
             .map(|arg_list| {

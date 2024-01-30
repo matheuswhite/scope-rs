@@ -1,7 +1,7 @@
 use crate::command_bar::InputEvent::{HorizontalScroll, Key, VerticalScroll};
 use crate::error_pop_up::ErrorPopUp;
 use crate::messages::{SerialRxData, UserTxData};
-use crate::plugin::{Plugin, PluginRequest};
+use crate::plugin_manager::PluginManager;
 use crate::serial::SerialIF;
 use crate::text::TextView;
 use chrono::Local;
@@ -12,9 +12,10 @@ use std::collections::btree_map::BTreeMap;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
-use std::{env, thread};
 use tui::backend::Backend;
 use tui::layout::{Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Style};
@@ -22,9 +23,9 @@ use tui::text::{Span, Spans};
 use tui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use tui::Frame;
 
-pub struct CommandBar<'a, B: Backend> {
-    interface: SerialIF,
-    text_view: TextView<'a, B>,
+pub struct CommandBar<B: Backend> {
+    interface: Arc<Mutex<SerialIF>>,
+    text_view: Arc<Mutex<TextView<B>>>,
     command_line: String,
     command_line_idx: usize,
     command_filepath: Option<PathBuf>,
@@ -36,10 +37,10 @@ pub struct CommandBar<'a, B: Backend> {
     key_receiver: Receiver<InputEvent>,
     current_hint: Option<&'static str>,
     hints: Vec<&'static str>,
-    plugins: HashMap<String, Plugin>,
+    plugin_manager: PluginManager,
 }
 
-impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
+impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
     const HEIGHT: u16 = 3;
 
     pub fn new(interface: SerialIF, view_capacity: usize) -> Self {
@@ -53,9 +54,14 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
             "Type here and hit <Enter> to send",
         ];
 
+        let interface = Arc::new(Mutex::new(interface));
+        let text_view = Arc::new(Mutex::new(TextView::new(view_capacity)));
+
+        let plugin_manager = PluginManager::new(interface.clone(), text_view.clone());
+
         Self {
             interface,
-            text_view: TextView::new(view_capacity),
+            text_view,
             command_line: String::new(),
             command_line_idx: 0,
             history: vec![],
@@ -67,7 +73,7 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
             command_list: CommandList::new(),
             hints: hints.clone(),
             current_hint: Some(hints.choose(&mut rand::thread_rng()).unwrap()),
-            plugins: HashMap::new(),
+            plugin_manager,
         }
     }
 
@@ -109,21 +115,25 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
             )
             .split(f.size());
 
-        self.text_view.draw(f, chunks[0]);
+        {
+            let text_view = self.text_view.lock().unwrap();
+            text_view.draw(f, chunks[0]);
+        }
+
+        let (description, is_connected) = {
+            let interface = self.interface.lock().unwrap();
+            (interface.description(), interface.is_connected())
+        };
 
         let cursor_pos = (
             chunks[1].x + self.command_line_idx as u16 + 2,
             chunks[1].y + 1,
         );
         let block = Block::default()
-            .title(format!(
-                "[{:03}] {}",
-                self.history.len(),
-                self.interface.description()
-            ))
+            .title(format!("[{:03}] {}", self.history.len(), description))
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
-            .border_style(Style::default().fg(if self.interface.is_connected() {
+            .border_style(Style::default().fg(if is_connected {
                 Color::LightGreen
             } else {
                 Color::LightRed
@@ -216,108 +226,12 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
         self.current_hint = None;
     }
 
-    fn exec_plugin_request(&mut self, plugin_name: String, req: PluginRequest) {
-        match req {
-            PluginRequest::Println { msg } => {
-                self.text_view
-                    .add_data_out(SerialRxData::Plugin(Local::now(), plugin_name, msg))
-            }
-            PluginRequest::Eprintln { msg } => self
-                .text_view
-                .add_data_out(SerialRxData::FailPlugin(Local::now(), plugin_name, msg)),
-            PluginRequest::Connect { .. } => {}
-            PluginRequest::Disconnect => {}
-            PluginRequest::Reconnect => {}
-            PluginRequest::SerialTx { msg } => {
-                self.interface
-                    .send(UserTxData::PluginSerialTx(plugin_name, msg));
-
-                'plugin_serial_tx: loop {
-                    match self.interface.recv() {
-                        Ok(x) if x.is_plugin_serial_tx() => {
-                            self.text_view.add_data_out(x);
-                            break 'plugin_serial_tx;
-                        }
-                        Ok(x) => self.text_view.add_data_out(x),
-                        Err(_) => {
-                            break 'plugin_serial_tx;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn handle_plugin_command(&mut self, arg_list: Vec<String>) -> Result<(String, String), String> {
-        if arg_list.is_empty() {
-            return Err("Please, use !plugin followed by a command".to_string());
-        }
-
-        let command = arg_list[0].as_str();
-        let mut plugin_path = env::current_dir().expect("Cannot get the current directory");
-
-        let plugin_name = match command {
-            "load" => {
-                if arg_list.len() < 2 {
-                    return Err("Please, inform the plugin path to be loaded".to_string());
-                }
-
-                plugin_path.push(PathBuf::from(arg_list[1].as_str()));
-
-                let plugin = match Plugin::new(plugin_path.clone()) {
-                    Ok(plugin) => plugin,
-                    Err(err) => return Err(err),
-                };
-
-                let plugin_name = plugin.name().to_string();
-
-                if self.plugins.contains_key(plugin_name.as_str()) {
-                    return Err(format!(
-                        "Plugin {} already loaded. Use the reload command instead.",
-                        plugin_name
-                    ));
-                }
-
-                self.plugins.insert(plugin_name.clone(), plugin.clone());
-
-                plugin_name
-            }
-            "reload" => {
-                if arg_list.len() < 2 {
-                    return Err("Please, inform the plugin path to be loaded".to_string());
-                }
-
-                plugin_path.push(PathBuf::from(arg_list[1].as_str()));
-
-                let plugin = match Plugin::new(plugin_path.clone()) {
-                    Ok(plugin) => plugin,
-                    Err(err) => return Err(err),
-                };
-
-                let plugin_name = plugin.name().to_string();
-
-                if !self.plugins.contains_key(plugin_name.as_str()) {
-                    return Err(format!(
-                        "Plugin {} already loaded. Use the reload command instead.",
-                        plugin_name
-                    ));
-                } else {
-                    self.plugins.remove(plugin_name.as_str());
-                }
-
-                self.plugins.insert(plugin_name.clone(), plugin.clone());
-
-                plugin_name
-            }
-            _ => return Err(format!("Unknown command {} for !plugin", command)),
-        };
-
-        Ok((command.to_string(), plugin_name))
-    }
-
     fn handle_key_input(&mut self, key: KeyEvent, _term_size: Rect) -> Result<(), ()> {
         match key.code {
-            KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => self.text_view.clear(),
+            KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
+                let mut text_view = self.text_view.lock().unwrap();
+                text_view.clear()
+            }
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.error_pop_up.take();
             }
@@ -397,7 +311,8 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
                 self.update_command_list();
             }
             KeyCode::Esc => {
-                self.interface.send(UserTxData::Exit);
+                let interface = self.interface.lock().unwrap();
+                interface.send(UserTxData::Exit);
                 sleep(Duration::from_millis(100));
                 return Err(());
             }
@@ -431,8 +346,8 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
 
                         let data_to_send = yaml_content.get(key).unwrap();
                         let data_to_send = data_to_send.replace("\\r", "\r").replace("\\n", "\n");
-                        self.interface
-                            .send(UserTxData::Command(key.to_string(), data_to_send));
+                        let interface = self.interface.lock().unwrap();
+                        interface.send(UserTxData::Command(key.to_string(), data_to_send));
                     }
                     '!' => {
                         let command_line_split = command_line
@@ -445,13 +360,17 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
 
                         match name.as_str() {
                             "plugin" => {
-                                match self.handle_plugin_command(command_line_split[1..].to_vec()) {
+                                match self
+                                    .plugin_manager
+                                    .handle_plugin_command(command_line_split[1..].to_vec())
+                                {
                                     Ok((cmd, plugin_name)) => {
                                         let mut msg_lut = HashMap::new();
                                         msg_lut.insert("load".to_string(), "Plugin loaded!");
                                         msg_lut.insert("reload".to_string(), "Plugin reloaded!");
 
-                                        self.text_view.add_data_out(SerialRxData::Plugin(
+                                        let mut text_view = self.text_view.lock().unwrap();
+                                        text_view.add_data_out(SerialRxData::Plugin(
                                             Local::now(),
                                             plugin_name,
                                             msg_lut[&cmd].to_string(),
@@ -464,25 +383,12 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
                                 }
                             }
                             _ => {
-                                if !self.plugins.contains_key(&name) {
-                                    self.set_error_pop_up(format!(
-                                        "Command <!{}> not found",
-                                        &name
-                                    ));
+                                if let Err(err_msg) = self.plugin_manager.call_plugin_user_command(
+                                    &name,
+                                    command_line_split[1..].to_vec(),
+                                ) {
+                                    self.set_error_pop_up(err_msg);
                                     return Ok(());
-                                }
-
-                                let plugin = self.plugins.get(&name).unwrap();
-                                let user_command_call = plugin.user_command_call(
-                                    command_line_split[1..]
-                                        .iter()
-                                        .map(|arg| arg.to_string())
-                                        .collect(),
-                                );
-
-                                let plugin_name = plugin.name().to_string();
-                                for req in user_command_call {
-                                    self.exec_plugin_request(plugin_name.clone(), req);
                                 }
                             }
                         }
@@ -499,10 +405,12 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
                             return Ok(());
                         };
 
-                        self.interface.send(UserTxData::HexString(bytes));
+                        let interface = self.interface.lock().unwrap();
+                        interface.send(UserTxData::HexString(bytes));
                     }
                     _ => {
-                        self.interface.send(UserTxData::Data(command_line));
+                        let interface = self.interface.lock().unwrap();
+                        interface.send(UserTxData::Data(command_line));
                     }
                 }
 
@@ -516,8 +424,9 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
 
     pub fn update(&mut self, term_size: Rect) -> Result<(), ()> {
         {
-            self.text_view.set_frame_height(term_size.height);
-            self.text_view.update_scroll();
+            let mut text_view = self.text_view.lock().unwrap();
+            text_view.set_frame_height(term_size.height);
+            text_view.update_scroll();
         }
 
         if let Some(error_pop_up) = self.error_pop_up.as_ref() {
@@ -526,19 +435,13 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
             }
         }
 
-        if let Ok(data_out) = self.interface.try_recv() {
-            self.text_view.add_data_out(data_out.clone());
+        {
+            let interface = self.interface.lock().unwrap();
+            if let Ok(data_out) = interface.try_recv() {
+                let mut text_view = self.text_view.lock().unwrap();
+                text_view.add_data_out(data_out.clone());
 
-            for plugin in self.plugins.values().cloned().collect::<Vec<_>>() {
-                let SerialRxData::Data(_timestamp, line) = &data_out else {
-                    continue;
-                };
-
-                let serial_rx_call = plugin.serial_rx_call(line.as_bytes().to_vec());
-                let plugin_name = plugin.name().to_string();
-                for req in serial_rx_call {
-                    self.exec_plugin_request(plugin_name.clone(), req);
-                }
+                self.plugin_manager.call_plugins_serial_rx(data_out);
             }
         }
 
@@ -549,17 +452,19 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
         match input_evt {
             Key(key) => return self.handle_key_input(key, term_size),
             VerticalScroll(direction) => {
+                let mut text_view = self.text_view.lock().unwrap();
                 if direction < 0 {
-                    self.text_view.up_scroll();
+                    text_view.up_scroll();
                 } else {
-                    self.text_view.down_scroll();
+                    text_view.down_scroll();
                 }
             }
             HorizontalScroll(direction) => {
+                let mut text_view = self.text_view.lock().unwrap();
                 if direction < 0 {
-                    self.text_view.left_scroll();
+                    text_view.left_scroll();
                 } else {
-                    self.text_view.right_scroll();
+                    text_view.right_scroll();
                 }
             }
         }
@@ -608,8 +513,9 @@ impl<'a, B: Backend + Send + Sync> CommandBar<'a, B> {
         if let Ok(str_send) = self.load_file(Path::new(filepath)) {
             let str_send_splitted = str_send.split('\n');
             let total = str_send_splitted.clone().collect::<Vec<_>>().len();
+            let interface = self.interface.lock().unwrap();
             for (i, str_split) in str_send_splitted.enumerate() {
-                self.interface.send(UserTxData::File(
+                interface.send(UserTxData::File(
                     i,
                     total,
                     filepath.to_string(),

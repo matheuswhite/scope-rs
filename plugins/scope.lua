@@ -41,4 +41,7 @@ scope = {
     serial_tx = function(msg)
         coroutine.yield({ ":serial_tx", msg })
     end,
+    sleep = function(time)
+        coroutine.yield({ ":sleep", time })
+    end
 }
