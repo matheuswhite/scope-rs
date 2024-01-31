@@ -26,7 +26,7 @@ impl PluginManager {
 
         let (text_view2, interface2) = (text_view.clone(), interface.clone());
 
-        std::thread::spawn(move || {
+        std::thread::spawn(move || loop {
             let (plugin_name, user_command_call): (String, UserCommandCall) =
                 user_command_rx.recv().unwrap();
 
@@ -40,7 +40,7 @@ impl PluginManager {
             }
         });
 
-        std::thread::spawn(move || {
+        std::thread::spawn(move || loop {
             let (plugin_name, serial_rx_call): (String, SerialRxCall) =
                 serial_rx_rx.recv().unwrap();
 
@@ -161,6 +161,7 @@ impl PluginManager {
             let plugin_name = plugin.name().to_string();
             self.serial_rx_tx
                 .send((plugin_name, serial_rx_call))
+                .map_err(|e| e.to_string())
                 .unwrap();
         }
     }
