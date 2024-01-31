@@ -509,6 +509,7 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
         Ok(file_str.to_string())
     }
 
+    #[allow(unused)]
     fn send_file(&mut self, filepath: &str, delay: Option<Duration>) {
         if let Ok(str_send) = self.load_file(Path::new(filepath)) {
             let str_send_splitted = str_send.split('\n');
