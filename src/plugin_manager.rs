@@ -21,14 +21,16 @@ impl PluginManager {
         interface: Arc<Mutex<SerialIF>>,
         text_view: Arc<Mutex<TextView<B>>>,
     ) -> Self {
-        let (serial_rx_tx, serial_rx_rx) = std::sync::mpsc::channel();
-        let (user_command_tx, user_command_rx) = std::sync::mpsc::channel();
+        let (serial_rx_tx, serial_rx_rx) = std::sync::mpsc::channel::<(String, SerialRxCall)>();
+        let (user_command_tx, user_command_rx) =
+            std::sync::mpsc::channel::<(String, UserCommandCall)>();
 
         let (text_view2, interface2) = (text_view.clone(), interface.clone());
 
-        std::thread::spawn(move || loop {
-            let (plugin_name, user_command_call): (String, UserCommandCall) =
-                user_command_rx.recv().unwrap();
+        std::thread::spawn(move || 'user_command: loop {
+            let Ok((plugin_name, user_command_call)) = user_command_rx.recv() else {
+                break 'user_command;
+            };
 
             for req in user_command_call {
                 PluginManager::exec_plugin_request(
@@ -40,9 +42,10 @@ impl PluginManager {
             }
         });
 
-        std::thread::spawn(move || loop {
-            let (plugin_name, serial_rx_call): (String, SerialRxCall) =
-                serial_rx_rx.recv().unwrap();
+        std::thread::spawn(move || 'serial_rx: loop {
+            let Ok((plugin_name, serial_rx_call)) = serial_rx_rx.recv() else {
+                break 'serial_rx;
+            };
 
             for req in serial_rx_call {
                 PluginManager::exec_plugin_request(
