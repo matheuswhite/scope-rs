@@ -237,13 +237,29 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
             }
             KeyCode::Char(c) => {
                 self.clear_hint();
-                self.command_line.insert(self.command_line_idx, c);
+
+                if self.command_line_idx >= self.command_line.chars().count() {
+                    self.command_line.push(c);
+                } else {
+                    self.command_line = self.command_line.chars().enumerate().fold(
+                        "".to_string(),
+                        |mut acc, (i, x)| {
+                            if i == self.command_line_idx {
+                                acc.push(c);
+                            }
+
+                            acc.push(x);
+                            acc
+                        },
+                    );
+                }
+
                 self.command_line_idx += 1;
                 self.update_command_list();
                 self.history_index = None;
             }
             KeyCode::Backspace => {
-                if self.command_line.len() == 1 {
+                if self.command_line.chars().count() == 1 {
                     self.show_hint();
                 }
                 self.command_line.pop();
@@ -253,7 +269,7 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
                 }
             }
             KeyCode::Right => {
-                if self.command_line_idx == self.command_line.len() {
+                if self.command_line_idx == self.command_line.chars().count() {
                     return Ok(());
                 }
 
@@ -284,7 +300,7 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
 
                 self.clear_hint();
                 self.command_line = self.history[self.history_index.unwrap()].clone();
-                self.command_line_idx = self.command_line.len();
+                self.command_line_idx = self.command_line.chars().count();
                 self.update_command_list();
             }
             KeyCode::Down => {
@@ -307,7 +323,7 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
                     }
                 }
 
-                self.command_line_idx = self.command_line.len();
+                self.command_line_idx = self.command_line.chars().count();
                 self.update_command_list();
             }
             KeyCode::Esc => {
