@@ -8,8 +8,8 @@ use tui::text::{Span, Spans};
 use tui::widgets::{Block, BorderType, Borders, Paragraph};
 use tui::Frame;
 
-pub struct TextView<'a, B: Backend> {
-    history: Vec<ViewData<'a>>,
+pub struct TextView<B: Backend> {
+    history: Vec<ViewData>,
     capacity: usize,
     _marker: PhantomData<B>,
     auto_scroll: bool,
@@ -17,7 +17,7 @@ pub struct TextView<'a, B: Backend> {
     frame_height: u16,
 }
 
-impl<'a, B: Backend> TextView<'a, B> {
+impl<B: Backend> TextView<B> {
     pub fn new(capacity: usize) -> Self {
         Self {
             history: vec![],
@@ -215,7 +215,11 @@ impl<'a, B: Backend> TextView<'a, B> {
                         .into_iter()
                         .flat_map(|(text, color)| self.highlight_invisible(&text, color))
                         .collect::<Vec<(String, Color)>>();
-                    let mut content = vec![x.timestamp.clone()];
+                    let timestamp_span = Span::styled(
+                        format!("{} ", x.timestamp.format("%H:%M:%S.%3f")),
+                        Style::default().fg(Color::DarkGray),
+                    );
+                    let mut content = vec![timestamp_span];
 
                     content.extend(texts_colors.into_iter().map(|(text, color)| {
                         Span::styled(text, Style::default().bg(x.bg).fg(color))
@@ -291,27 +295,20 @@ impl<'a, B: Backend> TextView<'a, B> {
 }
 
 #[derive(Clone)]
-pub struct ViewData<'a> {
-    timestamp: Span<'a>,
+pub struct ViewData {
+    timestamp: DateTime<Local>,
     data: String,
     fg: Color,
     bg: Color,
 }
 
-impl<'a> ViewData<'a> {
+impl ViewData {
     pub fn new(timestamp: DateTime<Local>, data: String, fg: Color, bg: Color) -> Self {
         Self {
-            timestamp: ViewData::build_timestamp_span(timestamp),
+            timestamp,
             data,
             fg,
             bg,
         }
-    }
-
-    fn build_timestamp_span(timestamp: DateTime<Local>) -> Span<'a> {
-        Span::styled(
-            format!("{} ", timestamp.format("%H:%M:%S.%3f")),
-            Style::default().fg(Color::DarkGray),
-        )
     }
 }

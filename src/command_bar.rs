@@ -1,15 +1,18 @@
 use crate::command_bar::InputEvent::{HorizontalScroll, Key, VerticalScroll};
 use crate::error_pop_up::ErrorPopUp;
-use crate::messages::UserTxData;
+use crate::messages::{SerialRxData, UserTxData};
+use crate::plugin_manager::PluginManager;
 use crate::serial::SerialIF;
 use crate::text::TextView;
+use chrono::Local;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use rand::seq::SliceRandom;
 use std::cmp::{max, min};
 use std::collections::btree_map::BTreeMap;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::str::FromStr;
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
@@ -20,9 +23,9 @@ use tui::text::{Span, Spans};
 use tui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use tui::Frame;
 
-pub struct CommandBar<'a, B: Backend> {
-    interface: SerialIF,
-    text_view: TextView<'a, B>,
+pub struct CommandBar<B: Backend> {
+    interface: Arc<Mutex<SerialIF>>,
+    text_view: Arc<Mutex<TextView<B>>>,
     command_line: String,
     command_line_idx: usize,
     command_filepath: Option<PathBuf>,
@@ -34,10 +37,71 @@ pub struct CommandBar<'a, B: Backend> {
     key_receiver: Receiver<InputEvent>,
     current_hint: Option<&'static str>,
     hints: Vec<&'static str>,
+    plugin_manager: PluginManager,
 }
 
-impl<'a, B: Backend + Send> CommandBar<'a, B> {
+impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
     const HEIGHT: u16 = 3;
+
+    pub fn new(interface: SerialIF, view_capacity: usize) -> Self {
+        let (key_sender, key_receiver) = channel();
+
+        thread::spawn(move || CommandBar::<B>::task(key_sender));
+
+        let hints = vec![
+            "Type / to send a command",
+            "Type $ to start a hex sequence",
+            "Type here and hit <Enter> to send",
+        ];
+
+        let interface = Arc::new(Mutex::new(interface));
+        let text_view = Arc::new(Mutex::new(TextView::new(view_capacity)));
+
+        let plugin_manager = PluginManager::new(interface.clone(), text_view.clone());
+
+        Self {
+            interface,
+            text_view,
+            command_line: String::new(),
+            command_line_idx: 0,
+            history: vec![],
+            history_index: None,
+            backup_command_line: String::new(),
+            key_receiver,
+            error_pop_up: None,
+            command_filepath: None,
+            command_list: CommandList::new(),
+            hints: hints.clone(),
+            current_hint: Some(hints.choose(&mut rand::thread_rng()).unwrap()),
+            plugin_manager,
+        }
+    }
+
+    pub fn with_command_file(mut self, filepath: &str) -> Self {
+        self.command_filepath = Some(PathBuf::from(filepath));
+        self
+    }
+
+    fn task(sender: Sender<InputEvent>) {
+        loop {
+            match crossterm::event::read().unwrap() {
+                Event::Mouse(mouse_evt) if mouse_evt.modifiers == KeyModifiers::CONTROL => {
+                    match mouse_evt.kind {
+                        MouseEventKind::ScrollUp => sender.send(HorizontalScroll(-1)).unwrap(),
+                        MouseEventKind::ScrollDown => sender.send(HorizontalScroll(1)).unwrap(),
+                        _ => {}
+                    }
+                }
+                Event::Key(key) => sender.send(Key(key)).unwrap(),
+                Event::Mouse(mouse_evt) => match mouse_evt.kind {
+                    MouseEventKind::ScrollUp => sender.send(VerticalScroll(-1)).unwrap(),
+                    MouseEventKind::ScrollDown => sender.send(VerticalScroll(1)).unwrap(),
+                    _ => {}
+                },
+                _ => {}
+            }
+        }
+    }
 
     pub fn draw(&self, f: &mut Frame<B>) {
         let chunks = Layout::default()
@@ -51,21 +115,25 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
             )
             .split(f.size());
 
-        self.text_view.draw(f, chunks[0]);
+        {
+            let text_view = self.text_view.lock().unwrap();
+            text_view.draw(f, chunks[0]);
+        }
+
+        let (description, is_connected) = {
+            let interface = self.interface.lock().unwrap();
+            (interface.description(), interface.is_connected())
+        };
 
         let cursor_pos = (
             chunks[1].x + self.command_line_idx as u16 + 2,
             chunks[1].y + 1,
         );
         let block = Block::default()
-            .title(format!(
-                "[{:03}] {}",
-                self.history.len(),
-                self.interface.description()
-            ))
+            .title(format!("[{:03}] {}", self.history.len(), description))
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
-            .border_style(Style::default().fg(if self.interface.is_connected() {
+            .border_style(Style::default().fg(if is_connected {
                 Color::LightGreen
             } else {
                 Color::LightRed
@@ -160,7 +228,10 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
 
     fn handle_key_input(&mut self, key: KeyEvent, _term_size: Rect) -> Result<(), ()> {
         match key.code {
-            KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => self.text_view.clear(),
+            KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
+                let mut text_view = self.text_view.lock().unwrap();
+                text_view.clear()
+            }
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.error_pop_up.take();
             }
@@ -240,7 +311,8 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 self.update_command_list();
             }
             KeyCode::Esc => {
-                self.interface.send(UserTxData::Exit);
+                let interface = self.interface.lock().unwrap();
+                interface.send(UserTxData::Exit);
                 sleep(Duration::from_millis(100));
                 return Err(());
             }
@@ -274,44 +346,50 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
 
                         let data_to_send = yaml_content.get(key).unwrap();
                         let data_to_send = data_to_send.replace("\\r", "\r").replace("\\n", "\n");
-                        self.interface
-                            .send(UserTxData::Command(key.to_string(), data_to_send));
+                        let interface = self.interface.lock().unwrap();
+                        interface.send(UserTxData::Command(key.to_string(), data_to_send));
                     }
                     '!' => {
                         let command_line_split = command_line
                             .strip_prefix('!')
                             .unwrap()
                             .split_whitespace()
+                            .map(|arg| arg.to_string())
                             .collect::<Vec<_>>();
-                        match command_line_split[0].to_lowercase().as_ref() {
-                            "clear" | "clean" => self.text_view.clear(),
-                            "port" => {
-                                self.interface.set_port(command_line_split[1].to_string());
-                            }
-                            "baudrate" => {
-                                self.interface
-                                    .set_baudrate(command_line_split[1].parse::<u32>().unwrap());
-                            }
-                            "send_file" => {
-                                let delay = command_line_split
-                                    .get(2)
-                                    .and_then(|delay| u64::from_str(delay).ok())
-                                    .map(Duration::from_millis);
+                        let name = command_line_split[0].to_lowercase();
 
-                                if command_line_split.len() < 2 {
-                                    self.set_error_pop_up(
-                                        "The !send_file needs a filename".to_string(),
-                                    );
-                                    return Ok(());
+                        match name.as_str() {
+                            "plugin" => {
+                                match self
+                                    .plugin_manager
+                                    .handle_plugin_command(command_line_split[1..].to_vec())
+                                {
+                                    Ok((cmd, plugin_name)) => {
+                                        let mut msg_lut = HashMap::new();
+                                        msg_lut.insert("load".to_string(), "Plugin loaded!");
+                                        msg_lut.insert("reload".to_string(), "Plugin reloaded!");
+
+                                        let mut text_view = self.text_view.lock().unwrap();
+                                        text_view.add_data_out(SerialRxData::Plugin(
+                                            Local::now(),
+                                            plugin_name,
+                                            msg_lut[&cmd].to_string(),
+                                        ))
+                                    }
+                                    Err(err_msg) => {
+                                        self.set_error_pop_up(err_msg);
+                                        return Ok(());
+                                    }
                                 }
-
-                                self.send_file(command_line_split[1], delay);
                             }
                             _ => {
-                                self.set_error_pop_up(format!(
-                                    "Command <!{}> not found",
-                                    command_line
-                                ));
+                                if let Err(err_msg) = self.plugin_manager.call_plugin_user_command(
+                                    &name,
+                                    command_line_split[1..].to_vec(),
+                                ) {
+                                    self.set_error_pop_up(err_msg);
+                                    return Ok(());
+                                }
                             }
                         }
                     }
@@ -327,10 +405,12 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                             return Ok(());
                         };
 
-                        self.interface.send(UserTxData::HexString(bytes));
+                        let interface = self.interface.lock().unwrap();
+                        interface.send(UserTxData::HexString(bytes));
                     }
                     _ => {
-                        self.interface.send(UserTxData::Data(command_line));
+                        let interface = self.interface.lock().unwrap();
+                        interface.send(UserTxData::Data(command_line));
                     }
                 }
 
@@ -344,8 +424,9 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
 
     pub fn update(&mut self, term_size: Rect) -> Result<(), ()> {
         {
-            self.text_view.set_frame_height(term_size.height);
-            self.text_view.update_scroll();
+            let mut text_view = self.text_view.lock().unwrap();
+            text_view.set_frame_height(term_size.height);
+            text_view.update_scroll();
         }
 
         if let Some(error_pop_up) = self.error_pop_up.as_ref() {
@@ -354,8 +435,14 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
             }
         }
 
-        if let Ok(data_out) = self.interface.try_recv() {
-            self.text_view.add_data_out(data_out);
+        {
+            let interface = self.interface.lock().unwrap();
+            if let Ok(data_out) = interface.try_recv() {
+                let mut text_view = self.text_view.lock().unwrap();
+                text_view.add_data_out(data_out.clone());
+
+                self.plugin_manager.call_plugins_serial_rx(data_out);
+            }
         }
 
         let Ok(input_evt) = self.key_receiver.try_recv() else {
@@ -365,17 +452,19 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         match input_evt {
             Key(key) => return self.handle_key_input(key, term_size),
             VerticalScroll(direction) => {
+                let mut text_view = self.text_view.lock().unwrap();
                 if direction < 0 {
-                    self.text_view.up_scroll();
+                    text_view.up_scroll();
                 } else {
-                    self.text_view.down_scroll();
+                    text_view.down_scroll();
                 }
             }
             HorizontalScroll(direction) => {
+                let mut text_view = self.text_view.lock().unwrap();
                 if direction < 0 {
-                    self.text_view.left_scroll();
+                    text_view.left_scroll();
                 } else {
-                    self.text_view.right_scroll();
+                    text_view.right_scroll();
                 }
             }
         }
@@ -405,6 +494,7 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         commands
     }
 
+    #[allow(unused)]
     fn load_file(&mut self, filepath: &Path) -> Result<String, ()> {
         let Ok(file_read) = std::fs::read(filepath) else {
             self.set_error_pop_up(format!("Cannot find {:?} filepath", filepath));
@@ -419,12 +509,14 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
         Ok(file_str.to_string())
     }
 
+    #[allow(unused)]
     fn send_file(&mut self, filepath: &str, delay: Option<Duration>) {
         if let Ok(str_send) = self.load_file(Path::new(filepath)) {
             let str_send_splitted = str_send.split('\n');
             let total = str_send_splitted.clone().collect::<Vec<_>>().len();
+            let interface = self.interface.lock().unwrap();
             for (i, str_split) in str_send_splitted.enumerate() {
-                self.interface.send(UserTxData::File(
+                interface.send(UserTxData::File(
                     i,
                     total,
                     filepath.to_string(),
@@ -434,62 +526,6 @@ impl<'a, B: Backend + Send> CommandBar<'a, B> {
                 if let Some(delay) = delay {
                     sleep(delay);
                 }
-            }
-        }
-    }
-}
-
-impl<'a, B: Backend> CommandBar<'a, B> {
-    pub fn new(interface: SerialIF, view_capacity: usize) -> Self {
-        let (key_sender, key_receiver) = channel();
-
-        thread::spawn(move || CommandBar::<B>::task(key_sender));
-
-        let hints = vec![
-            "Type / to send a command",
-            "Type $ to start a hex sequence",
-            "Type here and hit <Enter> to send",
-        ];
-
-        Self {
-            interface,
-            text_view: TextView::new(view_capacity),
-            command_line: String::new(),
-            command_line_idx: 0,
-            history: vec![],
-            history_index: None,
-            backup_command_line: String::new(),
-            key_receiver,
-            error_pop_up: None,
-            command_filepath: None,
-            command_list: CommandList::new(),
-            hints: hints.clone(),
-            current_hint: Some(hints.choose(&mut rand::thread_rng()).unwrap()),
-        }
-    }
-
-    pub fn with_command_file(mut self, filepath: &str) -> Self {
-        self.command_filepath = Some(PathBuf::from(filepath));
-        self
-    }
-
-    fn task(sender: Sender<InputEvent>) {
-        loop {
-            match crossterm::event::read().unwrap() {
-                Event::Mouse(mouse_evt) if mouse_evt.modifiers == KeyModifiers::CONTROL => {
-                    match mouse_evt.kind {
-                        MouseEventKind::ScrollUp => sender.send(HorizontalScroll(-1)).unwrap(),
-                        MouseEventKind::ScrollDown => sender.send(HorizontalScroll(1)).unwrap(),
-                        _ => {}
-                    }
-                }
-                Event::Key(key) => sender.send(Key(key)).unwrap(),
-                Event::Mouse(mouse_evt) => match mouse_evt.kind {
-                    MouseEventKind::ScrollUp => sender.send(VerticalScroll(-1)).unwrap(),
-                    MouseEventKind::ScrollDown => sender.send(VerticalScroll(1)).unwrap(),
-                    _ => {}
-                },
-                _ => {}
             }
         }
     }

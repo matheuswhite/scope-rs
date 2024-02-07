@@ -7,6 +7,8 @@ pub enum UserTxData {
     Data(String),
     Command(String, String),
     HexString(Vec<u8>),
+    PluginSerialTx(String, Vec<u8>),
+    #[allow(unused)]
     File(usize, usize, String, String),
 }
 
@@ -17,14 +19,28 @@ pub enum SerialRxData {
     ConfirmCommand(DateTime<Local>, String, String),
     ConfirmHexString(DateTime<Local>, Vec<u8>),
     ConfirmFile(DateTime<Local>, usize, usize, String, String),
+    Plugin(DateTime<Local>, String, String),
+    ConfirmPluginSerialTx(DateTime<Local>, String, Vec<u8>),
+    FailPlugin(DateTime<Local>, String, String),
     FailData(DateTime<Local>, String),
     FailCommand(DateTime<Local>, String, String),
     FailHexString(DateTime<Local>, Vec<u8>),
     FailFile(DateTime<Local>, usize, usize, String, String),
+    FailPluginSerialTx(DateTime<Local>, String, Vec<u8>),
 }
 
-impl<'a> Into<ViewData<'a>> for SerialRxData {
-    fn into(self) -> ViewData<'a> {
+impl SerialRxData {
+    pub fn is_plugin_serial_tx(&self) -> bool {
+        matches!(
+            self,
+            SerialRxData::ConfirmPluginSerialTx(..) | SerialRxData::FailPluginSerialTx(..)
+        )
+    }
+}
+
+#[allow(clippy::from_over_into)]
+impl Into<ViewData> for SerialRxData {
+    fn into(self) -> ViewData {
         match self {
             SerialRxData::Data(timestamp, content) => {
                 ViewData::new(timestamp, content, Color::Reset, Color::Reset)
@@ -50,6 +66,18 @@ impl<'a> Into<ViewData<'a>> for SerialRxData {
                 Color::Black,
                 Color::LightMagenta,
             ),
+            SerialRxData::Plugin(timestamp, plugin_name, message) => ViewData::new(
+                timestamp,
+                format!(" [{plugin_name}] {message} "),
+                Color::Black,
+                Color::White,
+            ),
+            SerialRxData::ConfirmPluginSerialTx(timestamp, plugin_name, message) => ViewData::new(
+                timestamp,
+                format!(" [{plugin_name}] => {:02x?} ", message),
+                Color::Black,
+                Color::White,
+            ),
             SerialRxData::FailData(timestamp, content) => ViewData::new(
                 timestamp,
                 format!("Cannot send \"{}\"", content),
@@ -73,6 +101,18 @@ impl<'a> Into<ViewData<'a>> for SerialRxData {
                 format!("Cannot send {}[{}/{}]: <{}>", filename, idx, total, content),
                 Color::White,
                 Color::LightRed,
+            ),
+            SerialRxData::FailPlugin(timestamp, plugin_name, message) => ViewData::new(
+                timestamp,
+                format!(" [{plugin_name}] {message} "),
+                Color::White,
+                Color::Red,
+            ),
+            SerialRxData::FailPluginSerialTx(timestamp, pluging_name, message) => ViewData::new(
+                timestamp,
+                format!(" [{pluging_name}] => Fail to send {:02x?} ", message),
+                Color::White,
+                Color::Red,
             ),
         }
     }
