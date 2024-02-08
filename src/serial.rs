@@ -1,6 +1,6 @@
 use crate::messages::{SerialRxData, UserTxData};
 use chrono::Local;
-use serialport::SerialPort;
+use serialport::{self, SerialPort};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, RecvError, Sender, TryRecvError};
@@ -23,7 +23,7 @@ impl Drop for SerialIF {
 }
 
 impl SerialIF {
-    const SERIAL_TIMEOUT: Duration = Duration::from_millis(10);
+    const SERIAL_TIMEOUT: Duration = Duration::from_millis(100);
     const RECONNECT_INTERVAL: Duration = Duration::from_millis(200);
 
     pub fn is_connected(&self) -> bool {
@@ -89,10 +89,14 @@ impl SerialIF {
         is_connected: Arc<AtomicBool>,
     ) -> Box<dyn SerialPort> {
         'reconnect: loop {
-            if let Ok(mut serial) = serialport::new(port, baudrate).open() {
-                serial
-                    .set_timeout(SerialIF::SERIAL_TIMEOUT)
-                    .expect("Cannot set serialport timeout");
+            if let Ok(serial) = serialport::new(port, baudrate)
+                .data_bits(serialport::DataBits::Eight)
+                .flow_control(serialport::FlowControl::Hardware)
+                .parity(serialport::Parity::None)
+                .stop_bits(serialport::StopBits::One)
+                .timeout(SerialIF::SERIAL_TIMEOUT)
+                .open()
+            {
                 is_connected.store(true, Ordering::SeqCst);
                 break 'reconnect serial;
             }
