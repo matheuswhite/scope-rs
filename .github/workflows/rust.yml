@@ -10,12 +10,25 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build:
-    name: Build on ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+  build-ubuntu:
+    name: Check on Ubuntu
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Install libudev-sys
+      run: sudo apt-get install -y libudev-dev
+    - name: Build
+      run: cargo build --verbose
+  build-windows:
+    name: Check on Windows
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v3
+    - name: Build
+      run: cargo build --verbose
+  build-macos:
+    name: Check on MacOS
+    runs-on: macos-latest
     steps:
     - uses: actions/checkout@v3
     - name: Build
