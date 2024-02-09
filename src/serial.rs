@@ -46,15 +46,6 @@ impl SerialIF {
         format!("Serial {}:{}bps", self.port, self.baudrate)
     }
 
-    #[allow(unused)]
-    pub fn set_port(&mut self, _port: String) {
-        self.port = _port;
-    }
-    #[allow(unused)]
-    pub fn set_baudrate(&mut self, _baudrate: u32) {
-        self.baudrate = _baudrate;
-    }
-
     pub fn new(port: &str, baudrate: u32) -> Self {
         let (serial_tx, serial_rx) = channel();
         let (data_tx, data_rx) = channel();
@@ -189,32 +180,6 @@ impl SerialIF {
                                     content,
                                 ))
                                 .expect("Cannot send hex string fail"),
-                        }
-                    }
-                    UserTxData::File(idx, total, filename, content) => {
-                        match serial.write(format!("{content}\n").as_bytes()) {
-                            Ok(_) => {
-                                data_tx
-                                    .send(SerialRxData::ConfirmFile(
-                                        Local::now(),
-                                        idx,
-                                        total,
-                                        filename,
-                                        content,
-                                    ))
-                                    .expect("Cannot send file confirm");
-                            }
-                            Err(_) => {
-                                data_tx
-                                    .send(SerialRxData::FailFile(
-                                        Local::now(),
-                                        idx,
-                                        total,
-                                        filename,
-                                        content,
-                                    ))
-                                    .expect("Cannot send file fail");
-                            }
                         }
                     }
                 }

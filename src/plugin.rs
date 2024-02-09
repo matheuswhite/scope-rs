@@ -89,7 +89,6 @@ impl Plugin {
         self.name.as_str()
     }
 
-    #[allow(unused)]
     pub fn serial_rx_call(&self, msg: Vec<u8>) -> SerialRxCall {
         let lua = Lua::new();
         let code = self.code.as_str();

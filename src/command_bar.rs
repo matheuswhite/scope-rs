@@ -10,7 +10,7 @@ use rand::seq::SliceRandom;
 use std::cmp::{max, min};
 use std::collections::btree_map::BTreeMap;
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -508,42 +508,6 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
         };
 
         commands
-    }
-
-    #[allow(unused)]
-    fn load_file(&mut self, filepath: &Path) -> Result<String, ()> {
-        let Ok(file_read) = std::fs::read(filepath) else {
-            self.set_error_pop_up(format!("Cannot find {:?} filepath", filepath));
-            return Err(());
-        };
-
-        let Ok(file_str) = std::str::from_utf8(file_read.as_slice()) else {
-            self.set_error_pop_up(format!("The file {:?} has non UTF-8 characters", filepath));
-            return Err(());
-        };
-
-        Ok(file_str.to_string())
-    }
-
-    #[allow(unused)]
-    fn send_file(&mut self, filepath: &str, delay: Option<Duration>) {
-        if let Ok(str_send) = self.load_file(Path::new(filepath)) {
-            let str_send_splitted = str_send.split('\n');
-            let total = str_send_splitted.clone().collect::<Vec<_>>().len();
-            let interface = self.interface.lock().unwrap();
-            for (i, str_split) in str_send_splitted.enumerate() {
-                interface.send(UserTxData::File(
-                    i,
-                    total,
-                    filepath.to_string(),
-                    str_split.to_string(),
-                ));
-
-                if let Some(delay) = delay {
-                    sleep(delay);
-                }
-            }
-        }
     }
 }
 

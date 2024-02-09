@@ -8,8 +8,6 @@ pub enum UserTxData {
     Command(String, String),
     HexString(Vec<u8>),
     PluginSerialTx(String, Vec<u8>),
-    #[allow(unused)]
-    File(usize, usize, String, String),
 }
 
 #[derive(Clone)]
@@ -18,14 +16,12 @@ pub enum SerialRxData {
     ConfirmData(DateTime<Local>, String),
     ConfirmCommand(DateTime<Local>, String, String),
     ConfirmHexString(DateTime<Local>, Vec<u8>),
-    ConfirmFile(DateTime<Local>, usize, usize, String, String),
     Plugin(DateTime<Local>, String, String),
     ConfirmPluginSerialTx(DateTime<Local>, String, Vec<u8>),
     FailPlugin(DateTime<Local>, String, String),
     FailData(DateTime<Local>, String),
     FailCommand(DateTime<Local>, String, String),
     FailHexString(DateTime<Local>, Vec<u8>),
-    FailFile(DateTime<Local>, usize, usize, String, String),
     FailPluginSerialTx(DateTime<Local>, String, Vec<u8>),
 }
 
@@ -60,12 +56,6 @@ impl Into<ViewData> for SerialRxData {
                 Color::Black,
                 Color::Yellow,
             ),
-            SerialRxData::ConfirmFile(timestamp, idx, total, filename, content) => ViewData::new(
-                timestamp,
-                format!("{}[{}/{}]: <{}>", filename, idx, total, content),
-                Color::Black,
-                Color::LightMagenta,
-            ),
             SerialRxData::Plugin(timestamp, plugin_name, message) => ViewData::new(
                 timestamp,
                 format!(" [{plugin_name}] {message} "),
@@ -93,12 +83,6 @@ impl Into<ViewData> for SerialRxData {
             SerialRxData::FailHexString(timestamp, bytes) => ViewData::new(
                 timestamp,
                 format!("Cannot send {:02x?}", &bytes),
-                Color::White,
-                Color::LightRed,
-            ),
-            SerialRxData::FailFile(timestamp, idx, total, filename, content) => ViewData::new(
-                timestamp,
-                format!("Cannot send {}[{}/{}]: <{}>", filename, idx, total, content),
                 Color::White,
                 Color::LightRed,
             ),
