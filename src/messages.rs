@@ -1,3 +1,4 @@
+use crate::rich_string::RichText;
 use crate::text::ViewData;
 use chrono::{DateTime, Local};
 use tui::style::Color;
@@ -24,7 +25,7 @@ pub enum UserTxData {
 pub enum SerialRxData {
     RxData {
         timestamp: DateTime<Local>,
-        content: String,
+        content: Vec<u8>,
     },
     TxData {
         timestamp: DateTime<Local>,
@@ -67,7 +68,10 @@ impl Into<ViewData> for SerialRxData {
     fn into(self) -> ViewData {
         match self {
             SerialRxData::RxData { timestamp, content } => {
-                ViewData::new(timestamp, content, Color::Reset, Color::Reset)
+                RichText::new(content, Color::Reset, Color::Reset)
+                    .decode_ansi_color()
+                    .highlight_invisible()
+                    .into_view_data(timestamp)
             }
             SerialRxData::TxData {
                 timestamp,
@@ -75,14 +79,17 @@ impl Into<ViewData> for SerialRxData {
                 is_successful,
             } => {
                 if is_successful {
-                    ViewData::new(timestamp, content, Color::Black, Color::LightCyan)
+                    RichText::from_string(content, Color::Black, Color::LightCyan)
+                        .highlight_invisible()
+                        .into_view_data(timestamp)
                 } else {
-                    ViewData::new(
-                        timestamp,
+                    RichText::from_string(
                         format!("Cannot send \"{}\"", content),
                         Color::White,
                         Color::LightRed,
                     )
+                    .highlight_invisible()
+                    .into_view_data(timestamp)
                 }
             }
             SerialRxData::Command {
@@ -92,19 +99,21 @@ impl Into<ViewData> for SerialRxData {
                 is_successful,
             } => {
                 if is_successful {
-                    ViewData::new(
-                        timestamp,
+                    RichText::from_string(
                         format!("</{}> {}", command_name, content),
                         Color::Black,
                         Color::LightGreen,
                     )
+                    .highlight_invisible()
+                    .into_view_data(timestamp)
                 } else {
-                    ViewData::new(
-                        timestamp,
+                    RichText::from_string(
                         format!("Cannot send </{}>", command_name),
                         Color::White,
                         Color::LightRed,
                     )
+                    .highlight_invisible()
+                    .into_view_data(timestamp)
                 }
             }
             SerialRxData::HexString {
@@ -113,19 +122,17 @@ impl Into<ViewData> for SerialRxData {
                 is_successful,
             } => {
                 if is_successful {
-                    ViewData::new(
-                        timestamp,
-                        format!("{:02x?}", &content),
-                        Color::Black,
-                        Color::Yellow,
-                    )
+                    RichText::from_string(format!("{:02x?}", &content), Color::Black, Color::Yellow)
+                        .highlight_invisible()
+                        .into_view_data(timestamp)
                 } else {
-                    ViewData::new(
-                        timestamp,
+                    RichText::from_string(
                         format!("Cannot send {:02x?}", &content),
                         Color::White,
                         Color::LightRed,
                     )
+                    .highlight_invisible()
+                    .into_view_data(timestamp)
                 }
             }
             SerialRxData::Plugin {
@@ -135,19 +142,21 @@ impl Into<ViewData> for SerialRxData {
                 is_successful,
             } => {
                 if is_successful {
-                    ViewData::new(
-                        timestamp,
+                    RichText::from_string(
                         format!(" [{plugin_name}] {content} "),
                         Color::Black,
                         Color::White,
                     )
+                    .highlight_invisible()
+                    .into_view_data(timestamp)
                 } else {
-                    ViewData::new(
-                        timestamp,
+                    RichText::from_string(
                         format!(" [{plugin_name}] {content} "),
                         Color::White,
                         Color::Red,
                     )
+                    .highlight_invisible()
+                    .into_view_data(timestamp)
                 }
             }
             SerialRxData::PluginSerialTx {
@@ -157,19 +166,21 @@ impl Into<ViewData> for SerialRxData {
                 is_successful,
             } => {
                 if is_successful {
-                    ViewData::new(
-                        timestamp,
+                    RichText::from_string(
                         format!(" [{plugin_name}] => {:02x?} ", content),
                         Color::Black,
                         Color::White,
                     )
+                    .highlight_invisible()
+                    .into_view_data(timestamp)
                 } else {
-                    ViewData::new(
-                        timestamp,
+                    RichText::from_string(
                         format!(" [{plugin_name}] => Fail to send {:02x?} ", content),
                         Color::White,
                         Color::Red,
                     )
+                    .highlight_invisible()
+                    .into_view_data(timestamp)
                 }
             }
         }

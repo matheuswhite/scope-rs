@@ -164,7 +164,7 @@ impl PluginManager {
                 continue;
             };
 
-            let serial_rx_call = plugin.serial_rx_call(line.as_bytes().to_vec());
+            let serial_rx_call = plugin.serial_rx_call(line.clone());
             let plugin_name = plugin.name().to_string();
             self.serial_rx_tx
                 .send((plugin_name, serial_rx_call))

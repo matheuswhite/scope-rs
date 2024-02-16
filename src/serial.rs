@@ -109,7 +109,7 @@ impl SerialIF {
             is_connected.clone(),
         );
 
-        let mut line = String::new();
+        let mut line = vec![];
         let mut buffer = [0u8];
         let mut now = Instant::now();
 
@@ -206,7 +206,7 @@ impl SerialIF {
 
             match serial.read(&mut buffer) {
                 Ok(_) => {
-                    line.push(buffer[0] as char);
+                    line.push(buffer[0]);
                     if buffer[0] == b'\n' {
                         data_tx
                             .send(SerialRxData::RxData {
