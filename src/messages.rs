@@ -167,7 +167,7 @@ impl Into<ViewData> for SerialRxData {
             } => {
                 if is_successful {
                     RichText::from_string(
-                        format!(" [{plugin_name}] => {:02x?} ", content),
+                        format!(" [{plugin_name}] => {} ", String::from_utf8_lossy(&content)),
                         Color::Black,
                         Color::White,
                     )
@@ -175,7 +175,10 @@ impl Into<ViewData> for SerialRxData {
                     .into_view_data(timestamp)
                 } else {
                     RichText::from_string(
-                        format!(" [{plugin_name}] => Fail to send {:02x?} ", content),
+                        format!(
+                            " [{plugin_name}] => Fail to send {} ",
+                            String::from_utf8_lossy(&content)
+                        ),
                         Color::White,
                         Color::Red,
                     )

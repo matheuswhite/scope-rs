@@ -72,7 +72,7 @@ impl RichTextWithInvisible {
         }
 
         let (fg, bg) = (rich_text.fg, rich_text.bg);
-        let (hl_fg, hl_bg) = Self::get_colors(rich_text.fg, rich_text.fg, true);
+        let (hl_fg, hl_bg) = Self::get_colors(rich_text.fg, rich_text.bg, true);
 
         let (buffer, state, acc) = rich_text.content.into_iter().fold(
             (vec![], State::None, vec![]),
@@ -93,7 +93,7 @@ impl RichTextWithInvisible {
                         )
                     } else {
                         (
-                            vec![],
+                            vec![byte],
                             State::Invisible,
                             acc.into_iter()
                                 .chain([RichText::new(buffer, rich_text.fg, rich_text.bg)])
@@ -104,7 +104,7 @@ impl RichTextWithInvisible {
                 State::Invisible => {
                     if Self::is_visible(byte) {
                         (
-                            vec![],
+                            vec![byte],
                             State::Visible,
                             acc.into_iter()
                                 .chain([RichText::new(Self::bytes_to_rich(buffer), hl_fg, hl_bg)])

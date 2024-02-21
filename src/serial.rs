@@ -118,7 +118,9 @@ impl SerialIF {
                 match data_to_send {
                     UserTxData::Exit => break 'task,
                     UserTxData::Data { content } => {
-                        match serial.write(format!("{content}\r\n").as_bytes()) {
+                        let content = format!("{content}\r\n");
+
+                        match serial.write(content.as_bytes()) {
                             Ok(_) => {
                                 data_tx
                                     .send(SerialRxData::TxData {
@@ -142,28 +144,32 @@ impl SerialIF {
                     UserTxData::Command {
                         command_name,
                         content,
-                    } => match serial.write(format!("{content}\r\n").as_bytes()) {
-                        Ok(_) => {
-                            data_tx
-                                .send(SerialRxData::Command {
-                                    timestamp: Local::now(),
-                                    command_name,
-                                    content,
-                                    is_successful: true,
-                                })
-                                .expect("Cannot send command confirm");
+                    } => {
+                        let content = format!("{content}\r\n");
+
+                        match serial.write(content.as_bytes()) {
+                            Ok(_) => {
+                                data_tx
+                                    .send(SerialRxData::Command {
+                                        timestamp: Local::now(),
+                                        command_name,
+                                        content,
+                                        is_successful: true,
+                                    })
+                                    .expect("Cannot send command confirm");
+                            }
+                            Err(_) => {
+                                data_tx
+                                    .send(SerialRxData::Command {
+                                        timestamp: Local::now(),
+                                        command_name,
+                                        content,
+                                        is_successful: false,
+                                    })
+                                    .expect("Cannot send command fail");
+                            }
                         }
-                        Err(_) => {
-                            data_tx
-                                .send(SerialRxData::Command {
-                                    timestamp: Local::now(),
-                                    command_name,
-                                    content,
-                                    is_successful: false,
-                                })
-                                .expect("Cannot send command fail");
-                        }
-                    },
+                    }
                     UserTxData::HexString { content } => match serial.write(&content) {
                         Ok(_) => data_tx
                             .send(SerialRxData::HexString {
