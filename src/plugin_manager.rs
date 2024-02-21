@@ -156,11 +156,15 @@ impl PluginManager {
 
     pub fn call_plugins_serial_rx(&self, data_out: SerialRxData) {
         for plugin in self.plugins.values().cloned().collect::<Vec<_>>() {
-            let SerialRxData::Data(_timestamp, line) = &data_out else {
+            let SerialRxData::RxData {
+                timestamp: _timestamp,
+                content: line,
+            } = &data_out
+            else {
                 continue;
             };
 
-            let serial_rx_call = plugin.serial_rx_call(line.as_bytes().to_vec());
+            let serial_rx_call = plugin.serial_rx_call(line.clone());
             let plugin_name = plugin.name().to_string();
             self.serial_rx_tx
                 .send((plugin_name, serial_rx_call))
@@ -178,11 +182,21 @@ impl PluginManager {
         match req {
             PluginRequest::Println { msg } => {
                 let mut text_view = text_view.lock().unwrap();
-                text_view.add_data_out(SerialRxData::Plugin(Local::now(), plugin_name, msg))
+                text_view.add_data_out(SerialRxData::Plugin {
+                    timestamp: Local::now(),
+                    plugin_name,
+                    content: msg,
+                    is_successful: true,
+                })
             }
             PluginRequest::Eprintln { msg } => {
                 let mut text_view = text_view.lock().unwrap();
-                text_view.add_data_out(SerialRxData::FailPlugin(Local::now(), plugin_name, msg))
+                text_view.add_data_out(SerialRxData::Plugin {
+                    timestamp: Local::now(),
+                    plugin_name,
+                    content: msg,
+                    is_successful: false,
+                })
             }
             PluginRequest::Connect { .. } => {}
             PluginRequest::Disconnect => {}
@@ -190,7 +204,10 @@ impl PluginManager {
             PluginRequest::SerialTx { msg } => {
                 let mut text_view = text_view.lock().unwrap();
                 let interface = interface.lock().unwrap();
-                interface.send(UserTxData::PluginSerialTx(plugin_name, msg));
+                interface.send(UserTxData::PluginSerialTx {
+                    plugin_name,
+                    content: msg,
+                });
 
                 'plugin_serial_tx: loop {
                     match interface.recv() {

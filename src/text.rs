@@ -1,4 +1,5 @@
 use crate::messages::SerialRxData;
+use crate::rich_string::RichText;
 use chrono::{DateTime, Local};
 use std::marker::PhantomData;
 use tui::backend::Backend;
@@ -40,135 +41,6 @@ impl<B: Backend> TextView<B> {
         }
     }
 
-    fn is_visible(x: char) -> bool {
-        0x20 <= x as u8 && x as u8 <= 0x7E
-    }
-
-    fn print_invisible(data: String) -> String {
-        data.chars()
-            .map(|x| match x {
-                x if TextView::<B>::is_visible(x) => x.to_string(),
-                '\0' => "\\0".to_string(),
-                '\n' => "\\n".to_string(),
-                '\r' => "\\r".to_string(),
-                _ => format!("\\x{:02x}", x as u8),
-            })
-            .collect::<Vec<String>>()
-            .join("")
-    }
-
-    fn highlight_invisible(&self, in_text: &str, color: Color) -> Vec<(String, Color)> {
-        #[derive(PartialEq)]
-        enum Mode {
-            Visible,
-            Invisible,
-        }
-
-        let highlight_color = if color == Color::LightMagenta {
-            Color::LightCyan
-        } else {
-            Color::LightMagenta
-        };
-        let mut output = vec![];
-        let mut text = "".to_string();
-        let mut highlight_text = "".to_string();
-        let mut mode = Mode::Visible;
-
-        for ch in in_text.chars() {
-            if TextView::<B>::is_visible(ch) {
-                text.push(ch);
-                if mode == Mode::Invisible {
-                    output.push((
-                        TextView::<B>::print_invisible(highlight_text.clone()),
-                        highlight_color,
-                    ));
-                    highlight_text.clear();
-                }
-                mode = Mode::Visible;
-            } else {
-                highlight_text.push(ch);
-                if mode == Mode::Visible {
-                    output.push((text.clone(), color));
-                    text.clear();
-                }
-                mode = Mode::Invisible;
-            }
-        }
-
-        if !text.is_empty() {
-            output.push((text.clone(), color));
-        } else if !highlight_text.is_empty() {
-            output.push((
-                TextView::<B>::print_invisible(highlight_text.clone()),
-                highlight_color,
-            ));
-        }
-
-        output
-    }
-
-    fn decode_ansi_color(&self, text: &str, color: Color) -> Vec<(String, Color)> {
-        if text.is_empty() {
-            return vec![];
-        }
-
-        let splitted = text.split("\x1B[").collect::<Vec<_>>();
-        let mut res = vec![];
-
-        let pattern_n_color = [
-            ("0m", Color::Reset),
-            ("30m", Color::Black),
-            ("0;30m", Color::Black),
-            ("31m", Color::Red),
-            ("0;31m", Color::Red),
-            ("32m", Color::Green),
-            ("0;32m", Color::Green),
-            ("33m", Color::Yellow),
-            ("0;33m", Color::Yellow),
-            ("34m", Color::Blue),
-            ("0;34m", Color::Blue),
-            ("35m", Color::Magenta),
-            ("0;35m", Color::Magenta),
-            ("36m", Color::Cyan),
-            ("0;36m", Color::Cyan),
-            ("37m", Color::Gray),
-            ("0;37m", Color::Gray),
-        ];
-
-        for splitted_str in splitted.iter() {
-            if splitted_str.is_empty() {
-                continue;
-            }
-
-            if pattern_n_color.iter().all(|(pattern, color)| {
-                if splitted_str.starts_with(pattern) {
-                    let final_str = splitted_str
-                        .to_string()
-                        .replace(pattern, "")
-                        .trim()
-                        .to_string();
-                    if final_str.is_empty() {
-                        return true;
-                    }
-
-                    res.push((final_str, *color));
-                    return false;
-                }
-
-                true
-            }) {
-                let fmt_splitted_str = if splitted_str.starts_with("0m") {
-                    splitted_str.replace("0m", "")
-                } else {
-                    splitted_str.to_string()
-                };
-                res.push((fmt_splitted_str, color));
-            }
-        }
-
-        res
-    }
-
     pub fn draw(&self, f: &mut Frame<B>, rect: Rect) {
         let scroll = if self.auto_scroll {
             (self.max_main_axis(), self.scroll.1)
@@ -200,34 +72,27 @@ impl<B: Backend> TextView<B> {
                 )
         };
 
-        let text =
-            coll.iter()
-                .map(|x| {
-                    let scroll = scroll.1 as usize;
-                    let content = if scroll >= x.data.len() {
-                        ""
-                    } else {
-                        &x.data[scroll..]
-                    };
+        let text = coll
+            .iter()
+            .map(|ViewData { data, timestamp }| {
+                let timestamp_span = Span::styled(
+                    format!("{} ", timestamp.format("%H:%M:%S.%3f")),
+                    Style::default().fg(Color::DarkGray),
+                );
+                let content = vec![timestamp_span]
+                    .into_iter()
+                    .chain(data.iter().enumerate().map(|(i, rich_text)| {
+                        if i == 0 {
+                            rich_text.crop_prefix_len(scroll.1 as usize).to_span()
+                        } else {
+                            rich_text.to_span()
+                        }
+                    }))
+                    .collect::<Vec<_>>();
 
-                    let texts_colors = self.decode_ansi_color(content, x.fg);
-                    let texts_colors = texts_colors
-                        .into_iter()
-                        .flat_map(|(text, color)| self.highlight_invisible(&text, color))
-                        .collect::<Vec<(String, Color)>>();
-                    let timestamp_span = Span::styled(
-                        format!("{} ", x.timestamp.format("%H:%M:%S.%3f")),
-                        Style::default().fg(Color::DarkGray),
-                    );
-                    let mut content = vec![timestamp_span];
-
-                    content.extend(texts_colors.into_iter().map(|(text, color)| {
-                        Span::styled(text, Style::default().bg(x.bg).fg(color))
-                    }));
-
-                    Spans::from(content)
-                })
-                .collect::<Vec<_>>();
+                Spans::from(content)
+            })
+            .collect::<Vec<_>>();
         let paragraph = Paragraph::new(text).block(block);
         f.render_widget(paragraph, rect);
     }
@@ -294,21 +159,13 @@ impl<B: Backend> TextView<B> {
     }
 }
 
-#[derive(Clone)]
 pub struct ViewData {
     timestamp: DateTime<Local>,
-    data: String,
-    fg: Color,
-    bg: Color,
+    data: Vec<RichText>,
 }
 
 impl ViewData {
-    pub fn new(timestamp: DateTime<Local>, data: String, fg: Color, bg: Color) -> Self {
-        Self {
-            timestamp,
-            data,
-            fg,
-            bg,
-        }
+    pub fn new(timestamp: DateTime<Local>, data: Vec<RichText>) -> Self {
+        Self { timestamp, data }
     }
 }

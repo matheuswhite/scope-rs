@@ -109,7 +109,7 @@ impl SerialIF {
             is_connected.clone(),
         );
 
-        let mut line = String::new();
+        let mut line = vec![];
         let mut buffer = [0u8];
         let mut now = Instant::now();
 
@@ -117,80 +117,108 @@ impl SerialIF {
             if let Ok(data_to_send) = serial_rx.try_recv() {
                 match data_to_send {
                     UserTxData::Exit => break 'task,
-                    UserTxData::Data(data_to_send) => {
-                        match serial.write(format!("{data_to_send}\r\n").as_bytes()) {
+                    UserTxData::Data { content } => {
+                        let content = format!("{content}\r\n");
+
+                        match serial.write(content.as_bytes()) {
                             Ok(_) => {
                                 data_tx
-                                    .send(SerialRxData::ConfirmData(Local::now(), data_to_send))
+                                    .send(SerialRxData::TxData {
+                                        timestamp: Local::now(),
+                                        content,
+                                        is_successful: true,
+                                    })
                                     .expect("Cannot send data confirm");
                             }
                             Err(err) => {
                                 data_tx
-                                    .send(SerialRxData::FailData(
-                                        Local::now(),
-                                        data_to_send + &err.to_string(),
-                                    ))
+                                    .send(SerialRxData::TxData {
+                                        timestamp: Local::now(),
+                                        content: content + &err.to_string(),
+                                        is_successful: false,
+                                    })
                                     .expect("Cannot send data fail");
                             }
                         }
                     }
-                    UserTxData::Command(command_name, data_to_send) => {
-                        match serial.write(format!("{data_to_send}\r\n").as_bytes()) {
+                    UserTxData::Command {
+                        command_name,
+                        content,
+                    } => {
+                        let content = format!("{content}\r\n");
+
+                        match serial.write(content.as_bytes()) {
                             Ok(_) => {
                                 data_tx
-                                    .send(SerialRxData::ConfirmCommand(
-                                        Local::now(),
+                                    .send(SerialRxData::Command {
+                                        timestamp: Local::now(),
                                         command_name,
-                                        data_to_send,
-                                    ))
+                                        content,
+                                        is_successful: true,
+                                    })
                                     .expect("Cannot send command confirm");
                             }
                             Err(_) => {
                                 data_tx
-                                    .send(SerialRxData::FailCommand(
-                                        Local::now(),
+                                    .send(SerialRxData::Command {
+                                        timestamp: Local::now(),
                                         command_name,
-                                        data_to_send,
-                                    ))
+                                        content,
+                                        is_successful: false,
+                                    })
                                     .expect("Cannot send command fail");
                             }
                         }
                     }
-                    UserTxData::HexString(bytes) => match serial.write(&bytes) {
+                    UserTxData::HexString { content } => match serial.write(&content) {
                         Ok(_) => data_tx
-                            .send(SerialRxData::ConfirmHexString(Local::now(), bytes))
+                            .send(SerialRxData::HexString {
+                                timestamp: Local::now(),
+                                content,
+                                is_successful: true,
+                            })
                             .expect("Cannot send hex string comfirm"),
                         Err(_) => data_tx
-                            .send(SerialRxData::FailHexString(Local::now(), bytes))
+                            .send(SerialRxData::HexString {
+                                timestamp: Local::now(),
+                                content,
+                                is_successful: false,
+                            })
                             .expect("Cannot send hex string fail"),
                     },
-                    UserTxData::PluginSerialTx(plugin_name, content) => {
-                        match serial.write(&content) {
-                            Ok(_) => data_tx
-                                .send(SerialRxData::ConfirmPluginSerialTx(
-                                    Local::now(),
-                                    plugin_name,
-                                    content,
-                                ))
-                                .expect("Cannot send hex string comfirm"),
-                            Err(_) => data_tx
-                                .send(SerialRxData::FailPluginSerialTx(
-                                    Local::now(),
-                                    plugin_name,
-                                    content,
-                                ))
-                                .expect("Cannot send hex string fail"),
-                        }
-                    }
+                    UserTxData::PluginSerialTx {
+                        plugin_name,
+                        content,
+                    } => match serial.write(&content) {
+                        Ok(_) => data_tx
+                            .send(SerialRxData::PluginSerialTx {
+                                timestamp: Local::now(),
+                                plugin_name,
+                                content,
+                                is_successful: true,
+                            })
+                            .expect("Cannot send hex string comfirm"),
+                        Err(_) => data_tx
+                            .send(SerialRxData::PluginSerialTx {
+                                timestamp: Local::now(),
+                                plugin_name,
+                                content,
+                                is_successful: false,
+                            })
+                            .expect("Cannot send hex string fail"),
+                    },
                 }
             }
 
             match serial.read(&mut buffer) {
                 Ok(_) => {
-                    line.push(buffer[0] as char);
+                    line.push(buffer[0]);
                     if buffer[0] == b'\n' {
                         data_tx
-                            .send(SerialRxData::Data(Local::now(), line.clone()))
+                            .send(SerialRxData::RxData {
+                                timestamp: Local::now(),
+                                content: line.clone(),
+                            })
                             .expect("Cannot forward message read from serial");
                         line.clear();
                         now = Instant::now();
@@ -214,7 +242,10 @@ impl SerialIF {
 
                 if !line.is_empty() {
                     data_tx
-                        .send(SerialRxData::Data(Local::now(), line.clone()))
+                        .send(SerialRxData::RxData {
+                            timestamp: Local::now(),
+                            content: line.clone(),
+                        })
                         .expect("Cannot forward message read from serial");
                     line.clear();
                 }

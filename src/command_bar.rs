@@ -363,7 +363,10 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
                         let data_to_send = yaml_content.get(key).unwrap();
                         let data_to_send = data_to_send.replace("\\r", "\r").replace("\\n", "\n");
                         let interface = self.interface.lock().unwrap();
-                        interface.send(UserTxData::Command(key.to_string(), data_to_send));
+                        interface.send(UserTxData::Command {
+                            command_name: key.to_string(),
+                            content: data_to_send,
+                        });
                     }
                     '!' => {
                         let command_line_split = command_line
@@ -386,11 +389,12 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
                                         msg_lut.insert("reload".to_string(), "Plugin reloaded!");
 
                                         let mut text_view = self.text_view.lock().unwrap();
-                                        text_view.add_data_out(SerialRxData::Plugin(
-                                            Local::now(),
+                                        text_view.add_data_out(SerialRxData::Plugin {
+                                            timestamp: Local::now(),
                                             plugin_name,
-                                            msg_lut[&cmd].to_string(),
-                                        ))
+                                            content: msg_lut[&cmd].to_string(),
+                                            is_successful: true,
+                                        })
                                     }
                                     Err(err_msg) => {
                                         self.set_error_pop_up(err_msg);
@@ -422,11 +426,13 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
                         };
 
                         let interface = self.interface.lock().unwrap();
-                        interface.send(UserTxData::HexString(bytes));
+                        interface.send(UserTxData::HexString { content: bytes });
                     }
                     _ => {
                         let interface = self.interface.lock().unwrap();
-                        interface.send(UserTxData::Data(command_line));
+                        interface.send(UserTxData::Data {
+                            content: command_line,
+                        });
                     }
                 }
 
