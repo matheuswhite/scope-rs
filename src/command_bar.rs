@@ -375,6 +375,14 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
                             .split_whitespace()
                             .map(|arg| arg.to_string())
                             .collect::<Vec<_>>();
+                        if command_line_split.is_empty() {
+                            let interface = self.interface.lock().unwrap();
+                            interface.send(UserTxData::Data {
+                                content: command_line,
+                            });
+                            return Ok(());
+                        }
+
                         let name = command_line_split[0].to_lowercase();
 
                         match name.as_str() {
