@@ -20,7 +20,7 @@ name = "scope"
 path = "src/main.rs"
 
 [dependencies]
-serialport = "4.2.0"
+serialport = "4.3.0"
 tui = "0.19.0"
 crossterm = "0.25.0"
 chrono = "0.4.23"
