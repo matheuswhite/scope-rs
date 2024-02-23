@@ -2,7 +2,7 @@
     <br><img src="imgs/scope-logo.png" width="800" alt="Scope Banner">
     <br><img src="https://github.com/matheuswhite/scope-rs/actions/workflows/rust.yml/badge.svg" alt="Build Status">
     <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg"></a>
-    <a href="https://crates.io/creates/scope-rs"><img src="https://img.shields.io/crates/v/scope-rs.svg" alt="Version info"></a>
+    <a href="https://crates.io/creates/scope-rs"><img src="https://img.shields.io/crates/v/scope-monitor.svg" alt="Version info"></a>
     <br><b>Scope</b> is a multi-platform serial monitor with user-extensible features.
 </p>
 
@@ -154,7 +154,7 @@ You can use `cargo` to install `Scope` or download a pre-built binary at [Releas
 ### Using `cargo`
 
 ```shell
-cargo install scope
+cargo install scope-monitor
 ```
 
 ## How to Use
