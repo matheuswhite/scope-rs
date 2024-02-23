@@ -7,11 +7,11 @@
 </p>
 
 <p align="center">
-    <a href="">Key Features</a> •
-    <a>Scope vs Other</a> •
-    <a>Installation</a> •
-    <a>How to Use</a> •
-    <a>Project Goals</a>
+    <a href="#send-data">Key Features</a> •
+    <a href="#scope-vs-others">Scope vs Other</a> •
+    <a href="#installation">Installation</a> •
+    <a href="#how-to-use">How to Use</a> •
+    <a href="#project-goals">Project Goals</a>
 </p>
 
 ### Send Data
@@ -81,9 +81,9 @@ format: `HH:MM:SS.ms`.
 
 ### Multiplatform
 
-You can use `Scope` on multiple platforms, like: Linux, Windows and macOS*.
+You can use `Scope` on multiple platforms, like: Linux, Windows and macOS[^1].
 
-*Not tested yet
+[^1]: Not tested yet.
 
 ### Plugins
 
@@ -134,17 +134,17 @@ The `Scope` combine multiple features. The table below list these features:
 | Send Data                   | ✅            | ✅         | ✅       | ✅         | ✅        | ✅        |
 | Send in Hexadecimal         | ✅            | ✅         | x       | x         | x        | x        |
 | Send Commands               | ✅            | ✅         | x       | x         | x        | x        |
-| Written History             | ✅            | ✅*        | x       | x         | x        | x        |
+| Written History             | ✅            | ✅[^1]     | x       | x         | x        | x        |
 | Auto Reconnect              | ✅            | ✅         | x       | ✅         | x        | x        |
 | Colorful                    | ✅            | x         | x       | ✅         | ✅        | ✅        |
 | Message Timestamp           | ✅            | ✅         | x       | x         | x        | x        |
 | Display non-printable chars | ✅            | ✅         | x       | x         | x        | x        |
-| Multiplatform               | ✅**          | Windows   | ✅       | Windows   | Linux    | ✅        |
+| Multiplatform               | ✅[^2]        | Windows   | ✅       | Windows   | Linux    | ✅        |
 | Interface                   | TUI          | GUI       | GUI     | GUI       | Terminal | Terminal |
 | Price                       | Free         | €69       | Free    | Free      | Free     | Free     |
 
-<br>* The Docklight has a list of commands in lateral panel, so it doesn't need a command history
-<br>** Not tested on macOS yet
+<br>[^1]: The Docklight has a list of commands in lateral panel, so it doesn't need a command history
+<br>[^2]: Not tested on macOS yet
 
 ## Installation
 
@@ -209,7 +209,7 @@ new [issues](https://github.com/matheuswhite/scope-rs/issues) on GitHub.
 
 ## Contributing
 
-Take a look at the [CONTRIBUTING]() guide
+Take a look at the [CONTRIBUTING](CONTRIBUTING.md) guide
 
 ## Maintainers
 
