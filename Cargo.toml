@@ -1,9 +1,23 @@
 [package]
-name = "scope"
+name = "scope-monitor"
+description = "A multi-platform serial monitor with user-extensible features"
+authors = ["Matheus T. dos Santos <matheuswhite1@protonmail.com>"]
 version = "0.1.0"
 edition = "2021"
+rust-version = "1.66.1"
+license-file = "LICENSE"
+readme = "README.md"
+repository = "https://github.com/matheuswhite/scope-rs"
+homepage = "https://github.com/matheuswhite/scope-rs"
+keywords = ["serial", "monitor", "windows", "linux", "plugin"]
+exclude = ["/imgs/", "/videos/", "/assets/", "/.git/", "/.github/", "/.venv/", "/.gitignore", "/cmd.yaml", "/CONTRIBUTING.md", '/.idea/']
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[badges]
+maintenance = { status = 'actively-developed' }
+
+[[bin]]
+name = "scope"
+path = "src/main.rs"
 
 [dependencies]
 serialport = "4.2.0"
