@@ -18,21 +18,21 @@
 
 With `Scope`, you can type a message on the command bar (at bottom) and hit `Enter` to send it through the serial port.
 
-![Send data gif]()
+![Send data gif](videos/send_data.gif)
 
 ### Send in Hexadecimal
 
 You also can send bytes in hexadecimal. To do it, type `$` and write your bytes in a hexadecimal format. The message
 can have spaces and commas as separators (`Scope` will send the bytes of message without spaces and commas).
 
-![Send hex gif]()
+![Send hex gif](videos/hexa.gif)
 
 ### Send Commands
 
 You can send commands using the command bar. To send a command, type `/` and a list of all available commands is
 shown above the command bar. Continue typing the command and hit `Enter` to send the command.
 
-![Send command gif]()
+![Send command gif](videos/cmds.gif)
 
 The commands are loaded from a user YAML file, passed at start of program (using `-c` flag). An example of YAML file is
 shown below:
@@ -43,6 +43,7 @@ spaces: 'a big frase with spaces'
 double_quotes: '"double"'
 single_quotes: "'single'"
 json: '{"cmd":1, "args":[true, "hello", 2.1]}'
+json_again: '{"cmd":2, "args":"world"}'
 ```
 
 ### Written History
@@ -50,14 +51,14 @@ json: '{"cmd":1, "args":[true, "hello", 2.1]}'
 It's possible to retrieve old data and commands sent. You can hit `Up Arrow` and `Down Arrow` to navigate through
 the history of sent data and commands.
 
-![Command history]()
+![Command history](videos/history.gif)
 
 ### Auto Reconnect
 
 The `Scope` tool has an auto-reconnect feature. When the serial port isn't available, `Scope` will keep trying to
 reconnect to the serial port until it's available again.
 
-![Reconnect gif]()
+![Reconnect gif](videos/reconnect.gif)
 
 ### Colorful
 
@@ -65,23 +66,18 @@ reconnect to the serial port until it's available again.
 connected. Beyond status, the content read and written are colored too. The messages read is colored using ANSI terminal
 color standard.
 
-![Read ANSI color gif]()
+![Read ANSI color gif](videos/ansi.gif)
 
-The data sent to serial port always has a background to differentiate it from read data.
+The data sent to serial port always has a background to differentiate it from read data. Characters outside the
+printable range of the ASCII table are shown in magenta and in the hexadecimal format. Some characters are printed as
+its representation, such as: `\n`, `\r` and `\0`.
 
-![Written color gif]()
-
-Characters outside the printable range of the ASCII table are shown in magenta and in the hexadecimal format. Some
-characters are printed as its representation, such as: `\n`, `\r` and `\0`.
-
-![Special character gif]()
+![Special character gif](videos/invisible.gif)
 
 ### Message Timestamp
 
 All the data written or read has a gray timestamp on the left of the message and with the following
 format: `HH:MM:SS.ms`.
-
-![Timestamp gif]()
 
 ### Multiplatform
 
@@ -99,6 +95,8 @@ reply `OK\r\n` when receive the `AT\r\n` message and to send `Hello, World\r\n` 
 command bar.
 
 ```lua
+require "scope"
+
 function serial_rx(msg)
     msg_str = bytes2str(msg)
 
@@ -125,7 +123,7 @@ possible to do many action to interact with `Scope` and serial port, such as: co
 the serial port, send data to serial port, print some message in `Scope` text view and so on. For more information about
 the development of plugins for `Scope` you can read the [Plugins Developer Guide]().
 
-![Plugin usage]()
+![Plugin usage](videos/plugin.gif)
 
 ## Scope vs Others
 
