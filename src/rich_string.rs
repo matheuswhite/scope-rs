@@ -310,23 +310,33 @@ impl RichTextAnsi {
         let pattern_lut = HashMap::new()
             .into_iter()
             .chain([
+                (b"\x1B[m".to_vec(), (Color::Reset, Color::Reset)),
                 (b"\x1B[0m".to_vec(), (Color::Reset, Color::Reset)),
+                (b"\x1B[1m".to_vec(), (Color::Reset, Color::Reset)),
                 (b"\x1B[30m".to_vec(), (Color::Black, Color::Reset)),
                 (b"\x1B[0;30m".to_vec(), (Color::Black, Color::Reset)),
+                (b"\x1B[1;30m".to_vec(), (Color::Black, Color::Reset)),
                 (b"\x1B[31m".to_vec(), (Color::Red, Color::Reset)),
                 (b"\x1B[0;31m".to_vec(), (Color::Red, Color::Reset)),
+                (b"\x1B[1;31m".to_vec(), (Color::Red, Color::Reset)),
                 (b"\x1B[32m".to_vec(), (Color::Green, Color::Reset)),
                 (b"\x1B[0;32m".to_vec(), (Color::Green, Color::Reset)),
+                (b"\x1B[1;32m".to_vec(), (Color::Green, Color::Reset)),
                 (b"\x1B[33m".to_vec(), (Color::Yellow, Color::Reset)),
                 (b"\x1B[0;33m".to_vec(), (Color::Yellow, Color::Reset)),
+                (b"\x1B[1;33m".to_vec(), (Color::Yellow, Color::Reset)),
                 (b"\x1B[34m".to_vec(), (Color::Blue, Color::Reset)),
                 (b"\x1B[0;34m".to_vec(), (Color::Blue, Color::Reset)),
+                (b"\x1B[1;34m".to_vec(), (Color::Blue, Color::Reset)),
                 (b"\x1B[35m".to_vec(), (Color::Magenta, Color::Reset)),
                 (b"\x1B[0;35m".to_vec(), (Color::Magenta, Color::Reset)),
+                (b"\x1B[1;35m".to_vec(), (Color::Magenta, Color::Reset)),
                 (b"\x1B[36m".to_vec(), (Color::Cyan, Color::Reset)),
                 (b"\x1B[0;36m".to_vec(), (Color::Cyan, Color::Reset)),
+                (b"\x1B[1;36m".to_vec(), (Color::Cyan, Color::Reset)),
                 (b"\x1B[37m".to_vec(), (Color::Gray, Color::Reset)),
                 (b"\x1B[0;37m".to_vec(), (Color::Gray, Color::Reset)),
+                (b"\x1B[1;37m".to_vec(), (Color::Gray, Color::Reset)),
             ])
             .collect::<HashMap<Vec<u8>, (Color, Color)>>();
 
@@ -336,6 +346,20 @@ impl RichTextAnsi {
 
         if pattern_lut.keys().any(|x| x.starts_with(pattern)) {
             return Ok(None);
+        }
+
+        if pattern.starts_with(b"\x1b[") && pattern[2..].iter().all(|x| x.is_ascii_digit()) {
+            return Ok(None);
+        }
+
+        if pattern == b"\x1b[J" {
+            return Ok(Some((Color::Reset, Color::Reset)));
+        }
+
+        if pattern.starts_with(b"\x1b[")
+            && [b'A', b'B', b'C', b'D'].contains(pattern.last().unwrap())
+        {
+            return Ok(Some((Color::Reset, Color::Reset)));
         }
 
         Err(())

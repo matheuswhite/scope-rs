@@ -1,0 +1,6 @@
+hello: 'world!'
+spaces: 'a big frase with spaces'
+double_quotes: '"double"'
+single_quotes: "'single'"
+json: '{"cmd":1, "args":[true, "hello", 2.1]}'
+json_again: '{"cmd":2, "args":"world"}'

@@ -225,7 +225,10 @@ impl SerialIF {
                     }
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {}
-                Err(ref e) if e.kind() == io::ErrorKind::PermissionDenied => {
+                Err(ref e)
+                    if e.kind() == io::ErrorKind::PermissionDenied
+                        || e.kind() == io::ErrorKind::BrokenPipe =>
+                {
                     is_connected.store(false, Ordering::SeqCst);
                     serial = SerialIF::reconnect(
                         port,

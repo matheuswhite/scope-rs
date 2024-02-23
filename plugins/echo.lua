@@ -19,6 +19,9 @@ function serial_rx(msg)
 end
 
 function user_command(arg_list)
-    scope.println("Hello! This is your echo:")
-    scope.println(arg_list[1])
+    if arg_list[1] ~= "hello" then
+        return
+    end
+
+    scope.println("Hello, World!\r\n")
 end
