@@ -134,17 +134,17 @@ The `Scope` combine multiple features. The table below list these features:
 | Send Data                   | ✅            | ✅         | ✅       | ✅         | ✅        | ✅        |
 | Send in Hexadecimal         | ✅            | ✅         | x       | x         | x        | x        |
 | Send Commands               | ✅            | ✅         | x       | x         | x        | x        |
-| Written History             | ✅            | ✅[^1]     | x       | x         | x        | x        |
+| Written History             | ✅            | ✅[^2]     | x       | x         | x        | x        |
 | Auto Reconnect              | ✅            | ✅         | x       | ✅         | x        | x        |
 | Colorful                    | ✅            | x         | x       | ✅         | ✅        | ✅        |
 | Message Timestamp           | ✅            | ✅         | x       | x         | x        | x        |
 | Display non-printable chars | ✅            | ✅         | x       | x         | x        | x        |
-| Multiplatform               | ✅[^2]        | Windows   | ✅       | Windows   | Linux    | ✅        |
+| Multiplatform               | ✅[^3]        | Windows   | ✅       | Windows   | Linux    | ✅        |
 | Interface                   | TUI          | GUI       | GUI     | GUI       | Terminal | Terminal |
 | Price                       | Free         | €69       | Free    | Free      | Free     | Free     |
 
-<br>[^1]: The Docklight has a list of commands in lateral panel, so it doesn't need a command history
-<br>[^2]: Not tested on macOS yet
+<br>[^2]: The Docklight has a list of commands in lateral panel, so it doesn't need a command history
+<br>[^3]: Not tested on macOS yet
 
 ## Installation
 
