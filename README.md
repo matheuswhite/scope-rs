@@ -121,7 +121,8 @@ end
 To call your plugin you need to type `!` followed by your plugin name and a list of arguments. Inside your plugin, is
 possible to do many action to interact with `Scope` and serial port, such as: connect to a serial port, disconnect from
 the serial port, send data to serial port, print some message in `Scope` text view and so on. For more information about
-the development of plugins for `Scope` you can read the [Plugins Developer Guide]().
+the development of plugins for `Scope` you can read
+the [Plugins Developer Guide](https://github.com/matheuswhite/scope-rs/wiki/Plugin-Developer-Guide).
 
 ![Plugin usage](videos/plugin.gif)
 
@@ -197,7 +198,8 @@ programming language, instead of creating a new language. Another example is to 
 users, instead of launch new features.
 <br>IV. **Multiplatform:** All releases must work in Windows, Linux (zsh, shell and fish) and macOS.
 <br>V. **Extensible:** Support user scripts to extend base functionalities. These scripts are called plugins. For
-more information about plugins see [Plugins Developer Guide]()
+more information about plugins
+see [Plugins Developer Guide](https://github.com/matheuswhite/scope-rs/wiki/Plugin-Developer-Guide)
 
 The roadmap, with next releases, may be found in [GitHub project](https://github.com/users/matheuswhite/projects/5)
 of this tool.
