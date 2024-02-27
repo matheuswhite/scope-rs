@@ -22,6 +22,37 @@ function str2bytes(str)
     return bytes
 end
 
+local function print_error(filename)
+    local f = io.open(filename, 'r')
+    while true do
+        local content = f:read('l')
+        if content == nil then break end
+        scope.eprintln(content)
+    end
+    f:close()
+end
+
+local function osname()
+    return package.config.sub(1,1) == "\\" and "win" or "unix"
+end
+
+local function run_process_unix(cmd, requisite)
+    local err_file = '/tmp/' .. os.time(os.date("!*t")) .. '.txt'
+    if requisite ~= nil then
+        cmd = requisite .. ' 2>' .. err_file .. ' && ' .. cmd
+    end
+
+    local pipe = io.popen(cmd .. ' 2>' .. err_file, 'r')
+    while true do
+        local line = pipe:read('l')
+        if line == nil then break end
+        scope.println(line)
+    end
+    pipe:close()
+
+    print_error(err_file)
+end
+
 scope = {
     println = function(msg)
         coroutine.yield({ ":println", msg })
@@ -43,5 +74,13 @@ scope = {
     end,
     sleep = function(time)
         coroutine.yield({ ":sleep", time })
+    end,
+    run_processes = function(process, requisite)
+        scope.println(process)
+        if osname() == "unix" then
+            run_process_unix(process, requisite)
+        else
+            scope.eprintln("Doesn't support windows yet")
+        end
     end
 }
