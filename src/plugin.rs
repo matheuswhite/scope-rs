@@ -1,7 +1,6 @@
 use anyhow::Result;
 use homedir::get_my_home;
 use rlua::{Context, Function, Lua, RegistryKey, Table, Thread};
-use std::io::{Error, ErrorKind};
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -35,34 +34,34 @@ pub struct UserCommandCall {
 }
 
 impl<'a> TryFrom<Table<'a>> for PluginRequest {
-    type Error = Error;
+    type Error = String;
 
     fn try_from(value: Table) -> std::result::Result<Self, Self::Error> {
-        let id: String = value.get(1).unwrap();
+        let id: String = value.get(1).map_err(|err| err.to_string())?;
 
         match id.as_str() {
             ":println" => Ok(PluginRequest::Println {
-                msg: value.get(2).unwrap(),
+                msg: value.get(2).map_err(|err| err.to_string())?,
             }),
             ":eprintln" => Ok(PluginRequest::Eprintln {
-                msg: value.get(2).unwrap(),
+                msg: value.get(2).map_err(|err| err.to_string())?,
             }),
             ":connect" => Ok(PluginRequest::Connect {
-                port: value.get(2).unwrap(),
-                baud_rate: value.get(3).unwrap(),
+                port: value.get(2).map_err(|err| err.to_string())?,
+                baud_rate: value.get(3).map_err(|err| err.to_string())?,
             }),
             ":disconnect" => Ok(PluginRequest::Disconnect),
             ":reconnect" => Ok(PluginRequest::Reconnect),
             ":serial_tx" => Ok(PluginRequest::SerialTx {
-                msg: value.get(2).unwrap(),
+                msg: value.get(2).map_err(|err| err.to_string())?,
             }),
             ":sleep" => {
-                let time: i32 = value.get(2).unwrap();
+                let time: i32 = value.get(2).map_err(|err| err.to_string())?;
                 Ok(PluginRequest::Sleep {
                     time: Duration::from_millis(time as u64),
                 })
             }
-            _ => Err(Error::from(ErrorKind::Other)),
+            _ => Err("Unknown function".to_string()),
         }
     }
 }
@@ -113,7 +112,7 @@ impl Plugin {
 
         SerialRxCall {
             lua,
-            thread: serial_rx_reg.unwrap(),
+            thread: serial_rx_reg.expect("Cannot get serial_rx register"),
             msg,
         }
     }
@@ -142,17 +141,17 @@ impl Plugin {
 
         UserCommandCall {
             lua,
-            thread: user_command_reg.unwrap(),
+            thread: user_command_reg.expect("Cannot get user_command register"),
             arg_list,
         }
     }
 
     fn append_plugins_dir(lua_ctx: &Context) -> Result<(), String> {
         let home_dir = get_my_home()
-            .unwrap()
-            .unwrap()
+            .expect("Cannot get home directory")
+            .expect("Cannot get home directory")
             .to_str()
-            .unwrap()
+            .expect("Cannot get home directory")
             .to_string();
 
         if lua_ctx
@@ -195,6 +194,22 @@ impl Plugin {
     }
 }
 
+fn resume_lua_thread<T: for<'a> rlua::ToLuaMulti<'a> + Send>(
+    thread: &Thread,
+    data: T,
+) -> Option<PluginRequest> {
+    match thread.resume::<T, Table>(data) {
+        Ok(req) => {
+            let req: PluginRequest = match req.try_into() {
+                Ok(req) => req,
+                Err(msg) => return Some(PluginRequest::Eprintln { msg }),
+            };
+            Some(req)
+        }
+        Err(_) => None,
+    }
+}
+
 impl Iterator for SerialRxCall {
     type Item = PluginRequest;
 
@@ -203,15 +218,11 @@ impl Iterator for SerialRxCall {
         let msg = self.msg.clone();
 
         self.lua.context(move |lua_ctx| {
-            let serial_rx: Thread = lua_ctx.registry_value(thread).unwrap();
+            let serial_rx: Thread = lua_ctx
+                .registry_value(thread)
+                .expect("Cannot get serial_rx register");
 
-            match serial_rx.resume::<_, Table>(msg) {
-                Ok(req) => {
-                    let req: PluginRequest = req.try_into().unwrap();
-                    Some(req)
-                }
-                Err(_) => None,
-            }
+            resume_lua_thread(&serial_rx, msg)
         })
     }
 }
@@ -224,15 +235,11 @@ impl Iterator for UserCommandCall {
         let arg_list = self.arg_list.clone();
 
         self.lua.context(move |lua_ctx| {
-            let user_command: Thread = lua_ctx.registry_value(thread).unwrap();
+            let user_command: Thread = lua_ctx
+                .registry_value(thread)
+                .expect("Cannot get user_command register");
 
-            match user_command.resume::<_, Table>(arg_list) {
-                Ok(req) => {
-                    let req: PluginRequest = req.try_into().unwrap();
-                    Some(req)
-                }
-                Err(_) => None,
-            }
+            resume_lua_thread(&user_command, arg_list)
         })
     }
 }
@@ -241,28 +248,60 @@ impl Iterator for UserCommandCall {
 mod tests {
     use crate::plugin::{Plugin, PluginRequest};
     use crate::plugin_installer::PluginInstaller;
-    use std::path::PathBuf;
+    use std::env::current_dir;
+    use std::path::{Path, PathBuf};
 
     #[test]
-    fn test_echo() {
-        PluginInstaller.post().unwrap();
-        Plugin::new(PathBuf::from("plugins/echo.lua")).unwrap();
+    fn test_echo() -> Result<(), String> {
+        PluginInstaller.post()?;
+        Plugin::new(PathBuf::from("plugins/echo.lua"))?;
+
+        Ok(())
     }
 
     #[test]
-    fn test_get_name() {
-        PluginInstaller.post().unwrap();
-        let plugin = Plugin::new(PathBuf::from("plugins/test.lua")).unwrap();
+    fn test_west_build() -> Result<(), String> {
+        let path = Path::new("/home/matheuswhite/zephyrproject/zephyr/samples/hello_world");
+        let old_dir = current_dir().expect("Cannot get current dir");
+
+        std::env::set_current_dir(path).map_err(|err| err.to_string())?;
+        let Ok(_) = PluginInstaller.post() else {
+            return std::env::set_current_dir(old_dir).map_err(|err| err.to_string());
+        };
+        let Ok(west) = Plugin::new(PathBuf::from("west.lua")) else {
+            return std::env::set_current_dir(old_dir).map_err(|err| err.to_string());
+        };
+
+        let cmd_call = west.user_command_call(
+            vec!["build", "-p", "-b", "nrf52dk_nrf52832"]
+                .into_iter()
+                .map(|x| x.to_string())
+                .collect(),
+        );
+
+        for req in cmd_call {
+            dbg!(req);
+        }
+
+        std::env::set_current_dir(old_dir).map_err(|err| err.to_string())
+    }
+
+    #[test]
+    fn test_get_name() -> Result<(), String> {
+        PluginInstaller.post()?;
+        let plugin = Plugin::new(PathBuf::from("plugins/test.lua"))?;
         let expected = "test";
 
         assert_eq!(plugin.name(), expected);
+
+        Ok(())
     }
 
     #[test]
-    fn test_serial_rx_iter() {
-        PluginInstaller.post().unwrap();
+    fn test_serial_rx_iter() -> Result<(), String> {
+        PluginInstaller.post()?;
         let msg = "Hello, World!";
-        let plugin = Plugin::new(PathBuf::from("plugins/test.lua")).unwrap();
+        let plugin = Plugin::new(PathBuf::from("plugins/test.lua"))?;
         let serial_rx_call = plugin.serial_rx_call(msg.as_bytes().to_vec());
         let expected = vec![
             PluginRequest::Connect {
@@ -285,15 +324,17 @@ mod tests {
         for (i, req) in serial_rx_call.enumerate() {
             assert_eq!(req, expected[i]);
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_2_serial_rx_iter() {
-        PluginInstaller.post().unwrap();
+    fn test_2_serial_rx_iter() -> Result<(), String> {
+        PluginInstaller.post()?;
         let msg = ["Hello, World!", "Other Message"];
         let plugin = [
-            Plugin::new(PathBuf::from("plugins/test.lua")).unwrap(),
-            Plugin::new(PathBuf::from("plugins/test.lua")).unwrap(),
+            Plugin::new(PathBuf::from("plugins/test.lua"))?,
+            Plugin::new(PathBuf::from("plugins/test.lua"))?,
         ];
         let mut serial_rx_call = [
             plugin[0].serial_rx_call(msg[0].as_bytes().to_vec()),
@@ -342,19 +383,21 @@ mod tests {
             let req1 = serial_rx_call[0].next();
             let req2 = serial_rx_call[1].next();
 
-            assert_eq!(req1.unwrap(), exp1);
-            assert_eq!(req2.unwrap(), exp2);
+            assert_eq!(req1, Some(exp1));
+            assert_eq!(req2, Some(exp2));
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_user_command_iter() {
-        PluginInstaller.post().unwrap();
+    fn test_user_command_iter() -> Result<(), String> {
+        PluginInstaller.post()?;
         let arg_list = vec!["Hello", "World!"]
             .into_iter()
             .map(|arg| arg.to_string())
             .collect();
-        let plugin = Plugin::new(PathBuf::from("plugins/test.lua")).unwrap();
+        let plugin = Plugin::new(PathBuf::from("plugins/test.lua"))?;
         let user_command_call = plugin.user_command_call(arg_list);
         let expected = vec![
             PluginRequest::Connect {
@@ -377,11 +420,13 @@ mod tests {
         for (i, req) in user_command_call.enumerate() {
             assert_eq!(req, expected[i]);
         }
+
+        Ok(())
     }
 
     #[test]
-    fn test_2_user_command_iter() {
-        PluginInstaller.post().unwrap();
+    fn test_2_user_command_iter() -> Result<(), String> {
+        PluginInstaller.post()?;
         let arg_list = [vec!["Hello", "World!"], vec!["Other", "Message"]]
             .into_iter()
             .map(|arg_list| {
@@ -392,8 +437,8 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let plugin = [
-            Plugin::new(PathBuf::from("plugins/test.lua")).unwrap(),
-            Plugin::new(PathBuf::from("plugins/test.lua")).unwrap(),
+            Plugin::new(PathBuf::from("plugins/test.lua"))?,
+            Plugin::new(PathBuf::from("plugins/test.lua"))?,
         ];
         let mut user_command_call = [
             plugin[0].user_command_call(arg_list[0].clone()),
@@ -442,8 +487,10 @@ mod tests {
             let req1 = user_command_call[0].next();
             let req2 = user_command_call[1].next();
 
-            assert_eq!(req1.unwrap(), exp1);
-            assert_eq!(req2.unwrap(), exp2);
+            assert_eq!(req1, Some(exp1));
+            assert_eq!(req2, Some(exp2));
         }
+
+        Ok(())
     }
 }
