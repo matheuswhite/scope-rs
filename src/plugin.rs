@@ -19,6 +19,7 @@ pub enum PluginRequest {
     Reconnect,
     SerialTx { msg: Vec<u8> },
     Sleep { time: Duration },
+    Exec { cmds: Vec<String> },
 }
 
 pub struct SerialRxCall {
@@ -59,6 +60,12 @@ impl<'a> TryFrom<Table<'a>> for PluginRequest {
                 let time: i32 = value.get(2).map_err(|err| err.to_string())?;
                 Ok(PluginRequest::Sleep {
                     time: Duration::from_millis(time as u64),
+                })
+            }
+            ":exec" => {
+                let cmd: String = value.get(2).map_err(|err| err.to_string())?;
+                Ok(PluginRequest::Exec {
+                    cmds: cmd.split("&&").map(|x| x.trim().to_string()).collect(),
                 })
             }
             _ => Err("Unknown function".to_string()),
@@ -158,7 +165,7 @@ impl Plugin {
             .load(
                 format!(
                     "package.path = package.path .. ';{}/.config/scope/plugins/?.lua'",
-                    home_dir
+                    home_dir.replace('\\', "/")
                 )
                 .as_str(),
             )
@@ -261,7 +268,9 @@ mod tests {
 
     #[test]
     fn test_west_build() -> Result<(), String> {
-        let path = Path::new("/home/matheuswhite/zephyrproject/zephyr/samples/hello_world");
+        let zephyr_base = env!("ZEPHYR_BASE").to_string();
+        let path = zephyr_base + "/samples/hello_world";
+        let path = Path::new(&path);
         let old_dir = current_dir().expect("Cannot get current dir");
 
         std::env::set_current_dir(path).map_err(|err| err.to_string())?;

@@ -685,7 +685,7 @@ checksum = "e86697c916019a8588c99b5fac3cead74ec0b4b819707a682fd4d23fa0ce1ba1"
 
 [[package]]
 name = "scope-monitor"
-version = "0.1.1"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -693,6 +693,7 @@ dependencies = [
  "crossterm",
  "homedir",
  "rand",
+ "regex",
  "rlua",
  "serde",
  "serde_yaml",

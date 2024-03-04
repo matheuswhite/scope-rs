@@ -7,10 +7,8 @@
 require "scope"
 
 function check_zephyr_base()
-    local pipe = io.popen('echo $ZEPHYR_BASE')
-    local content = pipe:read('*all')
-    pipe:close()
-    return content ~= nil and content ~= '' and content ~= '\n'
+    stdout, stderr = scope.exec('echo $ZEPHYR_BASE')
+    return stdout ~= nil and stdout ~= '' and stdout ~= '\n'
 end
 
 function serial_rx(msg)
@@ -22,5 +20,11 @@ function user_command(arg_list)
         return
     end
 
-    scope.run_processes('west ' .. table.concat(arg_list, ' '), 'source $ZEPHYR_BASE/../.venv/bin/activate')
+    local cmd = 'west ' .. table.concat(arg_list, ' ')
+    
+    if osname() == 'unix' then
+        cmd = 'source $ZEPHYR_BASE/../.venv/bin/activate && ' .. cmd
+    end
+    
+    scope.exec(cmd)
 end

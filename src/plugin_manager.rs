@@ -173,6 +173,26 @@ impl PluginManager {
         }
     }
 
+    fn plugin_println<B: Backend + Sync + Send + 'static>(text_view: Arc<Mutex<TextView<B>>>, plugin_name: String, content: String) {
+        let mut text_view = text_view.lock().unwrap();
+        text_view.add_data_out(SerialRxData::Plugin {
+            timestamp: Local::now(),
+            plugin_name,
+            content,
+            is_successful: true,
+        })
+    }
+
+    fn plugin_eprintln<B: Backend + Sync + Send + 'static>(text_view: Arc<Mutex<TextView<B>>>, plugin_name: String, content: String) {
+        let mut text_view = text_view.lock().unwrap();
+        text_view.add_data_out(SerialRxData::Plugin {
+            timestamp: Local::now(),
+            plugin_name,
+            content,
+            is_successful: false,
+        })
+    }
+
     fn exec_plugin_request<B: Backend + Sync + Send + 'static>(
         text_view: Arc<Mutex<TextView<B>>>,
         interface: Arc<Mutex<SerialIF>>,
@@ -181,22 +201,10 @@ impl PluginManager {
     ) {
         match req {
             PluginRequest::Println { msg } => {
-                let mut text_view = text_view.lock().unwrap();
-                text_view.add_data_out(SerialRxData::Plugin {
-                    timestamp: Local::now(),
-                    plugin_name,
-                    content: msg,
-                    is_successful: true,
-                })
+                PluginManager::plugin_println(text_view, plugin_name, msg);
             }
             PluginRequest::Eprintln { msg } => {
-                let mut text_view = text_view.lock().unwrap();
-                text_view.add_data_out(SerialRxData::Plugin {
-                    timestamp: Local::now(),
-                    plugin_name,
-                    content: msg,
-                    is_successful: false,
-                })
+                PluginManager::plugin_eprintln(text_view, plugin_name, msg);
             }
             PluginRequest::Connect { .. } => {}
             PluginRequest::Disconnect => {}
@@ -223,6 +231,11 @@ impl PluginManager {
                 }
             }
             PluginRequest::Sleep { time } => std::thread::sleep(time),
+            PluginRequest::Exec { cmds } => {
+                for cmd in cmds {
+                    PluginManager::plugin_println(text_view.clone(), plugin_name.clone(), cmd);
+                }
+            },
         }
     }
 }

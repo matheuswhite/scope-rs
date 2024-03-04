@@ -2,7 +2,7 @@
 name = "scope-monitor"
 description = "A multi-platform serial monitor with user-extensible features"
 authors = ["Matheus T. dos Santos <matheuswhite1@protonmail.com>"]
-version = "0.1.1"
+version = "0.2.0"
 edition = "2021"
 rust-version = "1.66.1"
 license-file = "LICENSE"
@@ -31,3 +31,4 @@ clap = { version = "4.1.9", features = ["derive"] }
 rlua = "0.19.8"
 anyhow = "1.0.79"
 homedir = "0.2.1"
+regex = { version = "1.10.3", features = [] }
