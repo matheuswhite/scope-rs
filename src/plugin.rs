@@ -19,7 +19,7 @@ pub enum PluginRequest {
     Reconnect,
     SerialTx { msg: Vec<u8> },
     Sleep { time: Duration },
-    Exec { cmds: Vec<String> },
+    Exec { cmd: String },
 }
 
 pub struct SerialRxCall {
@@ -62,12 +62,9 @@ impl<'a> TryFrom<Table<'a>> for PluginRequest {
                     time: Duration::from_millis(time as u64),
                 })
             }
-            ":exec" => {
-                let cmd: String = value.get(2).map_err(|err| err.to_string())?;
-                Ok(PluginRequest::Exec {
-                    cmds: cmd.split("&&").map(|x| x.trim().to_string()).collect(),
-                })
-            }
+            ":exec" => Ok(PluginRequest::Exec {
+                cmd: value.get(2).map_err(|err| err.to_string())?,
+            }),
             _ => Err("Unknown function".to_string()),
         }
     }

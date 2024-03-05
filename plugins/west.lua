@@ -17,7 +17,7 @@ end
 function user_command(arg_list)
     if not check_zephyr_base() then
         scope.eprintln('$ZEPHYR_BASE is empty')
-        return
+        --return
     end
 
     local cmd = 'west ' .. table.concat(arg_list, ' ')
