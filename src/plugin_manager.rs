@@ -43,6 +43,7 @@ impl PluginManager {
                 plugin_name,
                 interface.clone(),
                 &process_runner,
+                false,
             );
         });
 
@@ -57,6 +58,7 @@ impl PluginManager {
                 plugin_name,
                 interface2.clone(),
                 &process_runner2,
+                true,
             );
         });
 
@@ -76,6 +78,7 @@ impl PluginManager {
         plugin_name: String,
         interface: Arc<Mutex<SerialIF>>,
         process_runner: &ProcessRunner<B>,
+        is_from_serial_rx: bool,
     ) {
         while let Some(req) = caller.next() {
             let Some(req_result) = PluginManager::exec_plugin_request(
@@ -83,6 +86,7 @@ impl PluginManager {
                 interface.clone(),
                 plugin_name.clone(),
                 process_runner,
+                is_from_serial_rx,
                 req,
             ) else {
                 continue;
@@ -206,6 +210,7 @@ impl PluginManager {
         interface: Arc<Mutex<SerialIF>>,
         plugin_name: String,
         process_runner: &ProcessRunner<B>,
+        is_from_serial_rx: bool,
         req: PluginRequest,
     ) -> Option<PluginRequestResult> {
         match req {
@@ -241,7 +246,15 @@ impl PluginManager {
             }
             PluginRequest::Sleep { time } => std::thread::sleep(time),
             PluginRequest::Exec { cmd } => {
-                return Some(process_runner.run(plugin_name, cmd).unwrap());
+                if !is_from_serial_rx {
+                    return Some(process_runner.run(plugin_name, cmd).unwrap());
+                } else {
+                    Plugin::eprintln(
+                        text_view,
+                        plugin_name,
+                        "Cannot call \"scope.exec\" from \"serial_rx\"".to_string(),
+                    )
+                }
             }
         }
 

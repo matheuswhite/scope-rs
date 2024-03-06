@@ -16,6 +16,9 @@ function serial_rx(msg)
     scope.println("Sending msg \"OK\" via serial tx...")
     scope.serial_tx(str2bytes("OK\r\n"))
     scope.println("Message sent!")
+
+    -- ILLEGAL USAGE
+    scope.exec('echo "' .. bytes2str(msg) ..  '"')
 end
 
 function user_command(arg_list)
