@@ -129,15 +129,18 @@ impl CommandBar {
             chunks[1].x + self.command_line_idx as u16 + 2,
             chunks[1].y + 1,
         );
+        let bar_color = if self.plugin_manager.has_process_running() {
+            Color::DarkGray
+        } else if is_connected {
+            Color::LightGreen
+        } else {
+            Color::LightRed
+        };
         let block = Block::default()
             .title(format!("[{:03}] {}", self.history.len(), description))
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
-            .border_style(Style::default().fg(if is_connected {
-                Color::LightGreen
-            } else {
-                Color::LightRed
-            }));
+            .border_style(Style::default().fg(bar_color));
         let paragraph = Paragraph::new(Span::from({
             " ".to_string()
                 + if let Some(hint) = self.current_hint {
@@ -333,6 +336,13 @@ impl CommandBar {
                 return Err(());
             }
             KeyCode::Enter if !self.command_line.is_empty() => {
+                if self.plugin_manager.has_process_running() {
+                    self.set_error_pop_up(
+                        "Cannot send data or command while a command is running".to_string(),
+                    );
+                    return Ok(());
+                }
+
                 let command_line = self.command_line.clone();
                 self.show_hint();
                 self.history.push(self.command_line.clone());

@@ -9,6 +9,7 @@ use crate::text::TextView;
 use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 
@@ -16,6 +17,7 @@ pub struct PluginManager {
     plugins: HashMap<String, Plugin>,
     serial_rx_tx: Sender<(String, SerialRxCall)>,
     user_command_tx: Sender<(String, UserCommandCall)>,
+    has_process_running: Arc<AtomicBool>,
 }
 
 impl PluginManager {
@@ -28,65 +30,64 @@ impl PluginManager {
         let (text_view2, interface2, process_runner2) =
             (text_view.clone(), interface.clone(), process_runner.clone());
 
+        let has_process_running = Arc::new(AtomicBool::new(false));
+        let has_process_running2 = has_process_running.clone();
+        let has_process_running3 = has_process_running.clone();
+
         std::thread::spawn(move || 'user_command: loop {
-            let Ok((plugin_name, user_command_call)) = user_command_rx.recv() else {
+            let Ok((plugin_name, mut user_command_call)) = user_command_rx.recv() else {
                 break 'user_command;
             };
 
-            Self::plugin_request_loop(
-                user_command_call,
-                text_view.clone(),
-                plugin_name,
-                interface.clone(),
-                &process_runner,
-                false,
-            );
+            while let Some(req) = user_command_call.next() {
+                let Some(req_result) = PluginManager::exec_plugin_request(
+                    text_view.clone(),
+                    interface.clone(),
+                    plugin_name.clone(),
+                    &process_runner,
+                    &has_process_running2,
+                    false,
+                    req,
+                ) else {
+                    continue;
+                };
+
+                user_command_call.attach_request_result(req_result);
+            }
         });
 
         std::thread::spawn(move || 'serial_rx: loop {
-            let Ok((plugin_name, serial_rx_call)) = serial_rx_rx.recv() else {
+            let Ok((plugin_name, mut serial_rx_call)) = serial_rx_rx.recv() else {
                 break 'serial_rx;
             };
 
-            Self::plugin_request_loop(
-                serial_rx_call,
-                text_view2.clone(),
-                plugin_name,
-                interface2.clone(),
-                &process_runner2,
-                true,
-            );
+            while let Some(req) = serial_rx_call.next() {
+                let Some(req_result) = PluginManager::exec_plugin_request(
+                    text_view2.clone(),
+                    interface2.clone(),
+                    plugin_name.clone(),
+                    &process_runner2,
+                    &has_process_running3,
+                    true,
+                    req,
+                ) else {
+                    continue;
+                };
+
+                serial_rx_call.attach_request_result(req_result);
+            }
         });
 
         Self {
             plugins: HashMap::new(),
             serial_rx_tx,
             user_command_tx,
+            has_process_running,
         }
     }
 
-    fn plugin_request_loop<T: Iterator<Item = PluginRequest> + PluginRequestResultHolder>(
-        mut caller: T,
-        text_view: Arc<Mutex<TextView>>,
-        plugin_name: String,
-        interface: Arc<Mutex<SerialIF>>,
-        process_runner: &ProcessRunner,
-        is_from_serial_rx: bool,
-    ) {
-        while let Some(req) = caller.next() {
-            let Some(req_result) = PluginManager::exec_plugin_request(
-                text_view.clone(),
-                interface.clone(),
-                plugin_name.clone(),
-                process_runner,
-                is_from_serial_rx,
-                req,
-            ) else {
-                continue;
-            };
-
-            caller.attach_request_result(req_result);
-        }
+    pub fn has_process_running(&self) -> bool {
+        self.has_process_running.load(Ordering::SeqCst)
     }
 
     pub fn handle_plugin_command(
@@ -203,6 +204,7 @@ impl PluginManager {
         interface: Arc<Mutex<SerialIF>>,
         plugin_name: String,
         process_runner: &ProcessRunner,
+        has_running_process: &AtomicBool,
         is_from_serial_rx: bool,
         req: PluginRequest,
     ) -> Option<PluginRequestResult> {
@@ -240,7 +242,10 @@ impl PluginManager {
             PluginRequest::Sleep { time } => std::thread::sleep(time),
             PluginRequest::Exec { cmd } => {
                 if !is_from_serial_rx {
-                    return Some(process_runner.run(plugin_name, cmd).unwrap());
+                    has_running_process.store(true, Ordering::SeqCst);
+                    let res = Some(process_runner.run(plugin_name, cmd).unwrap());
+                    has_running_process.store(false, Ordering::SeqCst);
+                    return res;
                 } else {
                     Plugin::eprintln(
                         text_view,
