@@ -1,29 +1,26 @@
 use crate::messages::SerialRxData;
 use crate::rich_string::RichText;
+use crate::ConcreteBackend;
 use chrono::{DateTime, Local};
-use std::marker::PhantomData;
-use tui::backend::Backend;
 use tui::layout::Rect;
 use tui::style::{Color, Modifier, Style};
 use tui::text::{Span, Spans};
 use tui::widgets::{Block, BorderType, Borders, Paragraph};
 use tui::Frame;
 
-pub struct TextView<B: Backend> {
+pub struct TextView {
     history: Vec<ViewData>,
     capacity: usize,
-    _marker: PhantomData<B>,
     auto_scroll: bool,
     scroll: (u16, u16),
     frame_height: u16,
 }
 
-impl<B: Backend> TextView<B> {
+impl TextView {
     pub fn new(capacity: usize) -> Self {
         Self {
             history: vec![],
             capacity,
-            _marker: PhantomData,
             auto_scroll: true,
             scroll: (0, 0),
             frame_height: u16::MAX,
@@ -41,7 +38,7 @@ impl<B: Backend> TextView<B> {
         }
     }
 
-    pub fn draw(&self, f: &mut Frame<B>, rect: Rect) {
+    pub fn draw(&self, f: &mut Frame<ConcreteBackend>, rect: Rect) {
         let scroll = if self.auto_scroll {
             (self.max_main_axis(), self.scroll.1)
         } else {

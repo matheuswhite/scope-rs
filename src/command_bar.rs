@@ -4,6 +4,7 @@ use crate::messages::{SerialRxData, UserTxData};
 use crate::plugin_manager::PluginManager;
 use crate::serial::SerialIF;
 use crate::text::TextView;
+use crate::ConcreteBackend;
 use chrono::Local;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use rand::seq::SliceRandom;
@@ -16,23 +17,22 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
-use tui::backend::Backend;
 use tui::layout::{Constraint, Direction, Layout, Rect};
 use tui::style::{Color, Style};
 use tui::text::{Span, Spans};
 use tui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use tui::Frame;
 
-pub struct CommandBar<B: Backend> {
+pub struct CommandBar {
     interface: Arc<Mutex<SerialIF>>,
-    text_view: Arc<Mutex<TextView<B>>>,
+    text_view: Arc<Mutex<TextView>>,
     command_line: String,
     command_line_idx: usize,
     command_filepath: Option<PathBuf>,
     history: Vec<String>,
     history_index: Option<usize>,
     backup_command_line: String,
-    error_pop_up: Option<ErrorPopUp<B>>,
+    error_pop_up: Option<ErrorPopUp>,
     command_list: CommandList,
     key_receiver: Receiver<InputEvent>,
     current_hint: Option<&'static str>,
@@ -40,13 +40,13 @@ pub struct CommandBar<B: Backend> {
     plugin_manager: PluginManager,
 }
 
-impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
+impl CommandBar {
     const HEIGHT: u16 = 3;
 
     pub fn new(interface: SerialIF, view_capacity: usize) -> Self {
         let (key_sender, key_receiver) = channel();
 
-        thread::spawn(move || CommandBar::<B>::task(key_sender));
+        thread::spawn(move || CommandBar::task(key_sender));
 
         let hints = vec![
             "Type / to send a command",
@@ -103,13 +103,13 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
         }
     }
 
-    pub fn draw(&self, f: &mut Frame<B>) {
+    pub fn draw(&self, f: &mut Frame<ConcreteBackend>) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(
                 [
-                    Constraint::Length(f.size().height - CommandBar::<B>::HEIGHT),
-                    Constraint::Length(CommandBar::<B>::HEIGHT),
+                    Constraint::Length(f.size().height - CommandBar::HEIGHT),
+                    Constraint::Length(CommandBar::HEIGHT),
                 ]
                 .as_ref(),
             )
@@ -428,7 +428,7 @@ impl<B: Backend + Send + Sync + 'static> CommandBar<B> {
                             .replace([',', ' '], "")
                             .to_uppercase();
 
-                        let Ok(bytes) = CommandBar::<B>::hex_string_to_bytes(&command_line) else {
+                        let Ok(bytes) = CommandBar::hex_string_to_bytes(&command_line) else {
                             self.set_error_pop_up(format!("Invalid hex string: {}", command_line));
                             return Ok(());
                         };
@@ -554,7 +554,7 @@ impl CommandList {
         self.pattern = pattern;
     }
 
-    pub fn draw<B: Backend>(&self, f: &mut Frame<B>, command_bar_y: u16, color: Color) {
+    pub fn draw(&self, f: &mut Frame<ConcreteBackend>, command_bar_y: u16, color: Color) {
         if self.commands.is_empty() {
             return;
         }

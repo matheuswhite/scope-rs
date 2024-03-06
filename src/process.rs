@@ -5,19 +5,12 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use tui::backend::Backend;
 
-pub struct ProcessRunner<B>
-where
-    B: Backend + Sync + Send + 'static,
-{
-    text_view: Arc<Mutex<TextView<B>>>,
+pub struct ProcessRunner {
+    text_view: Arc<Mutex<TextView>>,
 }
 
-impl<B> Clone for ProcessRunner<B>
-where
-    B: Backend + Sync + Send + 'static,
-{
+impl Clone for ProcessRunner {
     fn clone(&self) -> Self {
         Self {
             text_view: self.text_view.clone(),
@@ -25,11 +18,8 @@ where
     }
 }
 
-impl<B> ProcessRunner<B>
-where
-    B: Backend + Sync + Send + 'static,
-{
-    pub fn new(text_view: Arc<Mutex<TextView<B>>>) -> Self {
+impl ProcessRunner {
+    pub fn new(text_view: Arc<Mutex<TextView>>) -> Self {
         Self { text_view }
     }
 

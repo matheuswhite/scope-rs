@@ -11,7 +11,6 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
-use tui::backend::Backend;
 
 pub struct PluginManager {
     plugins: HashMap<String, Plugin>,
@@ -20,10 +19,7 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
-    pub fn new<B: Backend + Sync + Send + 'static>(
-        interface: Arc<Mutex<SerialIF>>,
-        text_view: Arc<Mutex<TextView<B>>>,
-    ) -> Self {
+    pub fn new(interface: Arc<Mutex<SerialIF>>, text_view: Arc<Mutex<TextView>>) -> Self {
         let (serial_rx_tx, serial_rx_rx) = std::sync::mpsc::channel::<(String, SerialRxCall)>();
         let (user_command_tx, user_command_rx) =
             std::sync::mpsc::channel::<(String, UserCommandCall)>();
@@ -69,15 +65,12 @@ impl PluginManager {
         }
     }
 
-    fn plugin_request_loop<
-        T: Iterator<Item = PluginRequest> + PluginRequestResultHolder,
-        B: Backend + Sync + Send + 'static,
-    >(
+    fn plugin_request_loop<T: Iterator<Item = PluginRequest> + PluginRequestResultHolder>(
         mut caller: T,
-        text_view: Arc<Mutex<TextView<B>>>,
+        text_view: Arc<Mutex<TextView>>,
         plugin_name: String,
         interface: Arc<Mutex<SerialIF>>,
-        process_runner: &ProcessRunner<B>,
+        process_runner: &ProcessRunner,
         is_from_serial_rx: bool,
     ) {
         while let Some(req) = caller.next() {
@@ -205,11 +198,11 @@ impl PluginManager {
         }
     }
 
-    fn exec_plugin_request<B: Backend + Sync + Send + 'static>(
-        text_view: Arc<Mutex<TextView<B>>>,
+    fn exec_plugin_request(
+        text_view: Arc<Mutex<TextView>>,
         interface: Arc<Mutex<SerialIF>>,
         plugin_name: String,
-        process_runner: &ProcessRunner<B>,
+        process_runner: &ProcessRunner,
         is_from_serial_rx: bool,
         req: PluginRequest,
     ) -> Option<PluginRequestResult> {

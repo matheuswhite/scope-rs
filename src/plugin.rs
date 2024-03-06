@@ -7,7 +7,6 @@ use rlua::{Context, Function, Lua, RegistryKey, Table, Thread};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tui::backend::Backend;
 
 #[derive(Clone)]
 pub struct Plugin {
@@ -127,11 +126,7 @@ impl Plugin {
         Ok(Plugin { name, code })
     }
 
-    pub fn println<B: Backend + Sync + Send + 'static>(
-        text_view: Arc<Mutex<TextView<B>>>,
-        plugin_name: String,
-        content: String,
-    ) {
+    pub fn println(text_view: Arc<Mutex<TextView>>, plugin_name: String, content: String) {
         let mut text_view = text_view.lock().unwrap();
         text_view.add_data_out(SerialRxData::Plugin {
             timestamp: Local::now(),
@@ -141,11 +136,7 @@ impl Plugin {
         })
     }
 
-    pub fn eprintln<B: Backend + Sync + Send + 'static>(
-        text_view: Arc<Mutex<TextView<B>>>,
-        plugin_name: String,
-        content: String,
-    ) {
+    pub fn eprintln(text_view: Arc<Mutex<TextView>>, plugin_name: String, content: String) {
         let mut text_view = text_view.lock().unwrap();
         text_view.add_data_out(SerialRxData::Plugin {
             timestamp: Local::now(),

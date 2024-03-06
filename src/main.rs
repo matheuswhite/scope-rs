@@ -28,7 +28,7 @@ mod rich_string;
 mod serial;
 mod text;
 
-type ConcreteBackend = CrosstermBackend<Stdout>;
+pub type ConcreteBackend = CrosstermBackend<Stdout>;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -64,7 +64,7 @@ fn app() -> Result<(), String> {
     let mut terminal =
         Terminal::new(backend).map_err(|_| "Cannot create terminal backend".to_string())?;
 
-    let mut command_bar = CommandBar::<ConcreteBackend>::new(interface, view_length)
+    let mut command_bar = CommandBar::new(interface, view_length)
         .with_command_file(cmd_file.as_path().to_str().unwrap());
 
     'main: loop {
