@@ -1,14 +1,14 @@
 use crate::messages::{SerialRxData, UserTxData};
-use crate::plugin::{Plugin, PluginRequest, SerialRxCall, UserCommandCall};
+use crate::plugin::{
+    Plugin, PluginRequest, PluginRequestResult, PluginRequestResultHolder, SerialRxCall,
+    UserCommandCall,
+};
+use crate::process::ProcessRunner;
 use crate::serial::SerialIF;
 use crate::text::TextView;
-use chrono::Local;
 use std::collections::HashMap;
 use std::env;
-use std::io::{BufRead, BufReader, Lines, Read};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Mutex};
 use tui::backend::Backend;
@@ -27,22 +27,23 @@ impl PluginManager {
         let (serial_rx_tx, serial_rx_rx) = std::sync::mpsc::channel::<(String, SerialRxCall)>();
         let (user_command_tx, user_command_rx) =
             std::sync::mpsc::channel::<(String, UserCommandCall)>();
+        let process_runner = ProcessRunner::new(text_view.clone());
 
-        let (text_view2, interface2) = (text_view.clone(), interface.clone());
+        let (text_view2, interface2, process_runner2) =
+            (text_view.clone(), interface.clone(), process_runner.clone());
 
         std::thread::spawn(move || 'user_command: loop {
             let Ok((plugin_name, user_command_call)) = user_command_rx.recv() else {
                 break 'user_command;
             };
 
-            for req in user_command_call {
-                PluginManager::exec_plugin_request(
-                    text_view.clone(),
-                    interface.clone(),
-                    plugin_name.clone(),
-                    req,
-                );
-            }
+            Self::plugin_request_loop(
+                user_command_call,
+                text_view.clone(),
+                plugin_name,
+                interface.clone(),
+                &process_runner,
+            );
         });
 
         std::thread::spawn(move || 'serial_rx: loop {
@@ -50,20 +51,44 @@ impl PluginManager {
                 break 'serial_rx;
             };
 
-            for req in serial_rx_call {
-                PluginManager::exec_plugin_request(
-                    text_view2.clone(),
-                    interface2.clone(),
-                    plugin_name.clone(),
-                    req,
-                );
-            }
+            Self::plugin_request_loop(
+                serial_rx_call,
+                text_view2.clone(),
+                plugin_name,
+                interface2.clone(),
+                &process_runner2,
+            );
         });
 
         Self {
             plugins: HashMap::new(),
             serial_rx_tx,
             user_command_tx,
+        }
+    }
+
+    fn plugin_request_loop<
+        T: Iterator<Item = PluginRequest> + PluginRequestResultHolder,
+        B: Backend + Sync + Send + 'static,
+    >(
+        mut caller: T,
+        text_view: Arc<Mutex<TextView<B>>>,
+        plugin_name: String,
+        interface: Arc<Mutex<SerialIF>>,
+        process_runner: &ProcessRunner<B>,
+    ) {
+        while let Some(req) = caller.next() {
+            let Some(req_result) = PluginManager::exec_plugin_request(
+                text_view.clone(),
+                interface.clone(),
+                plugin_name.clone(),
+                process_runner,
+                req,
+            ) else {
+                continue;
+            };
+
+            caller.attach_request_result(req_result);
         }
     }
 
@@ -176,117 +201,19 @@ impl PluginManager {
         }
     }
 
-    fn plugin_println<B: Backend + Sync + Send + 'static>(
-        text_view: Arc<Mutex<TextView<B>>>,
-        plugin_name: String,
-        content: String,
-    ) {
-        let mut text_view = text_view.lock().unwrap();
-        text_view.add_data_out(SerialRxData::Plugin {
-            timestamp: Local::now(),
-            plugin_name,
-            content,
-            is_successful: true,
-        })
-    }
-
-    fn plugin_eprintln<B: Backend + Sync + Send + 'static>(
-        text_view: Arc<Mutex<TextView<B>>>,
-        plugin_name: String,
-        content: String,
-    ) {
-        let mut text_view = text_view.lock().unwrap();
-        text_view.add_data_out(SerialRxData::Plugin {
-            timestamp: Local::now(),
-            plugin_name,
-            content,
-            is_successful: false,
-        })
-    }
-
-    fn spawn_read_pipe<P>(
-        is_end: &'static AtomicBool,
-        mut pipe: Lines<BufReader<P>>,
-        mut print_fn: impl FnMut(String) + Send + 'static,
-    ) where
-        P: Read + Send + 'static,
-    {
-        std::thread::spawn(move || {
-            while is_end.load(Ordering::SeqCst) {
-                if let Some(Ok(line)) = pipe.next() {
-                    print_fn(line);
-                    // Self::plugin_println(text_view.clone(), plugin_name.clone(), line);
-                }
-            }
-
-            'read_loop: loop {
-                let stderr_next = pipe.next();
-
-                if stderr_next.is_none() {
-                    break 'read_loop;
-                }
-
-                if let Some(Ok(line)) = stderr_next {
-                    print_fn(line);
-                    // Self::plugin_println(text_view.clone(), plugin_name.clone(), line);
-                }
-            }
-        });
-    }
-
-    fn exec_process<B: Backend + Sync + Send + 'static>(
-        text_view: Arc<Mutex<TextView<B>>>,
-        plugin_name: String,
-        cmd: String,
-    ) -> Result<(), String> {
-        Self::plugin_println(text_view.clone(), plugin_name.clone(), cmd.clone());
-
-        let mut child = if cfg!(target_os = "windows") {
-            unimplemented!()
-        } else {
-            Command::new("sh")
-                .arg("-c")
-                .arg(cmd)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .map_err(|err| err.to_string())?
-        };
-
-        static IS_END: AtomicBool = AtomicBool::new(false);
-        let text_view2 = text_view.clone();
-        let plugin_name2 = plugin_name.clone();
-
-        let stdout = child.stdout.take().ok_or("Cannot get stdout".to_string())?;
-        let stdout = BufReader::new(stdout).lines();
-        Self::spawn_read_pipe(&IS_END, stdout, move |line| {
-            Self::plugin_println(text_view.clone(), plugin_name.clone(), line)
-        });
-
-        let stderr = child.stderr.take().ok_or("Cannot get stderr".to_string())?;
-        let stderr = BufReader::new(stderr).lines();
-        Self::spawn_read_pipe(&IS_END, stderr, move |line| {
-            Self::plugin_eprintln(text_view2.clone(), plugin_name2.clone(), line)
-        });
-
-        let _ = child.wait();
-        IS_END.store(true, Ordering::SeqCst);
-
-        Ok(())
-    }
-
     fn exec_plugin_request<B: Backend + Sync + Send + 'static>(
         text_view: Arc<Mutex<TextView<B>>>,
         interface: Arc<Mutex<SerialIF>>,
         plugin_name: String,
+        process_runner: &ProcessRunner<B>,
         req: PluginRequest,
-    ) {
+    ) -> Option<PluginRequestResult> {
         match req {
             PluginRequest::Println { msg } => {
-                Self::plugin_println(text_view, plugin_name, msg);
+                Plugin::println(text_view, plugin_name, msg);
             }
             PluginRequest::Eprintln { msg } => {
-                Self::plugin_eprintln(text_view, plugin_name, msg);
+                Plugin::eprintln(text_view, plugin_name, msg);
             }
             PluginRequest::Connect { .. } => {}
             PluginRequest::Disconnect => {}
@@ -314,8 +241,10 @@ impl PluginManager {
             }
             PluginRequest::Sleep { time } => std::thread::sleep(time),
             PluginRequest::Exec { cmd } => {
-                Self::exec_process(text_view, plugin_name, cmd).unwrap();
+                return Some(process_runner.run(plugin_name, cmd).unwrap());
             }
         }
+
+        None
     }
 }

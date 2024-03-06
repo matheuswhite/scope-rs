@@ -23,6 +23,7 @@ mod messages;
 mod plugin;
 mod plugin_installer;
 mod plugin_manager;
+mod process;
 mod rich_string;
 mod serial;
 mod text;

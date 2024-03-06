@@ -1,8 +1,13 @@
+use crate::messages::SerialRxData;
+use crate::text::TextView;
 use anyhow::Result;
+use chrono::Local;
 use homedir::get_my_home;
 use rlua::{Context, Function, Lua, RegistryKey, Table, Thread};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+use tui::backend::Backend;
 
 #[derive(Clone)]
 pub struct Plugin {
@@ -22,16 +27,50 @@ pub enum PluginRequest {
     Exec { cmd: String },
 }
 
+pub enum PluginRequestResult {
+    Exec {
+        stdout: Vec<String>,
+        stderr: Vec<String>,
+    },
+}
+
 pub struct SerialRxCall {
     lua: Lua,
     thread: RegistryKey,
     msg: Vec<u8>,
+    req_result: Option<PluginRequestResult>,
 }
 
 pub struct UserCommandCall {
     lua: Lua,
     thread: RegistryKey,
     arg_list: Vec<String>,
+    req_result: Option<PluginRequestResult>,
+}
+
+pub trait PluginRequestResultHolder {
+    fn attach_request_result(&mut self, request_result: PluginRequestResult);
+    fn take_request_result(&mut self) -> Option<PluginRequestResult>;
+}
+
+impl PluginRequestResultHolder for UserCommandCall {
+    fn attach_request_result(&mut self, request_result: PluginRequestResult) {
+        self.req_result = Some(request_result);
+    }
+
+    fn take_request_result(&mut self) -> Option<PluginRequestResult> {
+        self.req_result.take()
+    }
+}
+
+impl PluginRequestResultHolder for SerialRxCall {
+    fn attach_request_result(&mut self, request_result: PluginRequestResult) {
+        self.req_result = Some(request_result);
+    }
+
+    fn take_request_result(&mut self) -> Option<PluginRequestResult> {
+        self.req_result.take()
+    }
 }
 
 impl<'a> TryFrom<Table<'a>> for PluginRequest {
@@ -88,6 +127,34 @@ impl Plugin {
         Ok(Plugin { name, code })
     }
 
+    pub fn println<B: Backend + Sync + Send + 'static>(
+        text_view: Arc<Mutex<TextView<B>>>,
+        plugin_name: String,
+        content: String,
+    ) {
+        let mut text_view = text_view.lock().unwrap();
+        text_view.add_data_out(SerialRxData::Plugin {
+            timestamp: Local::now(),
+            plugin_name,
+            content,
+            is_successful: true,
+        })
+    }
+
+    pub fn eprintln<B: Backend + Sync + Send + 'static>(
+        text_view: Arc<Mutex<TextView<B>>>,
+        plugin_name: String,
+        content: String,
+    ) {
+        let mut text_view = text_view.lock().unwrap();
+        text_view.add_data_out(SerialRxData::Plugin {
+            timestamp: Local::now(),
+            plugin_name,
+            content,
+            is_successful: false,
+        })
+    }
+
     pub fn name(&self) -> &str {
         self.name.as_str()
     }
@@ -118,6 +185,7 @@ impl Plugin {
             lua,
             thread: serial_rx_reg.expect("Cannot get serial_rx register"),
             msg,
+            req_result: None,
         }
     }
 
@@ -147,6 +215,7 @@ impl Plugin {
             lua,
             thread: user_command_reg.expect("Cannot get user_command register"),
             arg_list,
+            req_result: None,
         }
     }
 
@@ -218,6 +287,7 @@ impl Iterator for SerialRxCall {
     type Item = PluginRequest;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let req_result = self.take_request_result();
         let thread = &self.thread;
         let msg = self.msg.clone();
 
@@ -226,7 +296,24 @@ impl Iterator for SerialRxCall {
                 .registry_value(thread)
                 .expect("Cannot get serial_rx register");
 
-            resume_lua_thread(&serial_rx, msg)
+            let Some(req_result) = req_result else {
+                return resume_lua_thread(&serial_rx, msg);
+            };
+
+            match req_result {
+                PluginRequestResult::Exec { stdout, stderr } => {
+                    match serial_rx.resume::<_, Table>((msg, stdout, stderr)) {
+                        Ok(req) => {
+                            let req: PluginRequest = match req.try_into() {
+                                Ok(req) => req,
+                                Err(msg) => return Some(PluginRequest::Eprintln { msg }),
+                            };
+                            Some(req)
+                        }
+                        Err(_) => None,
+                    }
+                }
+            }
         })
     }
 }
@@ -235,6 +322,7 @@ impl Iterator for UserCommandCall {
     type Item = PluginRequest;
 
     fn next(&mut self) -> Option<Self::Item> {
+        let req_result = self.take_request_result();
         let thread = &self.thread;
         let arg_list = self.arg_list.clone();
 
@@ -243,14 +331,31 @@ impl Iterator for UserCommandCall {
                 .registry_value(thread)
                 .expect("Cannot get user_command register");
 
-            resume_lua_thread(&user_command, arg_list)
+            let Some(req_result) = req_result else {
+                return resume_lua_thread(&user_command, arg_list);
+            };
+
+            match req_result {
+                PluginRequestResult::Exec { stdout, stderr } => {
+                    match user_command.resume::<_, Table>((arg_list, stdout, stderr)) {
+                        Ok(req) => {
+                            let req: PluginRequest = match req.try_into() {
+                                Ok(req) => req,
+                                Err(msg) => return Some(PluginRequest::Eprintln { msg }),
+                            };
+                            Some(req)
+                        }
+                        Err(_) => None,
+                    }
+                }
+            }
         })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::plugin::{Plugin, PluginRequest};
+    use crate::plugin::{Plugin, PluginRequest, PluginRequestResult, PluginRequestResultHolder};
     use crate::plugin_installer::PluginInstaller;
     use std::env::current_dir;
     use std::path::{Path, PathBuf};
@@ -278,15 +383,25 @@ mod tests {
             return std::env::set_current_dir(old_dir).map_err(|err| err.to_string());
         };
 
-        let cmd_call = west.user_command_call(
-            vec!["build", "-p", "-b", "nrf52dk_nrf52832"]
-                .into_iter()
-                .map(|x| x.to_string())
-                .collect(),
-        );
+        let west_build = || {
+            let mut cmd_call = west.user_command_call(
+                vec!["build", "-p", "-b", "nrf52dk_nrf52832"]
+                    .into_iter()
+                    .map(|x| x.to_string())
+                    .collect(),
+            );
 
-        for req in cmd_call {
-            dbg!(req);
+            while let Some(req) = cmd_call.next() {
+                dbg!(req);
+                cmd_call.attach_request_result(PluginRequestResult::Exec {
+                    stdout: vec!["/home/matheuswhite/zephyrproject/zephyr".to_string()],
+                    stderr: vec![],
+                });
+            }
+        };
+
+        for _ in 0..2 {
+            west_build();
         }
 
         std::env::set_current_dir(old_dir).map_err(|err| err.to_string())

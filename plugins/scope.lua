@@ -53,6 +53,7 @@ scope = {
         coroutine.yield({ ":sleep", time })
     end,
     exec = function(cmd)
-        coroutine.yield({ ":exec", cmd })
+        local _, stdout, stderr = coroutine.yield({ ":exec", cmd })
+        return stdout, stderr
     end
 }
