@@ -238,6 +238,9 @@ impl CommandBar {
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.error_pop_up.take();
             }
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
+                self.plugin_manager.stop_process();
+            }
             KeyCode::Char(c) => {
                 self.clear_hint();
 

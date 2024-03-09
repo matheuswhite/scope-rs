@@ -23,7 +23,12 @@ impl ProcessRunner {
         Self { text_view }
     }
 
-    pub fn run(&self, plugin_name: String, cmd: String) -> Result<PluginRequestResult, String> {
+    pub fn run(
+        &self,
+        plugin_name: String,
+        cmd: String,
+        stop_process_flag: Arc<AtomicBool>,
+    ) -> Result<PluginRequestResult, String> {
         Plugin::println(self.text_view.clone(), plugin_name.clone(), cmd.clone());
 
         let mut child = if cfg!(target_os = "windows") {
@@ -46,17 +51,24 @@ impl ProcessRunner {
 
         let stdout = child.stdout.take().ok_or("Cannot get stdout".to_string())?;
         let stdout = BufReader::new(stdout).lines();
-        let stdout_pipe = Self::spawn_read_pipe(&IS_END, stdout, move |line| {
-            Plugin::println(text_view2.clone(), plugin_name.clone(), line.clone());
-        });
+        let stdout_pipe =
+            Self::spawn_read_pipe(&IS_END, stop_process_flag.clone(), stdout, move |line| {
+                Plugin::println(text_view2.clone(), plugin_name.clone(), line.clone());
+            });
 
         let stderr = child.stderr.take().ok_or("Cannot get stderr".to_string())?;
         let stderr = BufReader::new(stderr).lines();
-        let stderr_pipe = Self::spawn_read_pipe(&IS_END, stderr, move |line| {
-            Plugin::eprintln(text_view3.clone(), plugin_name2.clone(), line)
-        });
+        let stderr_pipe =
+            Self::spawn_read_pipe(&IS_END, stop_process_flag.clone(), stderr, move |line| {
+                Plugin::eprintln(text_view3.clone(), plugin_name2.clone(), line)
+            });
 
-        let _ = child.wait();
+        'wait_loop: while let Ok(None) = child.try_wait() {
+            if stop_process_flag.load(Ordering::SeqCst) {
+                break 'wait_loop;
+            }
+        }
+
         IS_END.store(true, Ordering::SeqCst);
 
         Ok(PluginRequestResult::Exec {
@@ -67,6 +79,7 @@ impl ProcessRunner {
 
     fn spawn_read_pipe<P>(
         is_end: &'static AtomicBool,
+        stop_process_flag: Arc<AtomicBool>,
         mut pipe: Lines<BufReader<P>>,
         mut print_fn: impl FnMut(String) + Send + 'static,
     ) -> JoinHandle<Vec<String>>
@@ -77,6 +90,10 @@ impl ProcessRunner {
             let mut buffer = vec![];
 
             while is_end.load(Ordering::SeqCst) {
+                if stop_process_flag.load(Ordering::SeqCst) {
+                    break;
+                }
+
                 if let Some(Ok(line)) = pipe.next() {
                     buffer.push(line.clone());
                     print_fn(line);
@@ -84,6 +101,10 @@ impl ProcessRunner {
             }
 
             while let Some(Ok(line)) = pipe.next() {
+                if stop_process_flag.load(Ordering::SeqCst) {
+                    break;
+                }
+
                 buffer.push(line.clone());
                 print_fn(line);
             }
