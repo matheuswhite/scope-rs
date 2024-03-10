@@ -45,6 +45,10 @@ const CMD_FILEPATH: &str = "cmds.yaml";
 const CAPACITY: usize = 2000;
 
 fn app() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    ctrlc::set_handler(|| { /* Do nothing on user ctrl+c */ })
+        .expect("Error setting Ctrl-C handler");
+
     let plugin_installer = PluginInstaller;
 
     plugin_installer.post()?;

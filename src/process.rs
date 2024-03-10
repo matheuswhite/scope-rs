@@ -32,7 +32,14 @@ impl ProcessRunner {
         Plugin::println(self.text_view.clone(), plugin_name.clone(), cmd.clone());
 
         let mut child = if cfg!(target_os = "windows") {
-            unimplemented!()
+            Command::new("cmd")
+                .arg("/C")
+                .arg(cmd)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .stdin(Stdio::null())
+                .spawn()
+                .map_err(|err| err.to_string())?
         } else {
             Command::new("sh")
                 .arg("-c")
@@ -65,6 +72,7 @@ impl ProcessRunner {
 
         'wait_loop: while let Ok(None) = child.try_wait() {
             if stop_process_flag.load(Ordering::SeqCst) {
+                let _ = child.kill();
                 break 'wait_loop;
             }
         }
@@ -91,7 +99,7 @@ impl ProcessRunner {
 
             while is_end.load(Ordering::SeqCst) {
                 if stop_process_flag.load(Ordering::SeqCst) {
-                    break;
+                    return buffer;
                 }
 
                 if let Some(Ok(line)) = pipe.next() {
@@ -102,7 +110,7 @@ impl ProcessRunner {
 
             while let Some(Ok(line)) = pipe.next() {
                 if stop_process_flag.load(Ordering::SeqCst) {
-                    break;
+                    return buffer;
                 }
 
                 buffer.push(line.clone());
