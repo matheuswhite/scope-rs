@@ -32,4 +32,5 @@ rlua = "0.19.8"
 anyhow = "1.0.79"
 homedir = "0.2.1"
 regex = { version = "1.10.3", features = [] }
+[target.'cfg(windows)'.dependencies]
 ctrlc = "3.4.3"
