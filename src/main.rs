@@ -23,11 +23,12 @@ mod messages;
 mod plugin;
 mod plugin_installer;
 mod plugin_manager;
+mod process;
 mod rich_string;
 mod serial;
 mod text;
 
-type ConcreteBackend = CrosstermBackend<Stdout>;
+pub type ConcreteBackend = CrosstermBackend<Stdout>;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -44,6 +45,10 @@ const CMD_FILEPATH: &str = "cmds.yaml";
 const CAPACITY: usize = 2000;
 
 fn app() -> Result<(), String> {
+    #[cfg(target_os = "windows")]
+    ctrlc::set_handler(|| { /* Do nothing on user ctrl+c */ })
+        .expect("Error setting Ctrl-C handler");
+
     let plugin_installer = PluginInstaller;
 
     plugin_installer.post()?;
@@ -63,7 +68,7 @@ fn app() -> Result<(), String> {
     let mut terminal =
         Terminal::new(backend).map_err(|_| "Cannot create terminal backend".to_string())?;
 
-    let mut command_bar = CommandBar::<ConcreteBackend>::new(interface, view_length)
+    let mut command_bar = CommandBar::new(interface, view_length)
         .with_command_file(cmd_file.as_path().to_str().unwrap());
 
     'main: loop {

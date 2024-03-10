@@ -22,6 +22,14 @@ function str2bytes(str)
     return bytes
 end
 
+function osname()
+    if os.getenv('OS') == 'Windows_NT' then
+        return "win"
+    else
+        return "unix"
+    end
+end
+
 scope = {
     println = function(msg)
         coroutine.yield({ ":println", msg })
@@ -43,5 +51,9 @@ scope = {
     end,
     sleep = function(time)
         coroutine.yield({ ":sleep", time })
+    end,
+    exec = function(cmd)
+        local _, stdout, stderr = coroutine.yield({ ":exec", cmd })
+        return stdout, stderr
     end
 }
