@@ -11,11 +11,11 @@ use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
+use ratatui::backend::{Backend, CrosstermBackend};
+use ratatui::Terminal;
 use std::io;
 use std::io::Stdout;
 use std::path::PathBuf;
-use tui::backend::{Backend, CrosstermBackend};
-use tui::Terminal;
 
 mod command_bar;
 mod error_pop_up;

@@ -1,12 +1,11 @@
 use crate::messages::SerialRxData;
 use crate::rich_string::RichText;
-use crate::ConcreteBackend;
 use chrono::{DateTime, Local};
-use tui::layout::Rect;
-use tui::style::{Color, Modifier, Style};
-use tui::text::{Span, Spans};
-use tui::widgets::{Block, BorderType, Borders, Paragraph};
-use tui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
+use ratatui::Frame;
 
 pub struct TextView {
     history: Vec<ViewData>,
@@ -38,7 +37,7 @@ impl TextView {
         }
     }
 
-    pub fn draw(&self, f: &mut Frame<ConcreteBackend>, rect: Rect) {
+    pub fn draw(&self, f: &mut Frame, rect: Rect) {
         let scroll = if self.auto_scroll {
             (self.max_main_axis(), self.scroll.1)
         } else {
@@ -87,7 +86,7 @@ impl TextView {
                     }))
                     .collect::<Vec<_>>();
 
-                Spans::from(content)
+                Line::from(content)
             })
             .collect::<Vec<_>>();
         let paragraph = Paragraph::new(text).block(block);

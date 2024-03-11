@@ -1,7 +1,7 @@
 use crate::rich_string::RichText;
 use crate::text::ViewData;
 use chrono::{DateTime, Local};
-use tui::style::Color;
+use ratatui::style::Color;
 
 pub enum UserTxData {
     Exit,

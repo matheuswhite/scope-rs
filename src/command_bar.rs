@@ -4,10 +4,14 @@ use crate::messages::{SerialRxData, UserTxData};
 use crate::plugin_manager::PluginManager;
 use crate::serial::SerialIF;
 use crate::text::TextView;
-use crate::ConcreteBackend;
 use chrono::Local;
 use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
 use rand::seq::SliceRandom;
+use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
+use ratatui::Frame;
 use std::cmp::{max, min};
 use std::collections::btree_map::BTreeMap;
 use std::collections::HashMap;
@@ -17,11 +21,6 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::thread::sleep;
 use std::time::Duration;
-use tui::layout::{Constraint, Direction, Layout, Rect};
-use tui::style::{Color, Style};
-use tui::text::{Span, Spans};
-use tui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
-use tui::Frame;
 
 pub struct CommandBar {
     interface: Arc<Mutex<SerialIF>>,
@@ -103,7 +102,7 @@ impl CommandBar {
         }
     }
 
-    pub fn draw(&self, f: &mut Frame<ConcreteBackend>) {
+    pub fn draw(&self, f: &mut Frame) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(
@@ -567,7 +566,7 @@ impl CommandList {
         self.pattern = pattern;
     }
 
-    pub fn draw(&self, f: &mut Frame<ConcreteBackend>, command_bar_y: u16, color: Color) {
+    pub fn draw(&self, f: &mut Frame, command_bar_y: u16, color: Color) {
         if self.commands.is_empty() {
             return;
         }
@@ -598,7 +597,7 @@ impl CommandList {
                 let is_last =
                     (x == commands.last().unwrap()) && (commands.len() < self.commands.len());
 
-                Spans::from(vec![
+                Line::from(vec![
                     Span::styled(
                         format!(" {}", if !is_last { &self.pattern } else { "" }),
                         Style::default().fg(color),
