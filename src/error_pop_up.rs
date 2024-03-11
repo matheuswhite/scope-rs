@@ -1,10 +1,9 @@
-use crate::ConcreteBackend;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::Frame;
 use std::time::{Duration, Instant};
-use tui::layout::{Alignment, Rect};
-use tui::style::{Color, Style};
-use tui::text::Span;
-use tui::widgets::{Block, Borders, Clear, Paragraph};
-use tui::Frame;
 
 pub struct ErrorPopUp {
     message: String,
@@ -21,7 +20,7 @@ impl ErrorPopUp {
         }
     }
 
-    pub fn draw(&self, f: &mut Frame<ConcreteBackend>, command_bar_y: u16) {
+    pub fn draw(&self, f: &mut Frame, command_bar_y: u16) {
         let area_size = (self.message.chars().count() as u16 + 4, 3);
         let area = Rect::new(
             (f.size().width - area_size.0) / 2,

@@ -1,8 +1,8 @@
 use crate::text::ViewData;
 use chrono::{DateTime, Local};
+use ratatui::style::{Color, Style};
+use ratatui::text::Span;
 use std::collections::HashMap;
-use tui::style::{Color, Style};
-use tui::text::Span;
 
 pub struct RichText {
     content: Vec<u8>,
