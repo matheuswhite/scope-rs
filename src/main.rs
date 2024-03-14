@@ -44,7 +44,7 @@ struct Cli {
 const CMD_FILEPATH: &str = "cmds.yaml";
 const CAPACITY: usize = 2000;
 
-fn app() -> Result<(), String> {
+async fn app() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     ctrlc::set_handler(|| { /* Do nothing on user ctrl+c */ })
         .expect("Error setting Ctrl-C handler");
@@ -72,12 +72,17 @@ fn app() -> Result<(), String> {
         .with_command_file(cmd_file.as_path().to_str().unwrap());
 
     'main: loop {
-        terminal
-            .draw(|f| command_bar.draw(f))
-            .map_err(|_| "Fail at terminal draw".to_string())?;
+        {
+            let text_view = command_bar.get_text_view().await;
+            let interface = command_bar.get_interface().await;
+            terminal
+                .draw(|f| command_bar.draw(f, &text_view, &interface))
+                .map_err(|_| "Fail at terminal draw".to_string())?;
+        }
 
         if command_bar
             .update(terminal.backend().size().unwrap())
+            .await
             .is_err()
         {
             break 'main;
@@ -98,8 +103,9 @@ fn app() -> Result<(), String> {
     Ok(())
 }
 
-fn main() {
-    if let Err(err) = app() {
+#[tokio::main]
+async fn main() {
+    if let Err(err) = app().await {
         println!("[\x1b[31mERR\x1b[0m] {}", err);
     }
 }

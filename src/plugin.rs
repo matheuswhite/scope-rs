@@ -5,8 +5,9 @@ use chrono::Local;
 use homedir::get_my_home;
 use rlua::{Context, Function, Lua, RegistryKey, Table, Thread};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::Mutex;
 
 #[derive(Clone)]
 pub struct Plugin {
@@ -126,8 +127,8 @@ impl Plugin {
         Ok(Plugin { name, code })
     }
 
-    pub fn println(text_view: Arc<Mutex<TextView>>, plugin_name: String, content: String) {
-        let mut text_view = text_view.lock().unwrap();
+    pub async fn println(text_view: Arc<Mutex<TextView>>, plugin_name: String, content: String) {
+        let mut text_view = text_view.lock().await;
         text_view.add_data_out(SerialRxData::Plugin {
             timestamp: Local::now(),
             plugin_name,
@@ -136,8 +137,8 @@ impl Plugin {
         })
     }
 
-    pub fn eprintln(text_view: Arc<Mutex<TextView>>, plugin_name: String, content: String) {
-        let mut text_view = text_view.lock().unwrap();
+    pub async fn eprintln(text_view: Arc<Mutex<TextView>>, plugin_name: String, content: String) {
+        let mut text_view = text_view.lock().await;
         text_view.add_data_out(SerialRxData::Plugin {
             timestamp: Local::now(),
             plugin_name,

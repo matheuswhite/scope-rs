@@ -1,16 +1,16 @@
 use crate::messages::{SerialRxData, UserTxData};
 use chrono::Local;
-use serialport::{self, SerialPort};
-use std::io::{Read, Write};
+use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::{channel, Receiver, RecvError, Sender, TryRecvError};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use std::{io, thread};
+use tokio::sync::mpsc::error::TryRecvError;
+use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio_serial::SerialPort;
 
 pub struct SerialIF {
-    serial_tx: Sender<UserTxData>,
-    data_rx: Receiver<SerialRxData>,
+    serial_tx: UnboundedSender<UserTxData>,
+    data_rx: UnboundedReceiver<SerialRxData>,
     port: String,
     baudrate: u32,
     is_connected: Arc<AtomicBool>,
@@ -34,12 +34,12 @@ impl SerialIF {
         self.serial_tx.send(data).unwrap();
     }
 
-    pub fn try_recv(&self) -> Result<SerialRxData, TryRecvError> {
+    pub fn try_recv(&mut self) -> Result<SerialRxData, TryRecvError> {
         self.data_rx.try_recv()
     }
 
-    pub fn recv(&self) -> Result<SerialRxData, RecvError> {
-        self.data_rx.recv()
+    pub async fn recv(&mut self) -> Option<SerialRxData> {
+        self.data_rx.recv().await
     }
 
     pub fn description(&self) -> String {
@@ -47,21 +47,22 @@ impl SerialIF {
     }
 
     pub fn new(port: &str, baudrate: u32) -> Self {
-        let (serial_tx, serial_rx) = channel();
-        let (data_tx, data_rx) = channel();
+        let (serial_tx, serial_rx) = unbounded_channel();
+        let (data_tx, data_rx) = unbounded_channel();
 
         let is_connected = Arc::new(AtomicBool::new(false));
 
         let port_clone = port.to_string();
         let is_connected_clone = is_connected.clone();
-        thread::spawn(move || {
+        tokio::task::spawn_local(async move {
             SerialIF::send_task(
                 &port_clone,
                 baudrate,
                 serial_rx,
                 data_tx,
                 is_connected_clone,
-            );
+            )
+            .await;
         });
 
         Self {
@@ -73,33 +74,33 @@ impl SerialIF {
         }
     }
 
-    fn reconnect(
+    async fn reconnect(
         port: &str,
         baudrate: u32,
         interval: Duration,
         is_connected: Arc<AtomicBool>,
     ) -> Box<dyn SerialPort> {
         'reconnect: loop {
-            if let Ok(serial) = serialport::new(port, baudrate)
-                .data_bits(serialport::DataBits::Eight)
-                .flow_control(serialport::FlowControl::Hardware)
-                .parity(serialport::Parity::None)
-                .stop_bits(serialport::StopBits::One)
+            if let Ok(serial) = tokio_serial::new(port, baudrate)
+                .data_bits(tokio_serial::DataBits::Eight)
+                .flow_control(tokio_serial::FlowControl::Hardware)
+                .parity(tokio_serial::Parity::None)
+                .stop_bits(tokio_serial::StopBits::One)
                 .timeout(SerialIF::SERIAL_TIMEOUT)
                 .open()
             {
                 is_connected.store(true, Ordering::SeqCst);
                 break 'reconnect serial;
             }
-            thread::sleep(interval);
+            tokio::time::sleep(interval).await;
         }
     }
 
-    fn send_task(
+    async fn send_task(
         port: &str,
         baudrate: u32,
-        serial_rx: Receiver<UserTxData>,
-        data_tx: Sender<SerialRxData>,
+        mut serial_rx: UnboundedReceiver<UserTxData>,
+        data_tx: UnboundedSender<SerialRxData>,
         is_connected: Arc<AtomicBool>,
     ) {
         let mut serial = SerialIF::reconnect(
@@ -107,7 +108,8 @@ impl SerialIF {
             baudrate,
             SerialIF::RECONNECT_INTERVAL,
             is_connected.clone(),
-        );
+        )
+        .await;
 
         let mut line = vec![];
         let mut buffer = [0u8];
@@ -235,7 +237,8 @@ impl SerialIF {
                         baudrate,
                         SerialIF::RECONNECT_INTERVAL,
                         is_connected.clone(),
-                    );
+                    )
+                    .await;
                 }
                 Err(_e) => {}
             }
