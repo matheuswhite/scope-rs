@@ -15,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Install libudev-sys
+    - name: Install libudev-sys and Lua5.4
       run: sudo apt-get install -y libudev-dev liblua5.4-dev
     - name: Build
       run: cargo build --verbose
@@ -24,6 +24,8 @@ jobs:
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v3
+    - uses: ilammy/msvc-dev-cmd@v1
+    - uses: leafo/gh-actions-lua@v10
     - name: Build
       run: cargo build --verbose
   build-macos:
@@ -31,5 +33,7 @@ jobs:
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v3
+    - name: Install Lua5.4
+      run: brew install lua
     - name: Build
       run: cargo build --verbose
