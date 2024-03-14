@@ -6,6 +6,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::mpsc::error::TryRecvError;
 use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
+use tokio::task::LocalSet;
 use tokio_serial::SerialPort;
 
 pub struct SerialIF {
@@ -46,7 +47,7 @@ impl SerialIF {
         format!("Serial {}:{}bps", self.port, self.baudrate)
     }
 
-    pub fn new(port: &str, baudrate: u32) -> Self {
+    pub async fn new(port: &str, baudrate: u32, local: Arc<LocalSet>) -> Self {
         let (serial_tx, serial_rx) = unbounded_channel();
         let (data_tx, data_rx) = unbounded_channel();
 
@@ -54,7 +55,8 @@ impl SerialIF {
 
         let port_clone = port.to_string();
         let is_connected_clone = is_connected.clone();
-        tokio::task::spawn_local(async move {
+
+        local.spawn_local(async move {
             SerialIF::send_task(
                 &port_clone,
                 baudrate,

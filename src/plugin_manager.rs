@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
+use tokio::task::LocalSet;
 
 pub struct PluginManager {
     text_view: Arc<Mutex<TextView>>,
@@ -24,7 +25,11 @@ pub struct PluginManager {
 }
 
 impl PluginManager {
-    pub fn new(interface: Arc<Mutex<SerialIF>>, text_view: Arc<Mutex<TextView>>) -> Self {
+    pub fn new(
+        interface: Arc<Mutex<SerialIF>>,
+        text_view: Arc<Mutex<TextView>>,
+        local: Arc<LocalSet>,
+    ) -> Self {
         let (serial_rx_tx, mut serial_rx_rx) =
             tokio::sync::mpsc::unbounded_channel::<(String, SerialRxCall)>();
         let (user_command_tx, mut user_command_rx) =
@@ -43,7 +48,10 @@ impl PluginManager {
         let stop_process_flag2 = stop_process_flag.clone();
         let stop_process_flag3 = stop_process_flag.clone();
 
-        tokio::task::spawn_local(async move {
+        let local2 = local.clone();
+        let local3 = local.clone();
+
+        local.spawn_local(async move {
             'user_command: loop {
                 let Some((plugin_name, mut user_command_call)) = user_command_rx.recv().await
                 else {
@@ -60,6 +68,7 @@ impl PluginManager {
                         stop_process_flag2.clone(),
                         false,
                         req,
+                        local2.clone(),
                     )
                     .await
                     else {
@@ -71,7 +80,7 @@ impl PluginManager {
             }
         });
 
-        tokio::task::spawn_local(async move {
+        local.spawn_local(async move {
             'serial_rx: loop {
                 let Some((plugin_name, mut serial_rx_call)) = serial_rx_rx.recv().await else {
                     break 'serial_rx;
@@ -87,6 +96,7 @@ impl PluginManager {
                         stop_process_flag3.clone(),
                         true,
                         req,
+                        local3.clone(),
                     )
                     .await
                     else {
@@ -242,6 +252,7 @@ impl PluginManager {
         stop_process_flag: Arc<AtomicBool>,
         is_from_serial_rx: bool,
         req: PluginRequest,
+        local: Arc<LocalSet>,
     ) -> Option<PluginRequestResult> {
         match req {
             PluginRequest::Println { msg } => {
@@ -280,7 +291,7 @@ impl PluginManager {
                     has_running_process.store(true, Ordering::SeqCst);
                     let res = Some(
                         process_runner
-                            .run(plugin_name, cmd, stop_process_flag.clone())
+                            .run(plugin_name, cmd, stop_process_flag.clone(), local)
                             .await
                             .unwrap(),
                     );

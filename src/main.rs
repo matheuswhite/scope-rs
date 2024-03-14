@@ -16,6 +16,7 @@ use ratatui::Terminal;
 use std::io;
 use std::io::Stdout;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 mod command_bar;
 mod error_pop_up;
@@ -55,7 +56,9 @@ async fn app() -> Result<(), String> {
 
     let cli = Cli::parse();
 
-    let interface = SerialIF::new(&cli.port, cli.baudrate);
+    let local = Arc::new(tokio::task::LocalSet::new());
+
+    let interface = SerialIF::new(&cli.port, cli.baudrate, local.clone()).await;
 
     let view_length = cli.view_length.unwrap_or(CAPACITY);
     let cmd_file = cli.cmd_file.unwrap_or(PathBuf::from(CMD_FILEPATH));
@@ -68,7 +71,7 @@ async fn app() -> Result<(), String> {
     let mut terminal =
         Terminal::new(backend).map_err(|_| "Cannot create terminal backend".to_string())?;
 
-    let mut command_bar = CommandBar::new(interface, view_length)
+    let mut command_bar = CommandBar::new(interface, view_length, local)
         .with_command_file(cmd_file.as_path().to_str().unwrap());
 
     'main: loop {
