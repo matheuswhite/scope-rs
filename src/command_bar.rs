@@ -5,7 +5,8 @@ use crate::plugin_manager::PluginManager;
 use crate::serial::SerialIF;
 use crate::text::TextView;
 use chrono::Local;
-use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use futures::StreamExt;
 use rand::seq::SliceRandom;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
@@ -16,11 +17,11 @@ use std::cmp::{max, min};
 use std::collections::btree_map::BTreeMap;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver, Sender};
-use std::sync::{Arc, Mutex};
-use std::thread;
-use std::thread::sleep;
+use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::{Mutex, MutexGuard};
+use tokio::time::sleep;
 
 pub struct CommandBar {
     interface: Arc<Mutex<SerialIF>>,
@@ -33,7 +34,7 @@ pub struct CommandBar {
     backup_command_line: String,
     error_pop_up: Option<ErrorPopUp>,
     command_list: CommandList,
-    key_receiver: Receiver<InputEvent>,
+    key_receiver: UnboundedReceiver<InputEvent>,
     current_hint: Option<&'static str>,
     hints: Vec<&'static str>,
     plugin_manager: PluginManager,
@@ -43,9 +44,11 @@ impl CommandBar {
     const HEIGHT: u16 = 3;
 
     pub fn new(interface: SerialIF, view_capacity: usize) -> Self {
-        let (key_sender, key_receiver) = channel();
+        let (key_sender, key_receiver) = tokio::sync::mpsc::unbounded_channel();
 
-        thread::spawn(move || CommandBar::task(key_sender));
+        tokio::spawn(async move {
+            CommandBar::task(key_sender).await;
+        });
 
         let hints = vec![
             "Type / to send a command",
@@ -81,28 +84,44 @@ impl CommandBar {
         self
     }
 
-    fn task(sender: Sender<InputEvent>) {
+    async fn task(sender: UnboundedSender<InputEvent>) {
+        let mut reader = EventStream::new();
+
         loop {
-            match crossterm::event::read().unwrap() {
-                Event::Mouse(mouse_evt) if mouse_evt.modifiers == KeyModifiers::CONTROL => {
-                    match mouse_evt.kind {
-                        MouseEventKind::ScrollUp => sender.send(HorizontalScroll(-1)).unwrap(),
-                        MouseEventKind::ScrollDown => sender.send(HorizontalScroll(1)).unwrap(),
-                        _ => {}
+            let event = reader.next().await;
+
+            match event {
+                Some(Ok(event)) => match event {
+                    Event::Mouse(mouse_evt) if mouse_evt.modifiers == KeyModifiers::CONTROL => {
+                        match mouse_evt.kind {
+                            MouseEventKind::ScrollUp => sender.send(HorizontalScroll(-1)).unwrap(),
+                            MouseEventKind::ScrollDown => sender.send(HorizontalScroll(1)).unwrap(),
+                            _ => {}
+                        }
                     }
-                }
-                Event::Key(key) => sender.send(Key(key)).unwrap(),
-                Event::Mouse(mouse_evt) => match mouse_evt.kind {
-                    MouseEventKind::ScrollUp => sender.send(VerticalScroll(-1)).unwrap(),
-                    MouseEventKind::ScrollDown => sender.send(VerticalScroll(1)).unwrap(),
+                    Event::Key(key) => sender.send(Key(key)).unwrap(),
+                    Event::Mouse(mouse_evt) => match mouse_evt.kind {
+                        MouseEventKind::ScrollUp => sender.send(VerticalScroll(-1)).unwrap(),
+                        MouseEventKind::ScrollDown => sender.send(VerticalScroll(1)).unwrap(),
+                        _ => {}
+                    },
                     _ => {}
                 },
-                _ => {}
+                Some(Err(e)) => panic!("Error at command bar task: {:?}", e),
+                None => break,
             }
         }
     }
 
-    pub fn draw(&self, f: &mut Frame) {
+    pub async fn get_text_view(&self) -> MutexGuard<TextView> {
+        self.text_view.lock().await
+    }
+
+    pub async fn get_interface(&self) -> MutexGuard<SerialIF> {
+        self.interface.lock().await
+    }
+
+    pub fn draw(&self, f: &mut Frame<'_>, text_view: &TextView, interface: &SerialIF) {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints(
@@ -114,15 +133,9 @@ impl CommandBar {
             )
             .split(f.size());
 
-        {
-            let text_view = self.text_view.lock().unwrap();
-            text_view.draw(f, chunks[0]);
-        }
+        text_view.draw(f, chunks[0]);
 
-        let (description, is_connected) = {
-            let interface = self.interface.lock().unwrap();
-            (interface.description(), interface.is_connected())
-        };
+        let (description, is_connected) = (interface.description(), interface.is_connected());
 
         let cursor_pos = (
             chunks[1].x + self.command_line_idx as u16 + 2,
@@ -228,17 +241,17 @@ impl CommandBar {
         self.current_hint = None;
     }
 
-    fn handle_key_input(&mut self, key: KeyEvent, _term_size: Rect) -> Result<(), ()> {
+    async fn handle_key_input(&mut self, key: KeyEvent, _term_size: Rect) -> Result<(), ()> {
         match key.code {
             KeyCode::Char('l') if key.modifiers == KeyModifiers::CONTROL => {
-                let mut text_view = self.text_view.lock().unwrap();
+                let mut text_view = self.text_view.lock().await;
                 text_view.clear()
             }
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.error_pop_up.take();
             }
             KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
-                self.plugin_manager.stop_process();
+                self.plugin_manager.stop_process().await;
             }
             KeyCode::Char(c) => {
                 self.clear_hint();
@@ -332,9 +345,9 @@ impl CommandBar {
                 self.update_command_list();
             }
             KeyCode::Esc => {
-                let interface = self.interface.lock().unwrap();
+                let interface = self.interface.lock().await;
                 interface.send(UserTxData::Exit);
-                sleep(Duration::from_millis(100));
+                sleep(Duration::from_millis(100)).await;
                 return Err(());
             }
             KeyCode::Enter if !self.command_line.is_empty() => {
@@ -374,7 +387,7 @@ impl CommandBar {
 
                         let data_to_send = yaml_content.get(key).unwrap();
                         let data_to_send = data_to_send.replace("\\r", "\r").replace("\\n", "\n");
-                        let interface = self.interface.lock().unwrap();
+                        let interface = self.interface.lock().await;
                         interface.send(UserTxData::Command {
                             command_name: key.to_string(),
                             content: data_to_send,
@@ -388,7 +401,7 @@ impl CommandBar {
                             .map(|arg| arg.to_string())
                             .collect::<Vec<_>>();
                         if command_line_split.is_empty() {
-                            let interface = self.interface.lock().unwrap();
+                            let interface = self.interface.lock().await;
                             interface.send(UserTxData::Data {
                                 content: command_line,
                             });
@@ -408,7 +421,7 @@ impl CommandBar {
                                         msg_lut.insert("load".to_string(), "Plugin loaded!");
                                         msg_lut.insert("reload".to_string(), "Plugin reloaded!");
 
-                                        let mut text_view = self.text_view.lock().unwrap();
+                                        let mut text_view = self.text_view.lock().await;
                                         text_view.add_data_out(SerialRxData::Plugin {
                                             timestamp: Local::now(),
                                             plugin_name,
@@ -445,11 +458,11 @@ impl CommandBar {
                             return Ok(());
                         };
 
-                        let interface = self.interface.lock().unwrap();
+                        let interface = self.interface.lock().await;
                         interface.send(UserTxData::HexString { content: bytes });
                     }
                     _ => {
-                        let interface = self.interface.lock().unwrap();
+                        let interface = self.interface.lock().await;
                         interface.send(UserTxData::Data {
                             content: command_line,
                         });
@@ -464,9 +477,9 @@ impl CommandBar {
         Ok(())
     }
 
-    pub fn update(&mut self, term_size: Rect) -> Result<(), ()> {
+    pub async fn update(&mut self, term_size: Rect) -> Result<(), ()> {
         {
-            let mut text_view = self.text_view.lock().unwrap();
+            let mut text_view = self.text_view.lock().await;
             text_view.set_frame_height(term_size.height);
             text_view.update_scroll();
         }
@@ -478,9 +491,9 @@ impl CommandBar {
         }
 
         {
-            let interface = self.interface.lock().unwrap();
+            let mut interface = self.interface.lock().await;
             if let Ok(data_out) = interface.try_recv() {
-                let mut text_view = self.text_view.lock().unwrap();
+                let mut text_view = self.text_view.lock().await;
                 text_view.add_data_out(data_out.clone());
 
                 self.plugin_manager.call_plugins_serial_rx(data_out);
@@ -492,9 +505,9 @@ impl CommandBar {
         };
 
         match input_evt {
-            Key(key) => return self.handle_key_input(key, term_size),
+            Key(key) => return self.handle_key_input(key, term_size).await,
             VerticalScroll(direction) => {
-                let mut text_view = self.text_view.lock().unwrap();
+                let mut text_view = self.text_view.lock().await;
                 if direction < 0 {
                     text_view.up_scroll();
                 } else {
@@ -502,7 +515,7 @@ impl CommandBar {
                 }
             }
             HorizontalScroll(direction) => {
-                let mut text_view = self.text_view.lock().unwrap();
+                let mut text_view = self.text_view.lock().await;
                 if direction < 0 {
                     text_view.left_scroll();
                 } else {

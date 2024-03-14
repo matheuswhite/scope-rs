@@ -1,10 +1,11 @@
 use crate::plugin::{Plugin, PluginRequestResult};
 use crate::text::TextView;
-use std::io::{BufRead, BufReader, Lines, Read};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
-use std::thread::JoinHandle;
+use std::sync::Arc;
+use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::process::Command;
+use tokio::sync::Mutex;
 
 pub struct ProcessRunner {
     text_view: Arc<Mutex<TextView>>,
@@ -23,13 +24,13 @@ impl ProcessRunner {
         Self { text_view }
     }
 
-    pub fn run(
+    pub async fn run(
         &self,
         plugin_name: String,
         cmd: String,
         stop_process_flag: Arc<AtomicBool>,
     ) -> Result<PluginRequestResult, String> {
-        Plugin::println(self.text_view.clone(), plugin_name.clone(), cmd.clone());
+        Plugin::println(self.text_view.clone(), plugin_name.clone(), cmd.clone()).await;
 
         let mut child = if cfg!(target_os = "windows") {
             Command::new("cmd")
@@ -50,74 +51,48 @@ impl ProcessRunner {
                 .map_err(|err| err.to_string())?
         };
 
-        static IS_END: AtomicBool = AtomicBool::new(false);
-        IS_END.store(false, Ordering::SeqCst);
         let text_view2 = self.text_view.clone();
         let text_view3 = self.text_view.clone();
         let plugin_name2 = plugin_name.clone();
+        let stop_process_flag2 = stop_process_flag.clone();
 
         let stdout = child.stdout.take().ok_or("Cannot get stdout".to_string())?;
-        let stdout = BufReader::new(stdout).lines();
-        let stdout_pipe =
-            Self::spawn_read_pipe(&IS_END, stop_process_flag.clone(), stdout, move |line| {
-                Plugin::println(text_view2.clone(), plugin_name.clone(), line.clone());
-            });
-
-        let stderr = child.stderr.take().ok_or("Cannot get stderr".to_string())?;
-        let stderr = BufReader::new(stderr).lines();
-        let stderr_pipe =
-            Self::spawn_read_pipe(&IS_END, stop_process_flag.clone(), stderr, move |line| {
-                Plugin::eprintln(text_view3.clone(), plugin_name2.clone(), line)
-            });
-
-        'wait_loop: while let Ok(None) = child.try_wait() {
-            if stop_process_flag.load(Ordering::SeqCst) {
-                let _ = child.kill();
-                break 'wait_loop;
-            }
-        }
-
-        IS_END.store(true, Ordering::SeqCst);
-
-        Ok(PluginRequestResult::Exec {
-            stdout: stdout_pipe.join().unwrap(),
-            stderr: stderr_pipe.join().unwrap(),
-        })
-    }
-
-    fn spawn_read_pipe<P>(
-        is_end: &'static AtomicBool,
-        stop_process_flag: Arc<AtomicBool>,
-        mut pipe: Lines<BufReader<P>>,
-        mut print_fn: impl FnMut(String) + Send + 'static,
-    ) -> JoinHandle<Vec<String>>
-    where
-        P: Read + Send + 'static,
-    {
-        std::thread::spawn(move || {
+        let mut stdout = BufReader::new(stdout).lines();
+        let stdout_pipe = tokio::spawn(async move {
             let mut buffer = vec![];
 
-            while is_end.load(Ordering::SeqCst) {
-                if stop_process_flag.load(Ordering::SeqCst) {
-                    return buffer;
-                }
-
-                if let Some(Ok(line)) = pipe.next() {
-                    buffer.push(line.clone());
-                    print_fn(line);
-                }
-            }
-
-            while let Some(Ok(line)) = pipe.next() {
+            while let Ok(Some(line)) = stdout.next_line().await {
                 if stop_process_flag.load(Ordering::SeqCst) {
                     return buffer;
                 }
 
                 buffer.push(line.clone());
-                print_fn(line);
+                Plugin::println(text_view2.clone(), plugin_name.clone(), line.clone()).await;
             }
 
             buffer
+        });
+
+        let stderr = child.stderr.take().ok_or("Cannot get stderr".to_string())?;
+        let mut stderr = BufReader::new(stderr).lines();
+        let stderr_pipe = tokio::spawn(async move {
+            let mut buffer = vec![];
+
+            while let Ok(Some(line)) = stderr.next_line().await {
+                if stop_process_flag2.load(Ordering::SeqCst) {
+                    return buffer;
+                }
+
+                buffer.push(line.clone());
+                Plugin::eprintln(text_view3.clone(), plugin_name2.clone(), line).await;
+            }
+
+            buffer
+        });
+
+        Ok(PluginRequestResult::Exec {
+            stdout: stdout_pipe.await.unwrap(),
+            stderr: stderr_pipe.await.unwrap(),
         })
     }
 }

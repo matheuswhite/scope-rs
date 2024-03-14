@@ -10,23 +10,25 @@ use std::collections::HashMap;
 use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
+use tokio::sync::mpsc::UnboundedSender;
+use tokio::sync::Mutex;
 
 pub struct PluginManager {
     text_view: Arc<Mutex<TextView>>,
     plugins: HashMap<String, Plugin>,
-    serial_rx_tx: Sender<(String, SerialRxCall)>,
-    user_command_tx: Sender<(String, UserCommandCall)>,
+    serial_rx_tx: UnboundedSender<(String, SerialRxCall)>,
+    user_command_tx: UnboundedSender<(String, UserCommandCall)>,
     has_process_running: Arc<AtomicBool>,
     stop_process_flag: Arc<AtomicBool>,
 }
 
 impl PluginManager {
     pub fn new(interface: Arc<Mutex<SerialIF>>, text_view: Arc<Mutex<TextView>>) -> Self {
-        let (serial_rx_tx, serial_rx_rx) = std::sync::mpsc::channel::<(String, SerialRxCall)>();
-        let (user_command_tx, user_command_rx) =
-            std::sync::mpsc::channel::<(String, UserCommandCall)>();
+        let (serial_rx_tx, mut serial_rx_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(String, SerialRxCall)>();
+        let (user_command_tx, mut user_command_rx) =
+            tokio::sync::mpsc::unbounded_channel::<(String, UserCommandCall)>();
         let process_runner = ProcessRunner::new(text_view.clone());
 
         let (text_view2, interface2, process_runner2) =
@@ -41,49 +43,58 @@ impl PluginManager {
         let stop_process_flag2 = stop_process_flag.clone();
         let stop_process_flag3 = stop_process_flag.clone();
 
-        std::thread::spawn(move || 'user_command: loop {
-            let Ok((plugin_name, mut user_command_call)) = user_command_rx.recv() else {
-                break 'user_command;
-            };
-
-            while let Some(req) = user_command_call.next() {
-                let Some(req_result) = PluginManager::exec_plugin_request(
-                    text_view.clone(),
-                    interface.clone(),
-                    plugin_name.clone(),
-                    &process_runner,
-                    &has_process_running2,
-                    stop_process_flag2.clone(),
-                    false,
-                    req,
-                ) else {
-                    continue;
+        tokio::spawn(async move {
+            'user_command: loop {
+                let Some((plugin_name, mut user_command_call)) = user_command_rx.recv().await
+                else {
+                    break 'user_command;
                 };
 
-                user_command_call.attach_request_result(req_result);
+                while let Some(req) = user_command_call.next() {
+                    let Some(req_result) = PluginManager::exec_plugin_request(
+                        text_view.clone(),
+                        interface.clone(),
+                        plugin_name.clone(),
+                        &process_runner,
+                        &has_process_running2,
+                        stop_process_flag2.clone(),
+                        false,
+                        req,
+                    )
+                    .await
+                    else {
+                        continue;
+                    };
+
+                    user_command_call.attach_request_result(req_result);
+                }
             }
         });
 
-        std::thread::spawn(move || 'serial_rx: loop {
-            let Ok((plugin_name, mut serial_rx_call)) = serial_rx_rx.recv() else {
-                break 'serial_rx;
-            };
-
-            while let Some(req) = serial_rx_call.next() {
-                let Some(req_result) = PluginManager::exec_plugin_request(
-                    text_view2.clone(),
-                    interface2.clone(),
-                    plugin_name.clone(),
-                    &process_runner2,
-                    &has_process_running3,
-                    stop_process_flag3.clone(),
-                    true,
-                    req,
-                ) else {
-                    continue;
+        tokio::spawn(async move {
+            'serial_rx: loop {
+                let Some((plugin_name, mut serial_rx_call)) = serial_rx_rx.recv().await else {
+                    break 'serial_rx;
                 };
 
-                serial_rx_call.attach_request_result(req_result);
+                while let Some(req) = serial_rx_call.next() {
+                    let Some(req_result) = PluginManager::exec_plugin_request(
+                        text_view2.clone(),
+                        interface2.clone(),
+                        plugin_name.clone(),
+                        &process_runner2,
+                        &has_process_running3,
+                        stop_process_flag3.clone(),
+                        true,
+                        req,
+                    )
+                    .await
+                    else {
+                        continue;
+                    };
+
+                    serial_rx_call.attach_request_result(req_result);
+                }
             }
         });
 
@@ -101,14 +112,15 @@ impl PluginManager {
         self.has_process_running.load(Ordering::SeqCst)
     }
 
-    pub fn stop_process(&mut self) {
+    pub async fn stop_process(&mut self) {
         if self.has_process_running() {
             self.stop_process_flag.store(true, Ordering::SeqCst);
             Plugin::eprintln(
                 self.text_view.clone(),
                 "system".to_string(),
                 "Execution stopped".to_string(),
-            );
+            )
+            .await;
         }
     }
 
@@ -221,7 +233,7 @@ impl PluginManager {
         }
     }
 
-    fn exec_plugin_request(
+    async fn exec_plugin_request(
         text_view: Arc<Mutex<TextView>>,
         interface: Arc<Mutex<SerialIF>>,
         plugin_name: String,
@@ -233,42 +245,43 @@ impl PluginManager {
     ) -> Option<PluginRequestResult> {
         match req {
             PluginRequest::Println { msg } => {
-                Plugin::println(text_view, plugin_name, msg);
+                Plugin::println(text_view, plugin_name, msg).await;
             }
             PluginRequest::Eprintln { msg } => {
-                Plugin::eprintln(text_view, plugin_name, msg);
+                Plugin::eprintln(text_view, plugin_name, msg).await;
             }
             PluginRequest::Connect { .. } => {}
             PluginRequest::Disconnect => {}
             PluginRequest::Reconnect => {}
             PluginRequest::SerialTx { msg } => {
-                let mut text_view = text_view.lock().unwrap();
-                let interface = interface.lock().unwrap();
+                let mut text_view = text_view.lock().await;
+                let mut interface = interface.lock().await;
                 interface.send(UserTxData::PluginSerialTx {
                     plugin_name,
                     content: msg,
                 });
 
                 'plugin_serial_tx: loop {
-                    match interface.recv() {
-                        Ok(x) if x.is_plugin_serial_tx() => {
+                    match interface.recv().await {
+                        Some(x) if x.is_plugin_serial_tx() => {
                             text_view.add_data_out(x);
                             break 'plugin_serial_tx;
                         }
-                        Ok(x) => text_view.add_data_out(x),
-                        Err(_) => {
+                        Some(x) => text_view.add_data_out(x),
+                        None => {
                             break 'plugin_serial_tx;
                         }
                     }
                 }
             }
-            PluginRequest::Sleep { time } => std::thread::sleep(time),
+            PluginRequest::Sleep { time } => tokio::time::sleep(time).await,
             PluginRequest::Exec { cmd } => {
                 if !is_from_serial_rx {
                     has_running_process.store(true, Ordering::SeqCst);
                     let res = Some(
                         process_runner
                             .run(plugin_name, cmd, stop_process_flag.clone())
+                            .await
                             .unwrap(),
                     );
                     has_running_process.store(false, Ordering::SeqCst);
@@ -280,6 +293,7 @@ impl PluginManager {
                         plugin_name,
                         "Cannot call \"scope.exec\" from \"serial_rx\"".to_string(),
                     )
+                    .await
                 }
             }
         }
