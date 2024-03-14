@@ -5,7 +5,6 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::Mutex;
-use tokio::task::LocalSet;
 
 pub struct ProcessRunner {
     text_view: Arc<Mutex<TextView>>,
@@ -29,7 +28,6 @@ impl ProcessRunner {
         plugin_name: String,
         cmd: String,
         stop_process_flag: Arc<AtomicBool>,
-        local: Arc<LocalSet>,
     ) -> Result<PluginRequestResult, String> {
         Plugin::println(self.text_view.clone(), plugin_name.clone(), cmd.clone()).await;
 
@@ -62,7 +60,7 @@ impl ProcessRunner {
 
         let stdout = child.stdout.take().ok_or("Cannot get stdout".to_string())?;
         let mut stdout = BufReader::new(stdout).lines();
-        let stdout_pipe = local.spawn_local(async move {
+        let stdout_pipe = tokio::spawn(async move {
             let mut buffer = vec![];
 
             while IS_END.load(Ordering::SeqCst) {
@@ -90,7 +88,7 @@ impl ProcessRunner {
 
         let stderr = child.stderr.take().ok_or("Cannot get stderr".to_string())?;
         let mut stderr = BufReader::new(stderr).lines();
-        let stderr_pipe = local.spawn_local(async move {
+        let stderr_pipe = tokio::spawn(async move {
             let mut buffer = vec![];
 
             while IS_END.load(Ordering::SeqCst) {

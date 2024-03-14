@@ -21,7 +21,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
 use tokio::sync::{Mutex, MutexGuard};
-use tokio::task::LocalSet;
 use tokio::time::sleep;
 
 pub struct CommandBar {
@@ -44,10 +43,10 @@ pub struct CommandBar {
 impl CommandBar {
     const HEIGHT: u16 = 3;
 
-    pub fn new(interface: SerialIF, view_capacity: usize, local: Arc<LocalSet>) -> Self {
+    pub fn new(interface: SerialIF, view_capacity: usize) -> Self {
         let (key_sender, key_receiver) = tokio::sync::mpsc::unbounded_channel();
 
-        local.spawn_local(async move {
+        tokio::spawn(async move {
             CommandBar::task(key_sender).await;
         });
 
@@ -60,8 +59,7 @@ impl CommandBar {
         let interface = Arc::new(Mutex::new(interface));
         let text_view = Arc::new(Mutex::new(TextView::new(view_capacity)));
 
-        let plugin_manager =
-            PluginManager::new(interface.clone(), text_view.clone(), local.clone());
+        let plugin_manager = PluginManager::new(interface.clone(), text_view.clone());
 
         Self {
             interface,
