@@ -3,7 +3,7 @@ use crate::text::TextView;
 use anyhow::Result;
 use chrono::Local;
 use homedir::get_my_home;
-use rlua::{Context, Function, Lua, RegistryKey, Table, Thread};
+use mlua::{Function, Lua, RegistryKey, Table, Thread};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -120,7 +120,8 @@ impl Plugin {
             .to_string();
         let code = std::fs::read_to_string(filepath).map_err(|_| "Cannot read plugin file")?;
 
-        let lua = Lua::new();
+        let lua = Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
+            .map_err(|_| "Cannot create Lua obj".to_string())?;
 
         Plugin::check_integrity(&lua, &code)?;
 
@@ -151,27 +152,32 @@ impl Plugin {
         self.name.as_str()
     }
 
+    fn create_lua_thread(
+        lua: &Lua,
+        code: &str,
+        coroutine_name: &str,
+    ) -> Result<RegistryKey, String> {
+        Plugin::append_plugins_dir(lua)?;
+
+        lua.load(code)
+            .exec()
+            .map_err(|_| "Fail to load Lua code".to_string())?;
+
+        let serial_rx: Thread = lua
+            .load(format!("coroutine.create({})", coroutine_name))
+            .eval()
+            .map_err(|_| format!("Fail to create coroutine for {}", coroutine_name))?;
+        let reg = lua
+            .create_registry_value(serial_rx)
+            .map_err(|_| format!("Fail to create register for {} coroutines", coroutine_name))?;
+        Ok(reg)
+    }
+
     pub fn serial_rx_call(&self, msg: Vec<u8>) -> SerialRxCall {
-        let lua = Lua::new();
-        let code = self.code.as_str();
+        let lua = Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
+            .expect("Cannot create Lua obj");
 
-        let serial_rx_reg: Result<RegistryKey, String> = lua.context(move |lua_ctx| {
-            Plugin::append_plugins_dir(&lua_ctx)?;
-
-            lua_ctx
-                .load(code)
-                .exec()
-                .map_err(|_| "Fail to load Lua code".to_string())?;
-
-            let serial_rx: Thread = lua_ctx
-                .load(r#"coroutine.create(serial_rx)"#)
-                .eval()
-                .map_err(|_| "Fail to create coroutine for serial_rx".to_string())?;
-            let reg = lua_ctx
-                .create_registry_value(serial_rx)
-                .map_err(|_| "Fail to create register for serial_rx coroutines".to_string())?;
-            Ok(reg)
-        });
+        let serial_rx_reg = Self::create_lua_thread(&lua, self.code.as_str(), "serial_rx");
 
         SerialRxCall {
             lua,
@@ -182,26 +188,10 @@ impl Plugin {
     }
 
     pub fn user_command_call(&self, arg_list: Vec<String>) -> UserCommandCall {
-        let lua = Lua::new();
-        let code = self.code.as_str();
+        let lua = Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
+            .expect("Cannot create Lua obj");
 
-        let user_command_reg: Result<RegistryKey, String> = lua.context(move |lua_ctx| {
-            Plugin::append_plugins_dir(&lua_ctx)?;
-
-            lua_ctx
-                .load(code)
-                .exec()
-                .map_err(|_| "Fail to load Lua code".to_string())?;
-
-            let user_command: Thread = lua_ctx
-                .load(r#"coroutine.create(user_command)"#)
-                .eval()
-                .map_err(|_| "Fail to create coroutine for user_command".to_string())?;
-            let reg = lua_ctx
-                .create_registry_value(user_command)
-                .map_err(|_| "Fail to create register for user_command coroutines".to_string())?;
-            Ok(reg)
-        });
+        let user_command_reg = Self::create_lua_thread(&lua, self.code.as_str(), "user_command");
 
         UserCommandCall {
             lua,
@@ -211,7 +201,7 @@ impl Plugin {
         }
     }
 
-    fn append_plugins_dir(lua_ctx: &Context) -> Result<(), String> {
+    fn append_plugins_dir(lua: &Lua) -> Result<(), String> {
         let home_dir = get_my_home()
             .expect("Cannot get home directory")
             .expect("Cannot get home directory")
@@ -219,7 +209,7 @@ impl Plugin {
             .expect("Cannot get home directory")
             .to_string();
 
-        if lua_ctx
+        if lua
             .load(
                 format!(
                     "package.path = package.path .. ';{}/.config/scope/plugins/?.lua'",
@@ -237,33 +227,30 @@ impl Plugin {
     }
 
     fn check_integrity(lua: &Lua, code: &str) -> Result<(), String> {
-        lua.context(|lua_ctx| {
-            let globals = lua_ctx.globals();
+        let globals = lua.globals();
 
-            Plugin::append_plugins_dir(&lua_ctx)?;
+        Plugin::append_plugins_dir(&lua)?;
 
-            lua_ctx
-                .load(code)
-                .exec()
-                .map_err(|_| "Fail to load Lua code".to_string())?;
+        lua.load(code)
+            .exec()
+            .map_err(|_| "Fail to load Lua code".to_string())?;
 
-            globals
-                .get::<_, Function>("serial_rx")
-                .map_err(|_| "serial_rx function not found in Lua code")?;
-            globals
-                .get::<_, Function>("user_command")
-                .map_err(|_| "user_command function not found in Lua code")?;
+        globals
+            .get::<_, Function>("serial_rx")
+            .map_err(|_| "serial_rx function not found in Lua code")?;
+        globals
+            .get::<_, Function>("user_command")
+            .map_err(|_| "user_command function not found in Lua code")?;
 
-            Ok(())
-        })
+        Ok(())
     }
 }
 
-fn resume_lua_thread<T: for<'a> rlua::ToLuaMulti<'a> + Send>(
-    thread: &Thread,
-    data: T,
-) -> Option<PluginRequest> {
-    match thread.resume::<T, Table>(data) {
+fn resume_lua_thread<T>(thread: &Thread, data: T) -> Option<PluginRequest>
+where
+    T: for<'a> mlua::IntoLuaMulti<'a>,
+{
+    match thread.resume::<_, Table>(data) {
         Ok(req) => {
             let req: PluginRequest = match req.try_into() {
                 Ok(req) => req,
@@ -283,30 +270,29 @@ impl Iterator for SerialRxCall {
         let thread = &self.thread;
         let msg = self.msg.clone();
 
-        self.lua.context(move |lua_ctx| {
-            let serial_rx: Thread = lua_ctx
-                .registry_value(thread)
-                .expect("Cannot get serial_rx register");
+        let serial_rx: Thread = self
+            .lua
+            .registry_value(thread)
+            .expect("Cannot get serial_rx register");
 
-            let Some(req_result) = req_result else {
-                return resume_lua_thread(&serial_rx, msg);
-            };
+        let Some(req_result) = req_result else {
+            return resume_lua_thread(&serial_rx, msg);
+        };
 
-            match req_result {
-                PluginRequestResult::Exec { stdout, stderr } => {
-                    match serial_rx.resume::<_, Table>((msg, stdout, stderr)) {
-                        Ok(req) => {
-                            let req: PluginRequest = match req.try_into() {
-                                Ok(req) => req,
-                                Err(msg) => return Some(PluginRequest::Eprintln { msg }),
-                            };
-                            Some(req)
-                        }
-                        Err(_) => None,
+        match req_result {
+            PluginRequestResult::Exec { stdout, stderr } => {
+                match serial_rx.resume::<_, Table>((msg, stdout, stderr)) {
+                    Ok(req) => {
+                        let req: PluginRequest = match req.try_into() {
+                            Ok(req) => req,
+                            Err(msg) => return Some(PluginRequest::Eprintln { msg }),
+                        };
+                        Some(req)
                     }
+                    Err(_) => None,
                 }
             }
-        })
+        }
     }
 }
 
@@ -318,30 +304,29 @@ impl Iterator for UserCommandCall {
         let thread = &self.thread;
         let arg_list = self.arg_list.clone();
 
-        self.lua.context(move |lua_ctx| {
-            let user_command: Thread = lua_ctx
-                .registry_value(thread)
-                .expect("Cannot get user_command register");
+        let user_command: Thread = self
+            .lua
+            .registry_value(thread)
+            .expect("Cannot get user_command register");
 
-            let Some(req_result) = req_result else {
-                return resume_lua_thread(&user_command, arg_list);
-            };
+        let Some(req_result) = req_result else {
+            return resume_lua_thread(&user_command, arg_list);
+        };
 
-            match req_result {
-                PluginRequestResult::Exec { stdout, stderr } => {
-                    match user_command.resume::<_, Table>((arg_list, stdout, stderr)) {
-                        Ok(req) => {
-                            let req: PluginRequest = match req.try_into() {
-                                Ok(req) => req,
-                                Err(msg) => return Some(PluginRequest::Eprintln { msg }),
-                            };
-                            Some(req)
-                        }
-                        Err(_) => None,
+        match req_result {
+            PluginRequestResult::Exec { stdout, stderr } => {
+                match user_command.resume::<_, Table>((arg_list, stdout, stderr)) {
+                    Ok(req) => {
+                        let req: PluginRequest = match req.try_into() {
+                            Ok(req) => req,
+                            Err(msg) => return Some(PluginRequest::Eprintln { msg }),
+                        };
+                        Some(req)
                     }
+                    Err(_) => None,
                 }
             }
-        })
+        }
     }
 }
 
