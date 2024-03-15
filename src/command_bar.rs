@@ -5,7 +5,9 @@ use crate::plugin_manager::PluginManager;
 use crate::serial::SerialIF;
 use crate::text::TextView;
 use chrono::Local;
-use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyModifiers, MouseEventKind};
+use crossterm::event::{
+    Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEventKind,
+};
 use futures::StreamExt;
 use rand::seq::SliceRandom;
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -92,14 +94,16 @@ impl CommandBar {
 
             match event {
                 Some(Ok(event)) => match event {
-                    Event::Mouse(mouse_evt) if mouse_evt.modifiers == KeyModifiers::SHIFT => {
+                    Event::Mouse(mouse_evt) if mouse_evt.modifiers == KeyModifiers::CONTROL => {
                         match mouse_evt.kind {
                             MouseEventKind::ScrollUp => sender.send(HorizontalScroll(-1)).unwrap(),
                             MouseEventKind::ScrollDown => sender.send(HorizontalScroll(1)).unwrap(),
                             _ => {}
                         }
                     }
-                    Event::Key(key) => sender.send(Key(key)).unwrap(),
+                    Event::Key(key) if key.kind == KeyEventKind::Press => {
+                        sender.send(Key(key)).unwrap()
+                    }
                     Event::Mouse(mouse_evt) => match mouse_evt.kind {
                         MouseEventKind::ScrollUp => sender.send(VerticalScroll(-1)).unwrap(),
                         MouseEventKind::ScrollDown => sender.send(VerticalScroll(1)).unwrap(),
