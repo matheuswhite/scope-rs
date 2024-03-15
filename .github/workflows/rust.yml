@@ -15,29 +15,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Install libudev-sys and Lua5.4
-      run: sudo apt-get install -y libudev-dev liblua5.4-dev
+    - name: Install libudev-sys
+      run: sudo apt-get install -y libudev-dev
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --release --verbose
   build-windows:
     name: Check on Windows
     runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
     steps:
-    - uses: msys2/setup-msys2@v2
     - uses: actions/checkout@v3
-    - name: Install Rust & Lua
-      run: pacman -S --noconfirm mingw-w64-x86_64-rust mingw-w64-x86_64-lua mingw-w64-x86_64-luajit mingw-w64-x86_64-pkg-config
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --release --verbose
   build-macos:
     name: Check on MacOS
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Install Lua5.4
-      run: brew install lua
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --release --verbose

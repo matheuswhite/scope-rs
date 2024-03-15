@@ -4,6 +4,7 @@ use ratatui::style::{Color, Style};
 use ratatui::text::Span;
 use std::collections::HashMap;
 
+#[derive(Clone)]
 pub struct RichText {
     content: Vec<u8>,
     fg: Color,
@@ -38,16 +39,34 @@ impl RichText {
         )
     }
 
-    pub fn crop_prefix_len(&self, len: usize) -> Self {
-        Self {
-            content: if len >= self.content.len() {
-                vec![]
-            } else {
-                self.content[len..].to_vec()
-            },
-            fg: self.fg,
-            bg: self.bg,
-        }
+    pub fn crop_rich_texts(rich_texts: &[RichText], cursor: usize) -> Vec<Span> {
+        rich_texts
+            .iter()
+            .fold((cursor, vec![]), |(mut cursor, mut acc), text| {
+                if cursor == 0 {
+                    acc.push(text.clone().to_span());
+                    return (0, acc);
+                }
+
+                match cursor {
+                    x if x < text.content.len() => {
+                        acc.push(
+                            Self {
+                                content: text.content[cursor..].to_vec(),
+                                fg: text.fg,
+                                bg: text.bg,
+                            }
+                            .to_span(),
+                        );
+                        cursor = 0;
+                    }
+                    x if x == text.content.len() => cursor = 0,
+                    _ => cursor -= text.content.len(),
+                }
+
+                (cursor, acc)
+            })
+            .1
     }
 }
 
@@ -79,9 +98,11 @@ impl RichTextWithInvisible {
             |(buffer, state, acc), byte| match state {
                 State::None => (
                     vec![byte],
-                    Self::is_visible(byte)
-                        .then_some(State::Visible)
-                        .unwrap_or(State::Invisible),
+                    if Self::is_visible(byte) {
+                        State::Visible
+                    } else {
+                        State::Invisible
+                    },
                     acc,
                 ),
                 State::Visible => {
@@ -140,7 +161,7 @@ impl RichTextWithInvisible {
     }
 
     fn is_visible(byte: u8) -> bool {
-        0x20 <= byte && byte <= 0x7E
+        (0x20..=0x7E).contains(&byte)
     }
 
     fn bytes_to_rich(bytes: Vec<u8>) -> Vec<u8> {
