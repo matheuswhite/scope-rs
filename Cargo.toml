@@ -29,7 +29,7 @@ serde = "1.0"
 serde_yaml = "0.9"
 rand = "0.8.5"
 clap = { version = "4.1.9", features = ["derive"] }
-rlua = "0.19.8"
+mlua = { version = "0.9.6", features = ["lua54", "async", "send"] }
 anyhow = "1.0.79"
 homedir = "0.2.1"
 regex = { version = "1.10.3", features = [] }
