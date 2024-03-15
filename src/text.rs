@@ -77,13 +77,7 @@ impl TextView {
                 );
                 let content = vec![timestamp_span]
                     .into_iter()
-                    .chain(data.iter().enumerate().map(|(i, rich_text)| {
-                        if i == 0 {
-                            rich_text.crop_prefix_len(scroll.1 as usize).to_span()
-                        } else {
-                            rich_text.to_span()
-                        }
-                    }))
+                    .chain(RichText::crop_rich_texts(data, scroll.1 as usize))
                     .collect::<Vec<_>>();
 
                 Line::from(content)

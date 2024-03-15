@@ -92,7 +92,7 @@ impl CommandBar {
 
             match event {
                 Some(Ok(event)) => match event {
-                    Event::Mouse(mouse_evt) if mouse_evt.modifiers == KeyModifiers::CONTROL => {
+                    Event::Mouse(mouse_evt) if mouse_evt.modifiers == KeyModifiers::SHIFT => {
                         match mouse_evt.kind {
                             MouseEventKind::ScrollUp => sender.send(HorizontalScroll(-1)).unwrap(),
                             MouseEventKind::ScrollDown => sender.send(HorizontalScroll(1)).unwrap(),
