@@ -22,10 +22,14 @@ jobs:
   build-windows:
     name: Check on Windows
     runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
     steps:
+    - uses: msys2/setup-msys2@v2
     - uses: actions/checkout@v3
-    - uses: ilammy/msvc-dev-cmd@v1
-    - uses: leafo/gh-actions-lua@v10
+    - name: Install Rust & Lua
+      run: pacman -S --noconfirm mingw-w64-x86_64-rust mingw-w64-x86_64-lua mingw-w64-x86_64-luajit mingw-w64-x86_64-pkg-config
     - name: Build
       run: cargo build --verbose
   build-macos:
