@@ -1,3 +1,4 @@
+use crate::blink_color::BlinkColor;
 use crate::command_bar::InputEvent::{HorizontalScroll, Key, VerticalScroll};
 use crate::error_pop_up::ErrorPopUp;
 use crate::messages::{SerialRxData, UserTxData};
@@ -40,12 +41,13 @@ pub struct CommandBar {
     current_hint: Option<&'static str>,
     hints: Vec<&'static str>,
     plugin_manager: PluginManager,
+    blink_color: BlinkColor,
 }
 
 impl CommandBar {
     const HEIGHT: u16 = 3;
 
-    pub fn new(interface: SerialIF, view_capacity: usize) -> Self {
+    pub fn new(interface: SerialIF, view_capacity: usize, save_filename: String) -> Self {
         let (key_sender, key_receiver) = tokio::sync::mpsc::unbounded_channel();
 
         tokio::spawn(async move {
@@ -59,7 +61,7 @@ impl CommandBar {
         ];
 
         let interface = Arc::new(Mutex::new(interface));
-        let text_view = Arc::new(Mutex::new(TextView::new(view_capacity)));
+        let text_view = Arc::new(Mutex::new(TextView::new(view_capacity, save_filename)));
 
         let plugin_manager = PluginManager::new(interface.clone(), text_view.clone());
 
@@ -78,6 +80,7 @@ impl CommandBar {
             hints: hints.clone(),
             current_hint: Some(hints.choose(&mut rand::thread_rng()).unwrap()),
             plugin_manager,
+            blink_color: BlinkColor::new(Color::Black, Duration::from_millis(200), 2),
         }
     }
 
@@ -137,7 +140,7 @@ impl CommandBar {
             )
             .split(f.size());
 
-        text_view.draw(f, chunks[0]);
+        text_view.draw(f, chunks[0], self.blink_color.get_color());
 
         let (description, is_connected) = (interface.description(), interface.is_connected());
 
@@ -256,6 +259,65 @@ impl CommandBar {
             }
             KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
                 self.plugin_manager.stop_process().await;
+            }
+            KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
+                let is_recording = {
+                    let mut text_view = self.text_view.lock().await;
+                    text_view.get_mut_recorder().is_recording()
+                };
+
+                if is_recording {
+                    self.set_error_pop_up("Cannot save file while recording.".to_string());
+                    return Ok(());
+                }
+
+                self.blink_color.start();
+                let mut text_view = self.text_view.lock().await;
+                let typewriter = text_view.get_mut_typewriter();
+                let filename = typewriter.get_filename();
+                let save_result = typewriter.flush().await;
+                text_view
+                    .add_data_out(SerialRxData::Plugin {
+                        plugin_name: "SAVE".to_string(),
+                        timestamp: Local::now(),
+                        content: if let Err(err) = &save_result {
+                            format!("Cannot save on \"{}\": {}", filename, err)
+                        } else {
+                            format!("Content saved on \"{}\"", filename)
+                        },
+                        is_successful: save_result.is_ok(),
+                    })
+                    .await;
+            }
+            KeyCode::Char('r') if key.modifiers == KeyModifiers::CONTROL => {
+                let mut text_view = self.text_view.lock().await;
+                let recorder = text_view.get_mut_recorder();
+                let filename = recorder.get_filename();
+                let record_msg = if !recorder.is_recording() {
+                    let record_result = recorder.start_record().await;
+                    SerialRxData::Plugin {
+                        plugin_name: "REC".to_string(),
+                        timestamp: Local::now(),
+                        content: if let Err(err) = &record_result {
+                            format!(
+                                "Cannot start content recording on \"{}\": {}",
+                                filename, err
+                            )
+                        } else {
+                            format!("Recording content on \"{}\"...", filename)
+                        },
+                        is_successful: record_result.is_ok(),
+                    }
+                } else {
+                    recorder.stop_record();
+                    SerialRxData::Plugin {
+                        plugin_name: "REC".to_string(),
+                        timestamp: Local::now(),
+                        content: format!("Content recorded on \"{}\"", filename),
+                        is_successful: true,
+                    }
+                };
+                text_view.add_data_out(record_msg).await;
             }
             KeyCode::Char(c) => {
                 self.clear_hint();
@@ -446,12 +508,14 @@ impl CommandBar {
                                         msg_lut.insert("reload".to_string(), "Plugin reloaded!");
 
                                         let mut text_view = self.text_view.lock().await;
-                                        text_view.add_data_out(SerialRxData::Plugin {
-                                            timestamp: Local::now(),
-                                            plugin_name,
-                                            content: msg_lut[&cmd].to_string(),
-                                            is_successful: true,
-                                        })
+                                        text_view
+                                            .add_data_out(SerialRxData::Plugin {
+                                                timestamp: Local::now(),
+                                                plugin_name,
+                                                content: msg_lut[&cmd].to_string(),
+                                                is_successful: true,
+                                            })
+                                            .await;
                                     }
                                     Err(err_msg) => {
                                         self.set_error_pop_up(err_msg);
@@ -514,11 +578,13 @@ impl CommandBar {
             }
         }
 
+        self.blink_color.update();
+
         {
             let mut interface = self.interface.lock().await;
             if let Ok(data_out) = interface.try_recv() {
                 let mut text_view = self.text_view.lock().await;
-                text_view.add_data_out(data_out.clone());
+                text_view.add_data_out(data_out.clone()).await;
 
                 self.plugin_manager.call_plugins_serial_rx(data_out);
             }

@@ -264,10 +264,10 @@ impl PluginManager {
                 'plugin_serial_tx: loop {
                     match interface.recv().await {
                         Some(x) if x.is_plugin_serial_tx() => {
-                            text_view.add_data_out(x);
+                            text_view.add_data_out(x).await;
                             break 'plugin_serial_tx;
                         }
-                        Some(x) => text_view.add_data_out(x),
+                        Some(x) => text_view.add_data_out(x).await,
                         None => {
                             break 'plugin_serial_tx;
                         }

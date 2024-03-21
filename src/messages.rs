@@ -2,6 +2,8 @@ use crate::rich_string::RichText;
 use crate::text::ViewData;
 use chrono::{DateTime, Local};
 use ratatui::style::Color;
+use std::borrow::Cow;
+use std::str::Utf8Chunks;
 
 pub enum UserTxData {
     Exit,
@@ -60,6 +62,113 @@ pub enum SerialRxData {
 impl SerialRxData {
     pub fn is_plugin_serial_tx(&self) -> bool {
         matches!(self, SerialRxData::PluginSerialTx { .. })
+    }
+
+    fn from_utf8_print_invalid(v: &[u8]) -> Cow<'_, str> {
+        let mut iter = Utf8Chunks::new(v);
+
+        let chunk = if let Some(chunk) = iter.next() {
+            let valid = chunk.valid();
+            if chunk.invalid().is_empty() {
+                debug_assert_eq!(valid.len(), v.len());
+                return Cow::Borrowed(valid);
+            }
+            chunk
+        } else {
+            return Cow::Borrowed("");
+        };
+
+        let mut res = String::with_capacity(v.len());
+        res.push_str(chunk.valid());
+        res.extend(chunk.invalid().iter().map(|ch| format!("\\x{:02x}", ch)));
+
+        for chunk in iter {
+            res.push_str(chunk.valid());
+            res.extend(chunk.invalid().iter().map(|ch| format!("\\x{:02x}", ch)));
+        }
+
+        Cow::Owned(res)
+    }
+
+    pub fn serialize(&self) -> String {
+        let success = " OK";
+        let fail = "ERR";
+
+        match self {
+            SerialRxData::RxData { timestamp, content } => {
+                format!(
+                    "[{}|<=| OK]{}",
+                    timestamp.format("%H:%M:%S.%3f"),
+                    Self::from_utf8_print_invalid(content)
+                )
+            }
+            SerialRxData::TxData {
+                timestamp,
+                content,
+                is_successful,
+            } => {
+                format!(
+                    "[{}|=>|{}]{}",
+                    timestamp.format("%H:%M:%S.%3f"),
+                    if *is_successful { success } else { fail },
+                    content
+                )
+            }
+            SerialRxData::Command {
+                timestamp,
+                command_name,
+                content,
+                is_successful,
+            } => {
+                format!(
+                    "[{}|=>|{}|/{}]{}",
+                    timestamp.format("%H:%M:%S.%3f"),
+                    if *is_successful { success } else { fail },
+                    command_name,
+                    content
+                )
+            }
+            SerialRxData::HexString {
+                timestamp,
+                content,
+                is_successful,
+            } => {
+                format!(
+                    "[{}|=>|{}]{:?}",
+                    timestamp.format("%H:%M:%S.%3f"),
+                    if *is_successful { success } else { fail },
+                    content
+                )
+            }
+            SerialRxData::Plugin {
+                timestamp,
+                content,
+                is_successful,
+                plugin_name,
+            } => {
+                format!(
+                    "[{}| P|{}|!{}]{}",
+                    timestamp.format("%H:%M:%S.%3f"),
+                    if *is_successful { success } else { fail },
+                    plugin_name,
+                    content
+                )
+            }
+            SerialRxData::PluginSerialTx {
+                timestamp,
+                content,
+                is_successful,
+                plugin_name,
+            } => {
+                format!(
+                    "[{}|=>|{}|!{}]{}",
+                    timestamp.format("%H:%M:%S.%3f"),
+                    if *is_successful { success } else { fail },
+                    plugin_name,
+                    Self::from_utf8_print_invalid(content)
+                )
+            }
+        }
     }
 }
 
