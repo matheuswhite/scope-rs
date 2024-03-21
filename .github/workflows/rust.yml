@@ -18,18 +18,18 @@ jobs:
     - name: Install libudev-sys
       run: sudo apt-get install -y libudev-dev
     - name: Build
-      run: cargo build --release --verbose
+      run: cargo build +nightly --release --verbose
   build-windows:
     name: Check on Windows
     runs-on: windows-latest
     steps:
     - uses: actions/checkout@v3
     - name: Build
-      run: cargo build --release --verbose
+      run: cargo build +nightly --release --verbose
   build-macos:
     name: Check on MacOS
     runs-on: macos-latest
     steps:
     - uses: actions/checkout@v3
     - name: Build
-      run: cargo build --release --verbose
+      run: cargo build +nightly --release --verbose
