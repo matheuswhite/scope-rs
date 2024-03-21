@@ -130,22 +130,26 @@ impl Plugin {
 
     pub async fn println(text_view: Arc<Mutex<TextView>>, plugin_name: String, content: String) {
         let mut text_view = text_view.lock().await;
-        text_view.add_data_out(SerialRxData::Plugin {
-            timestamp: Local::now(),
-            plugin_name,
-            content,
-            is_successful: true,
-        })
+        text_view
+            .add_data_out(SerialRxData::Plugin {
+                timestamp: Local::now(),
+                plugin_name,
+                content,
+                is_successful: true,
+            })
+            .await;
     }
 
     pub async fn eprintln(text_view: Arc<Mutex<TextView>>, plugin_name: String, content: String) {
         let mut text_view = text_view.lock().await;
-        text_view.add_data_out(SerialRxData::Plugin {
-            timestamp: Local::now(),
-            plugin_name,
-            content,
-            is_successful: false,
-        })
+        text_view
+            .add_data_out(SerialRxData::Plugin {
+                timestamp: Local::now(),
+                plugin_name,
+                content,
+                is_successful: false,
+            })
+            .await;
     }
 
     pub fn name(&self) -> &str {

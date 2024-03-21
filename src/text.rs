@@ -1,6 +1,7 @@
 use crate::messages::SerialRxData;
+use crate::recorder::Recorder;
 use crate::rich_string::RichText;
-use crate::storage::Storage;
+use crate::typewriter::TypeWriter;
 use chrono::{DateTime, Local};
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Style};
@@ -11,7 +12,8 @@ use ratatui::Frame;
 
 pub struct TextView {
     history: Vec<ViewData>,
-    save_file: Storage,
+    typewriter: TypeWriter,
+    recorder: Recorder,
     capacity: usize,
     auto_scroll: bool,
     scroll: (u16, u16),
@@ -22,7 +24,8 @@ impl TextView {
     pub fn new(capacity: usize, filename: String) -> Self {
         Self {
             history: vec![],
-            save_file: Storage::new(filename),
+            typewriter: TypeWriter::new(filename.clone()),
+            recorder: Recorder::new(filename).expect("Cannot create Recorder"),
             capacity,
             auto_scroll: true,
             scroll: (0, 0),
@@ -41,8 +44,12 @@ impl TextView {
         }
     }
 
-    pub fn get_save_file_storage(&self) -> &Storage {
-        &self.save_file
+    pub fn get_mut_typewriter(&mut self) -> &mut TypeWriter {
+        &mut self.typewriter
+    }
+
+    pub fn get_mut_recorder(&mut self) -> &mut Recorder {
+        &mut self.recorder
     }
 
     pub fn draw(&self, f: &mut Frame, rect: Rect, blink_color: Option<Color>) {
@@ -53,21 +60,41 @@ impl TextView {
         };
 
         let (coll, coll_size) = (&self.history[(scroll.0 as usize)..], self.history.len());
-
-        let save_file = self.save_file.get_filename();
         let border_type = if self.auto_scroll {
             BorderType::Thick
         } else {
             BorderType::Double
         };
-        let block = Block::default()
-            .title(format!("[{:03}][ASCII] {}", coll_size, save_file))
-            .title(
-                Title::from(format!("[{}]", self.save_file.get_size())).alignment(Alignment::Right),
-            )
-            .borders(Borders::ALL)
-            .border_type(border_type)
-            .border_style(Style::default().fg(blink_color.unwrap_or(Color::Reset)));
+
+        let block = if self.recorder.is_recording() {
+            Block::default()
+                .title(format!(
+                    "[{:03}][ASCII] ◉ {}",
+                    coll_size,
+                    self.recorder.get_filename()
+                ))
+                .title(
+                    Title::from(format!("[{}]", self.recorder.get_size()))
+                        .alignment(Alignment::Right),
+                )
+                .borders(Borders::ALL)
+                .border_type(border_type)
+                .border_style(Style::default().fg(Color::Yellow))
+        } else {
+            Block::default()
+                .title(format!(
+                    "[{:03}][ASCII] {}",
+                    coll_size,
+                    self.typewriter.get_filename()
+                ))
+                .title(
+                    Title::from(format!("[{}]", self.typewriter.get_size()))
+                        .alignment(Alignment::Right),
+                )
+                .borders(Borders::ALL)
+                .border_type(border_type)
+                .border_style(Style::default().fg(blink_color.unwrap_or(Color::Reset)))
+        };
 
         let text = coll
             .iter()
@@ -88,12 +115,19 @@ impl TextView {
         f.render_widget(paragraph, rect);
     }
 
-    pub fn add_data_out(&mut self, data: SerialRxData) {
+    pub async fn add_data_out(&mut self, data: SerialRxData) {
         if self.history.len() >= self.capacity {
             self.history.remove(0);
         }
 
-        self.save_file += data.serialize();
+        if self.recorder.is_recording() {
+            self.recorder
+                .add_content(data.serialize())
+                .await
+                .expect("Cannot record data");
+        } else {
+            self.typewriter += data.serialize();
+        }
         self.history.push(data.into());
     }
 
@@ -149,10 +183,6 @@ impl TextView {
             self.scroll
         };
     }
-
-    pub fn save_history(&mut self) -> Result<(), String> {
-        self.save_file.flush()
-    }
 }
 
 pub struct ViewData {
@@ -164,4 +194,15 @@ impl ViewData {
     pub fn new(timestamp: DateTime<Local>, data: Vec<RichText>) -> Self {
         Self { timestamp, data }
     }
+}
+
+pub fn into_byte_format(size: u128) -> String {
+    let (size, unit) = match size {
+        x if x < 1024 => return format!("{} Bytes", size),
+        x if x < 1024 * 1024 => (size as f32 / 1024.0, "KB"),
+        x if x < 1024 * 1024 * 1024 => (size as f32 / (1024.0 * 1024.0), "MB"),
+        _ => (size as f32 / (1024.0 * 1024.0 * 1024.0), "GB"),
+    };
+
+    format!("{:.1} {}", size, unit)
 }

@@ -29,8 +29,9 @@ mod plugin_manager;
 mod process;
 mod rich_string;
 mod serial;
-mod storage;
 mod text;
+mod typewriter;
+mod recorder;
 
 pub type ConcreteBackend = CrosstermBackend<Stdout>;
 
