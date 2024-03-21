@@ -1,14 +1,17 @@
 use crate::messages::SerialRxData;
 use crate::rich_string::RichText;
+use crate::storage::Storage;
 use chrono::{DateTime, Local};
-use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
+use ratatui::widgets::block::Title;
 use ratatui::widgets::{Block, BorderType, Borders, Paragraph};
 use ratatui::Frame;
 
 pub struct TextView {
     history: Vec<ViewData>,
+    save_file: Storage,
     capacity: usize,
     auto_scroll: bool,
     scroll: (u16, u16),
@@ -16,9 +19,10 @@ pub struct TextView {
 }
 
 impl TextView {
-    pub fn new(capacity: usize) -> Self {
+    pub fn new(capacity: usize, filename: String) -> Self {
         Self {
             history: vec![],
+            save_file: Storage::new(filename),
             capacity,
             auto_scroll: true,
             scroll: (0, 0),
@@ -37,36 +41,33 @@ impl TextView {
         }
     }
 
-    pub fn draw(&self, f: &mut Frame, rect: Rect) {
+    pub fn get_save_file_storage(&self) -> &Storage {
+        &self.save_file
+    }
+
+    pub fn draw(&self, f: &mut Frame, rect: Rect, blink_color: Option<Color>) {
         let scroll = if self.auto_scroll {
             (self.max_main_axis(), self.scroll.1)
         } else {
             self.scroll
         };
 
-        let (coll, max, coll_size) = (
-            &self.history[(scroll.0 as usize)..],
-            "".to_string(),
-            self.history.len(),
-        );
+        let (coll, coll_size) = (&self.history[(scroll.0 as usize)..], self.history.len());
 
-        let block = if self.auto_scroll {
-            Block::default()
-                .title(format!("[{:03}{}] Text UTF-8", coll_size, max))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Thick)
-                .border_style(Style::default().fg(Color::Reset))
+        let save_file = self.save_file.get_filename();
+        let border_type = if self.auto_scroll {
+            BorderType::Thick
         } else {
-            Block::default()
-                .title(format!("[{:03}{}] Text UTF-8", coll_size, max))
-                .borders(Borders::ALL)
-                .border_type(BorderType::Double)
-                .border_style(
-                    Style::default()
-                        .fg(Color::Reset)
-                        .add_modifier(Modifier::RAPID_BLINK),
-                )
+            BorderType::Double
         };
+        let block = Block::default()
+            .title(format!("[{:03}][ASCII] {}", coll_size, save_file))
+            .title(
+                Title::from(format!("[{}]", self.save_file.get_size())).alignment(Alignment::Right),
+            )
+            .borders(Borders::ALL)
+            .border_type(border_type)
+            .border_style(Style::default().fg(blink_color.unwrap_or(Color::Reset)));
 
         let text = coll
             .iter()
@@ -92,6 +93,7 @@ impl TextView {
             self.history.remove(0);
         }
 
+        self.save_file += data.serialize();
         self.history.push(data.into());
     }
 
@@ -146,6 +148,10 @@ impl TextView {
         } else {
             self.scroll
         };
+    }
+
+    pub fn save_history(&mut self) -> Result<(), String> {
+        self.save_file.flush()
     }
 }
 

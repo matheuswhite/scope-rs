@@ -1,10 +1,12 @@
 #![deny(warnings)]
+#![feature(utf8_chunks)]
 
 extern crate core;
 
 use crate::command_bar::CommandBar;
 use crate::plugin_installer::PluginInstaller;
 use crate::serial::SerialIF;
+use chrono::Local;
 use clap::Parser;
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
@@ -17,6 +19,7 @@ use std::io;
 use std::io::Stdout;
 use std::path::PathBuf;
 
+mod blink_color;
 mod command_bar;
 mod error_pop_up;
 mod messages;
@@ -26,6 +29,7 @@ mod plugin_manager;
 mod process;
 mod rich_string;
 mod serial;
+mod storage;
 mod text;
 
 pub type ConcreteBackend = CrosstermBackend<Stdout>;
@@ -68,7 +72,8 @@ async fn app() -> Result<(), String> {
     let mut terminal =
         Terminal::new(backend).map_err(|_| "Cannot create terminal backend".to_string())?;
 
-    let mut command_bar = CommandBar::new(interface, view_length)
+    let datetime = Local::now().format("%Y%m%d_%H%M%S");
+    let mut command_bar = CommandBar::new(interface, view_length, format!("{}.txt", datetime))
         .with_command_file(cmd_file.as_path().to_str().unwrap());
 
     'main: loop {
