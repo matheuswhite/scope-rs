@@ -10,6 +10,20 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  local-ci:
+    name: Check on local CI
+    runs-on: self-hosted
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions-rs/toolchain@v1
+      with:
+        toolchain: nightly
+        components: clippy
+        override: true
+    - name: Install libudev-sys
+      run: sudo apt-get install -y libudev-dev
+    - name: Build
+      run: cargo +nightly build --release --verbose
   build-ubuntu:
     name: Check on Ubuntu
     runs-on: ubuntu-latest
