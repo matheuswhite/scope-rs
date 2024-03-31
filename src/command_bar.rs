@@ -380,6 +380,33 @@ impl CommandBar {
                     self.show_hint();
                 }
             }
+            KeyCode::Delete => {
+                if self.command_line.chars().count() == 1 {
+                    self.show_hint();
+                }
+
+                self.update_command_list();
+                self.command_line = self
+                    .command_line
+                    .chars()
+                    .enumerate()
+                    .filter_map(|(i, c)| {
+                        if i != self.command_line_idx {
+                            Some(c)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if self.command_line.chars().count() > 0
+                    && self.command_line.chars().all(|x| x.is_whitespace())
+                {
+                    self.command_line.clear();
+                    self.command_line_idx = 0;
+                    self.show_hint();
+                }
+            }
             KeyCode::Right => {
                 if self.command_line_idx == self.command_line.chars().count() {
                     return Ok(());
