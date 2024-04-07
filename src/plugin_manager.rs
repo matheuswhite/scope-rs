@@ -91,9 +91,18 @@ impl PluginManager {
             }
         });
 
+        let serial_plugin = Plugin::from_string(
+            "serial".to_string(),
+            include_str!("../plugins/serial.lua").to_string(),
+        )
+        .unwrap();
+
+        let mut plugins = HashMap::new();
+        plugins.insert(serial_plugin.name().to_string(), serial_plugin);
+
         Self {
             text_view: text_view3,
-            plugins: HashMap::new(),
+            plugins,
             serial_rx_tx,
             user_command_tx,
             flags,

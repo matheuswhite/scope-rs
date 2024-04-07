@@ -167,6 +167,10 @@ impl Plugin {
             .to_string();
         let code = std::fs::read_to_string(filepath).map_err(|_| "Cannot read plugin file")?;
 
+        Self::from_string(name, code)
+    }
+
+    pub fn from_string(name: String, code: String) -> Result<Plugin, String> {
         let lua = Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
             .map_err(|_| "Cannot create Lua obj".to_string())?;
 
