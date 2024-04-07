@@ -6,7 +6,6 @@ use std::borrow::Cow;
 use std::str::Utf8Chunks;
 
 pub enum UserTxData {
-    Exit,
     Data {
         content: String,
     },

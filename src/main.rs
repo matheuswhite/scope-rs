@@ -1,5 +1,6 @@
 #![deny(warnings)]
 #![feature(utf8_chunks)]
+#![feature(never_type)]
 
 extern crate core;
 
@@ -27,11 +28,12 @@ mod plugin;
 mod plugin_installer;
 mod plugin_manager;
 mod process;
+mod recorder;
 mod rich_string;
 mod serial;
+mod task_bridge;
 mod text;
 mod typewriter;
-mod recorder;
 
 pub type ConcreteBackend = CrosstermBackend<Stdout>;
 
@@ -60,7 +62,7 @@ async fn app() -> Result<(), String> {
 
     let cli = Cli::parse();
 
-    let interface = SerialIF::new(&cli.port, cli.baudrate).await;
+    let interface = SerialIF::build_and_connect(&cli.port, cli.baudrate);
 
     let view_length = cli.view_length.unwrap_or(CAPACITY);
     let cmd_file = cli.cmd_file.unwrap_or(PathBuf::from(CMD_FILEPATH));
@@ -81,6 +83,7 @@ async fn app() -> Result<(), String> {
         {
             let text_view = command_bar.get_text_view().await;
             let interface = command_bar.get_interface().await;
+
             terminal
                 .draw(|f| command_bar.draw(f, &text_view, &interface))
                 .map_err(|_| "Fail at terminal draw".to_string())?;
