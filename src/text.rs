@@ -160,6 +160,47 @@ impl TextView {
         }
     }
 
+    pub fn page_up(&mut self) {
+        if self.max_main_axis() > 0 {
+            self.auto_scroll = false;
+        }
+
+        let page_height = self.frame_height - 5;
+
+        if self.scroll.0 < page_height {
+            self.scroll.0 = 0;
+        } else {
+            self.scroll.0 -= page_height;
+        }
+    }
+
+    pub fn page_down(&mut self) {
+        let max_main_axis = self.max_main_axis();
+        let page_height = self.frame_height - 5;
+
+        self.scroll.0 += page_height;
+        self.scroll.0 = self.scroll.0.clamp(0, max_main_axis);
+
+        if self.scroll.0 == max_main_axis {
+            self.auto_scroll = true;
+        }
+    }
+
+    pub fn scroll_to_start(&mut self) {
+        if self.max_main_axis() > 0 {
+            self.auto_scroll = false;
+        }
+
+        self.scroll.0 = 0;
+    }
+
+    pub fn scroll_to_end(&mut self) {
+        let max_main_axis = self.max_main_axis();
+
+        self.scroll.0 = max_main_axis;
+        self.auto_scroll = true;
+    }
+
     pub fn left_scroll(&mut self) {
         if self.scroll.1 < 3 {
             self.scroll.1 = 0;
