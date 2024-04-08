@@ -394,7 +394,7 @@ impl CommandBar {
                 match &mut self.history_index {
                     None => {
                         self.history_index = Some(self.history.len() - 1);
-                        self.backup_command_line = self.command_line.clone();
+                        self.backup_command_line.clone_from(&self.command_line);
                     }
                     Some(0) => {}
                     Some(idx) => {
@@ -403,7 +403,8 @@ impl CommandBar {
                 }
 
                 self.clear_hint();
-                self.command_line = self.history[self.history_index.unwrap()].clone();
+                self.command_line
+                    .clone_from(&self.history[self.history_index.unwrap()]);
                 self.command_line_idx = self.command_line.chars().count();
                 self.update_command_list();
             }
@@ -416,14 +417,14 @@ impl CommandBar {
                     None => {}
                     Some(idx) if *idx == (self.history.len() - 1) => {
                         self.history_index = None;
-                        self.command_line = self.backup_command_line.clone();
+                        self.command_line.clone_from(&self.backup_command_line);
                         if self.command_line.is_empty() {
                             self.show_hint();
                         }
                     }
                     Some(idx) => {
                         *idx += 1;
-                        self.command_line = self.history[*idx].clone();
+                        self.command_line.clone_from(&self.history[*idx]);
                     }
                 }
 
@@ -432,7 +433,7 @@ impl CommandBar {
             }
             KeyCode::Esc => {
                 let interface = self.interface.lock().await;
-                interface.send(UserTxData::Exit);
+                interface.exit().await;
                 sleep(Duration::from_millis(100)).await;
                 return Err(());
             }

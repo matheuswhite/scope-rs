@@ -19,8 +19,7 @@ pub struct PluginManager {
     plugins: HashMap<String, Plugin>,
     serial_rx_tx: UnboundedSender<(String, SerialRxCall)>,
     user_command_tx: UnboundedSender<(String, UserCommandCall)>,
-    has_process_running: Arc<AtomicBool>,
-    stop_process_flag: Arc<AtomicBool>,
+    flags: PluginManagerFlags,
 }
 
 impl PluginManager {
@@ -35,13 +34,9 @@ impl PluginManager {
             (text_view.clone(), interface.clone(), process_runner.clone());
         let text_view3 = text_view.clone();
 
-        let has_process_running = Arc::new(AtomicBool::new(false));
-        let has_process_running2 = has_process_running.clone();
-        let has_process_running3 = has_process_running.clone();
-
-        let stop_process_flag = Arc::new(AtomicBool::new(false));
-        let stop_process_flag2 = stop_process_flag.clone();
-        let stop_process_flag3 = stop_process_flag.clone();
+        let flags = PluginManagerFlags::default();
+        let flags2 = flags.clone();
+        let flags3 = flags.clone();
 
         tokio::spawn(async move {
             'user_command: loop {
@@ -56,9 +51,8 @@ impl PluginManager {
                         interface.clone(),
                         plugin_name.clone(),
                         &process_runner,
-                        &has_process_running2,
-                        stop_process_flag2.clone(),
-                        false,
+                        flags2.clone(),
+                        ExecutionOrigin::UserCommand,
                         req,
                     )
                     .await
@@ -83,9 +77,8 @@ impl PluginManager {
                         interface2.clone(),
                         plugin_name.clone(),
                         &process_runner2,
-                        &has_process_running3,
-                        stop_process_flag3.clone(),
-                        true,
+                        flags3.clone(),
+                        ExecutionOrigin::SerialRx,
                         req,
                     )
                     .await
@@ -98,23 +91,31 @@ impl PluginManager {
             }
         });
 
+        let serial_plugin = Plugin::from_string(
+            "serial".to_string(),
+            include_str!("../plugins/serial.lua").to_string(),
+        )
+        .unwrap();
+
+        let mut plugins = HashMap::new();
+        plugins.insert(serial_plugin.name().to_string(), serial_plugin);
+
         Self {
             text_view: text_view3,
-            plugins: HashMap::new(),
+            plugins,
             serial_rx_tx,
             user_command_tx,
-            has_process_running,
-            stop_process_flag,
+            flags,
         }
     }
 
     pub fn has_process_running(&self) -> bool {
-        self.has_process_running.load(Ordering::SeqCst)
+        self.flags.has_process_running.load(Ordering::SeqCst)
     }
 
     pub async fn stop_process(&mut self) {
         if self.has_process_running() {
-            self.stop_process_flag.store(true, Ordering::SeqCst);
+            self.flags.stop_process.store(true, Ordering::SeqCst);
             Plugin::eprintln(
                 self.text_view.clone(),
                 "system".to_string(),
@@ -238,9 +239,8 @@ impl PluginManager {
         interface: Arc<Mutex<SerialIF>>,
         plugin_name: String,
         process_runner: &ProcessRunner,
-        has_running_process: &AtomicBool,
-        stop_process_flag: Arc<AtomicBool>,
-        is_from_serial_rx: bool,
+        flags: PluginManagerFlags,
+        origin: ExecutionOrigin,
         req: PluginRequest,
     ) -> Option<PluginRequestResult> {
         match req {
@@ -250,9 +250,34 @@ impl PluginManager {
             PluginRequest::Eprintln { msg } => {
                 Plugin::eprintln(text_view, plugin_name, msg).await;
             }
-            PluginRequest::Connect { .. } => {}
-            PluginRequest::Disconnect => {}
-            PluginRequest::Reconnect => {}
+            PluginRequest::Connect { port, baud_rate } => {
+                let mut interface = interface.lock().await;
+                if interface.is_connected() && port.is_none() && baud_rate.is_none() {
+                    Plugin::eprintln(
+                        text_view,
+                        plugin_name,
+                        "Serial port already connected".to_string(),
+                    )
+                    .await;
+                    return None;
+                }
+
+                interface.setup(port, baud_rate).await;
+            }
+            PluginRequest::Disconnect => {
+                let mut interface = interface.lock().await;
+                if !interface.is_connected() {
+                    Plugin::eprintln(
+                        text_view,
+                        plugin_name,
+                        "Serial port already disconnected".to_string(),
+                    )
+                    .await;
+                    return None;
+                }
+
+                interface.disconnect().await;
+            }
             PluginRequest::SerialTx { msg } => {
                 let mut text_view = text_view.lock().await;
                 let mut interface = interface.lock().await;
@@ -275,19 +300,8 @@ impl PluginManager {
                 }
             }
             PluginRequest::Sleep { time } => tokio::time::sleep(time).await,
-            PluginRequest::Exec { cmd } => {
-                if !is_from_serial_rx {
-                    has_running_process.store(true, Ordering::SeqCst);
-                    let res = Some(
-                        process_runner
-                            .run(plugin_name, cmd, stop_process_flag.clone())
-                            .await
-                            .unwrap(),
-                    );
-                    has_running_process.store(false, Ordering::SeqCst);
-                    stop_process_flag.store(false, Ordering::SeqCst);
-                    return res;
-                } else {
+            PluginRequest::Exec { cmd } => match origin {
+                ExecutionOrigin::SerialRx => {
                     Plugin::eprintln(
                         text_view,
                         plugin_name,
@@ -295,9 +309,32 @@ impl PluginManager {
                     )
                     .await
                 }
-            }
+                ExecutionOrigin::UserCommand => {
+                    flags.has_process_running.store(true, Ordering::SeqCst);
+                    let res = Some(
+                        process_runner
+                            .run(plugin_name, cmd, flags.stop_process.clone())
+                            .await
+                            .unwrap(),
+                    );
+                    flags.has_process_running.store(false, Ordering::SeqCst);
+                    flags.stop_process.store(false, Ordering::SeqCst);
+                    return res;
+                }
+            },
         }
 
         None
     }
+}
+
+#[derive(Default, Clone)]
+struct PluginManagerFlags {
+    has_process_running: Arc<AtomicBool>,
+    stop_process: Arc<AtomicBool>,
+}
+
+enum ExecutionOrigin {
+    SerialRx,
+    UserCommand,
 }

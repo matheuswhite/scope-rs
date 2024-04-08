@@ -1,131 +1,190 @@
 use crate::messages::{SerialRxData, UserTxData};
+use crate::task_bridge::{Task, TaskBridge};
 use chrono::Local;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
-use tokio::sync::mpsc::error::TryRecvError;
-use tokio::sync::mpsc::{unbounded_channel, UnboundedReceiver, UnboundedSender};
-use tokio_serial::SerialPort;
+use std::time::Duration;
+use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::Mutex;
+use tokio::time::Instant;
 
-pub struct SerialIF {
-    serial_tx: UnboundedSender<UserTxData>,
-    data_rx: UnboundedReceiver<SerialRxData>,
-    port: String,
-    baudrate: u32,
+pub type SerialIF = TaskBridge<SerialIFShared, SerialIFSynchronized, UserTxData, SerialRxData>;
+
+pub struct SerialIFShared {
+    info: SerialInfo,
+    is_connected: Arc<AtomicBool>,
+    reconnect: bool,
+    is_exit: bool,
+    disconnect: Option<SerialInfo>,
+}
+
+pub struct SerialIFSynchronized {
+    info: SerialInfo,
     is_connected: Arc<AtomicBool>,
 }
 
-impl Drop for SerialIF {
-    fn drop(&mut self) {
-        let _ = self.serial_tx.send(UserTxData::Exit);
-    }
-}
-
 impl SerialIF {
-    const SERIAL_TIMEOUT: Duration = Duration::from_millis(100);
-    const RECONNECT_INTERVAL: Duration = Duration::from_millis(200);
+    pub fn build_and_connect(port: &str, baudrate: u32) -> Self {
+        let info = SerialInfo {
+            port: port.to_string(),
+            baudrate,
+        };
+        let info2 = info.clone();
+
+        let is_connected = Arc::new(AtomicBool::new(false));
+        let is_connected2 = is_connected.clone();
+
+        Self::new::<SerialTask>(
+            SerialIFShared {
+                is_exit: false,
+                is_connected,
+                disconnect: None,
+                reconnect: true,
+                info,
+            },
+            SerialIFSynchronized {
+                info: info2,
+                is_connected: is_connected2,
+            },
+        )
+    }
 
     pub fn is_connected(&self) -> bool {
-        self.is_connected.load(Ordering::SeqCst)
-    }
-
-    pub fn send(&self, data: UserTxData) {
-        self.serial_tx.send(data).unwrap();
-    }
-
-    pub fn try_recv(&mut self) -> Result<SerialRxData, TryRecvError> {
-        self.data_rx.try_recv()
-    }
-
-    pub async fn recv(&mut self) -> Option<SerialRxData> {
-        self.data_rx.recv().await
+        self.synchronized().is_connected.load(Ordering::SeqCst)
     }
 
     pub fn description(&self) -> String {
-        format!("Serial {}:{}bps", self.port, self.baudrate)
+        let info = &self.synchronized().info;
+
+        format!("Serial {}:{}bps", info.port, info.baudrate)
     }
 
-    pub async fn new(port: &str, baudrate: u32) -> Self {
-        let (serial_tx, serial_rx) = unbounded_channel();
-        let (data_tx, data_rx) = unbounded_channel();
-
-        let is_connected = Arc::new(AtomicBool::new(false));
-
-        let port_clone = port.to_string();
-        let is_connected_clone = is_connected.clone();
-
-        tokio::spawn(async move {
-            SerialIF::send_task(
-                &port_clone,
-                baudrate,
-                serial_rx,
-                data_tx,
-                is_connected_clone,
-            )
-            .await;
-        });
-
-        Self {
-            serial_tx,
-            data_rx,
-            port: port.to_string(),
-            baudrate,
-            is_connected,
-        }
+    pub async fn exit(&self) {
+        self.shared().await.is_exit = true;
     }
 
-    async fn reconnect(
-        port: &str,
-        baudrate: u32,
-        interval: Duration,
-        is_connected: Arc<AtomicBool>,
-    ) -> Box<dyn SerialPort> {
-        'reconnect: loop {
-            if let Ok(serial) = tokio_serial::new(port, baudrate)
-                .data_bits(tokio_serial::DataBits::Eight)
-                .flow_control(tokio_serial::FlowControl::Hardware)
-                .parity(tokio_serial::Parity::None)
-                .stop_bits(tokio_serial::StopBits::One)
-                .timeout(SerialIF::SERIAL_TIMEOUT)
-                .open()
-            {
-                is_connected.store(true, Ordering::SeqCst);
-                break 'reconnect serial;
+    pub async fn setup(&mut self, port: Option<String>, baudrate: Option<u32>) {
+        self.synchronized_mut().info = {
+            let mut shared = self.shared().await;
+
+            if let Some(port) = port {
+                shared.info.port = port;
             }
-            tokio::time::sleep(interval).await;
-        }
+
+            if let Some(baudrate) = baudrate {
+                shared.info.baudrate = baudrate;
+            }
+
+            shared.reconnect = true;
+
+            shared.info.clone()
+        };
     }
 
-    async fn send_task(
-        port: &str,
-        baudrate: u32,
-        mut serial_rx: UnboundedReceiver<UserTxData>,
-        data_tx: UnboundedSender<SerialRxData>,
-        is_connected: Arc<AtomicBool>,
-    ) {
-        let mut serial = SerialIF::reconnect(
-            port,
-            baudrate,
-            SerialIF::RECONNECT_INTERVAL,
-            is_connected.clone(),
-        )
-        .await;
+    pub async fn disconnect(&mut self) {
+        let mut shared = self.shared().await;
+        shared.reconnect = false;
+        let info = shared.info.clone();
+        let _ = shared.disconnect.insert(info);
+    }
+}
 
+impl SerialIFShared {}
+
+struct SerialTask;
+
+impl SerialTask {
+    const SERIAL_TIMEOUT: Duration = Duration::from_millis(100);
+
+    fn set_is_connected(
+        info: SerialInfo,
+        is_connected: &AtomicBool,
+        to_bridge: &UnboundedSender<SerialRxData>,
+        val: bool,
+    ) {
+        is_connected.store(val, Ordering::SeqCst);
+
+        if is_connected.load(Ordering::SeqCst) {
+            to_bridge
+                .send(SerialRxData::Plugin {
+                    is_successful: true,
+                    timestamp: Local::now(),
+                    plugin_name: "serial".to_string(),
+                    content: format!("Connected at \"{}\" with {}bps", info.port, info.baudrate),
+                })
+                .expect("Cannot forward message read from serial")
+        } else {
+            to_bridge
+                .send(SerialRxData::Plugin {
+                    is_successful: true,
+                    timestamp: Local::now(),
+                    plugin_name: "serial".to_string(),
+                    content: format!(
+                        "Disconnected from \"{}\" with {}bps",
+                        info.port, info.baudrate
+                    ),
+                })
+                .expect("Cannot forward message read from serial");
+        }
+    }
+}
+
+impl Task<SerialIFShared, UserTxData, SerialRxData> for SerialTask {
+    async fn run(
+        shared: Arc<Mutex<SerialIFShared>>,
+        mut from_bridge: UnboundedReceiver<UserTxData>,
+        to_bridge: UnboundedSender<SerialRxData>,
+    ) {
         let mut line = vec![];
         let mut buffer = [0u8];
         let mut now = Instant::now();
+        let mut serial_wrapper = None;
 
         'task: loop {
-            if let Ok(data_to_send) = serial_rx.try_recv() {
+            let mut shared = shared.lock().await;
+
+            if shared.is_exit {
+                break 'task;
+            }
+
+            if let Some(old_serial_info) = shared.disconnect.take() {
+                let _ = serial_wrapper.take();
+                Self::set_is_connected(old_serial_info, &shared.is_connected, &to_bridge, false);
+                continue 'task;
+            }
+
+            if shared.reconnect {
+                let _ = serial_wrapper.take();
+                shared.is_connected.store(false, Ordering::SeqCst);
+                let Ok(serial) = tokio_serial::new(&shared.info.port, shared.info.baudrate)
+                    .data_bits(tokio_serial::DataBits::Eight)
+                    .flow_control(tokio_serial::FlowControl::Hardware)
+                    .parity(tokio_serial::Parity::None)
+                    .stop_bits(tokio_serial::StopBits::One)
+                    .timeout(Self::SERIAL_TIMEOUT)
+                    .open()
+                else {
+                    continue 'task;
+                };
+
+                Self::set_is_connected(shared.info.clone(), &shared.is_connected, &to_bridge, true);
+                shared.reconnect = false;
+                let _ = serial_wrapper.insert(serial);
+            }
+
+            let Some(mut serial) = serial_wrapper.take() else {
+                continue 'task;
+            };
+
+            if let Ok(data_to_send) = from_bridge.try_recv() {
                 match data_to_send {
-                    UserTxData::Exit => break 'task,
                     UserTxData::Data { content } => {
                         let content = format!("{content}\r\n");
 
-                        match serial.write(content.as_bytes()) {
+                        match serial.write_all(content.as_bytes()) {
                             Ok(_) => {
-                                data_tx
+                                to_bridge
                                     .send(SerialRxData::TxData {
                                         timestamp: Local::now(),
                                         content,
@@ -134,7 +193,7 @@ impl SerialIF {
                                     .expect("Cannot send data confirm");
                             }
                             Err(err) => {
-                                data_tx
+                                to_bridge
                                     .send(SerialRxData::TxData {
                                         timestamp: Local::now(),
                                         content: content + &err.to_string(),
@@ -150,9 +209,9 @@ impl SerialIF {
                     } => {
                         let content = format!("{content}\r\n");
 
-                        match serial.write(content.as_bytes()) {
+                        match serial.write_all(content.as_bytes()) {
                             Ok(_) => {
-                                data_tx
+                                to_bridge
                                     .send(SerialRxData::Command {
                                         timestamp: Local::now(),
                                         command_name,
@@ -162,7 +221,7 @@ impl SerialIF {
                                     .expect("Cannot send command confirm");
                             }
                             Err(_) => {
-                                data_tx
+                                to_bridge
                                     .send(SerialRxData::Command {
                                         timestamp: Local::now(),
                                         command_name,
@@ -174,14 +233,14 @@ impl SerialIF {
                         }
                     }
                     UserTxData::HexString { content } => match serial.write(&content) {
-                        Ok(_) => data_tx
+                        Ok(_) => to_bridge
                             .send(SerialRxData::HexString {
                                 timestamp: Local::now(),
                                 content,
                                 is_successful: true,
                             })
                             .expect("Cannot send hex string comfirm"),
-                        Err(_) => data_tx
+                        Err(_) => to_bridge
                             .send(SerialRxData::HexString {
                                 timestamp: Local::now(),
                                 content,
@@ -193,7 +252,7 @@ impl SerialIF {
                         plugin_name,
                         content,
                     } => match serial.write(&content) {
-                        Ok(_) => data_tx
+                        Ok(_) => to_bridge
                             .send(SerialRxData::PluginSerialTx {
                                 timestamp: Local::now(),
                                 plugin_name,
@@ -201,7 +260,7 @@ impl SerialIF {
                                 is_successful: true,
                             })
                             .expect("Cannot send hex string comfirm"),
-                        Err(_) => data_tx
+                        Err(_) => to_bridge
                             .send(SerialRxData::PluginSerialTx {
                                 timestamp: Local::now(),
                                 plugin_name,
@@ -217,7 +276,7 @@ impl SerialIF {
                 Ok(_) => {
                     line.push(buffer[0]);
                     if buffer[0] == b'\n' {
-                        data_tx
+                        to_bridge
                             .send(SerialRxData::RxData {
                                 timestamp: Local::now(),
                                 content: line.clone(),
@@ -232,23 +291,17 @@ impl SerialIF {
                     if e.kind() == io::ErrorKind::PermissionDenied
                         || e.kind() == io::ErrorKind::BrokenPipe =>
                 {
-                    is_connected.store(false, Ordering::SeqCst);
-                    serial = SerialIF::reconnect(
-                        port,
-                        baudrate,
-                        SerialIF::RECONNECT_INTERVAL,
-                        is_connected.clone(),
-                    )
-                    .await;
+                    shared.reconnect = true;
+                    continue 'task;
                 }
-                Err(_e) => {}
+                Err(_) => {}
             }
 
             if now.elapsed().as_millis() > 1_000 {
                 now = Instant::now();
 
                 if !line.is_empty() {
-                    data_tx
+                    to_bridge
                         .send(SerialRxData::RxData {
                             timestamp: Local::now(),
                             content: line.clone(),
@@ -257,6 +310,14 @@ impl SerialIF {
                     line.clear();
                 }
             }
+
+            serial_wrapper = Some(serial);
         }
     }
+}
+
+#[derive(Clone)]
+pub struct SerialInfo {
+    port: String,
+    baudrate: u32,
 }

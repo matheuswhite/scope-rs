@@ -17,14 +17,26 @@ pub struct Plugin {
 
 #[derive(Debug, PartialEq)]
 pub enum PluginRequest {
-    Println { msg: String },
-    Eprintln { msg: String },
-    Connect { port: String, baud_rate: u32 },
+    Println {
+        msg: String,
+    },
+    Eprintln {
+        msg: String,
+    },
+    Connect {
+        port: Option<String>,
+        baud_rate: Option<u32>,
+    },
     Disconnect,
-    Reconnect,
-    SerialTx { msg: Vec<u8> },
-    Sleep { time: Duration },
-    Exec { cmd: String },
+    SerialTx {
+        msg: Vec<u8>,
+    },
+    Sleep {
+        time: Duration,
+    },
+    Exec {
+        cmd: String,
+    },
 }
 
 pub enum PluginRequestResult {
@@ -86,12 +98,47 @@ impl<'a> TryFrom<Table<'a>> for PluginRequest {
             ":eprintln" => Ok(PluginRequest::Eprintln {
                 msg: value.get(2).map_err(|err| err.to_string())?,
             }),
-            ":connect" => Ok(PluginRequest::Connect {
-                port: value.get(2).map_err(|err| err.to_string())?,
-                baud_rate: value.get(3).map_err(|err| err.to_string())?,
-            }),
+            ":connect" => {
+                let Some(first_arg): Option<String> = value.get(2).ok() else {
+                    return Ok(PluginRequest::Connect {
+                        port: None,
+                        baud_rate: None,
+                    });
+                };
+
+                let (port, baud_rate) = if first_arg.chars().all(|x| x.is_ascii_digit()) {
+                    (
+                        None,
+                        Some(
+                            first_arg
+                                .parse::<u32>()
+                                .map_err(|_| "Cannot parse baud rate".to_string())?,
+                        ),
+                    )
+                } else {
+                    (Some(first_arg), None)
+                };
+
+                let Some(second_arg): Option<String> = value.get(3).ok() else {
+                    return Ok(PluginRequest::Connect { port, baud_rate });
+                };
+
+                let (port, baud_rate) = if port.is_some() {
+                    (
+                        port,
+                        Some(
+                            second_arg
+                                .parse::<u32>()
+                                .map_err(|_| "Cannot parse baud rate".to_string())?,
+                        ),
+                    )
+                } else {
+                    (Some(second_arg), baud_rate)
+                };
+
+                Ok(PluginRequest::Connect { port, baud_rate })
+            }
             ":disconnect" => Ok(PluginRequest::Disconnect),
-            ":reconnect" => Ok(PluginRequest::Reconnect),
             ":serial_tx" => Ok(PluginRequest::SerialTx {
                 msg: value.get(2).map_err(|err| err.to_string())?,
             }),
@@ -120,6 +167,10 @@ impl Plugin {
             .to_string();
         let code = std::fs::read_to_string(filepath).map_err(|_| "Cannot read plugin file")?;
 
+        Self::from_string(name, code)
+    }
+
+    pub fn from_string(name: String, code: String) -> Result<Plugin, String> {
         let lua = Lua::new_with(mlua::StdLib::ALL_SAFE, mlua::LuaOptions::default())
             .map_err(|_| "Cannot create Lua obj".to_string())?;
 
@@ -233,7 +284,7 @@ impl Plugin {
     fn check_integrity(lua: &Lua, code: &str) -> Result<(), String> {
         let globals = lua.globals();
 
-        Plugin::append_plugins_dir(&lua)?;
+        Plugin::append_plugins_dir(lua)?;
 
         lua.load(code)
             .exec()
@@ -336,10 +387,9 @@ impl Iterator for UserCommandCall {
 
 #[cfg(test)]
 mod tests {
-    use crate::plugin::{Plugin, PluginRequest, PluginRequestResult, PluginRequestResultHolder};
+    use crate::plugin::{Plugin, PluginRequest};
     use crate::plugin_installer::PluginInstaller;
-    use std::env::current_dir;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     #[test]
     fn test_echo() -> Result<(), String> {
@@ -347,45 +397,6 @@ mod tests {
         Plugin::new(PathBuf::from("plugins/echo.lua"))?;
 
         Ok(())
-    }
-
-    #[test]
-    fn test_west_build() -> Result<(), String> {
-        let zephyr_base = env!("ZEPHYR_BASE").to_string();
-        let path = zephyr_base + "/samples/hello_world";
-        let path = Path::new(&path);
-        let old_dir = current_dir().expect("Cannot get current dir");
-
-        std::env::set_current_dir(path).map_err(|err| err.to_string())?;
-        let Ok(_) = PluginInstaller.post() else {
-            return std::env::set_current_dir(old_dir).map_err(|err| err.to_string());
-        };
-        let Ok(west) = Plugin::new(PathBuf::from("west.lua")) else {
-            return std::env::set_current_dir(old_dir).map_err(|err| err.to_string());
-        };
-
-        let west_build = || {
-            let mut cmd_call = west.user_command_call(
-                vec!["build", "-p", "-b", "nrf52dk_nrf52832"]
-                    .into_iter()
-                    .map(|x| x.to_string())
-                    .collect(),
-            );
-
-            while let Some(req) = cmd_call.next() {
-                dbg!(req);
-                cmd_call.attach_request_result(PluginRequestResult::Exec {
-                    stdout: vec!["/home/matheuswhite/zephyrproject/zephyr".to_string()],
-                    stderr: vec![],
-                });
-            }
-        };
-
-        for _ in 0..2 {
-            west_build();
-        }
-
-        std::env::set_current_dir(old_dir).map_err(|err| err.to_string())
     }
 
     #[test]
@@ -405,13 +416,12 @@ mod tests {
         let msg = "Hello, World!";
         let plugin = Plugin::new(PathBuf::from("plugins/test.lua"))?;
         let serial_rx_call = plugin.serial_rx_call(msg.as_bytes().to_vec());
-        let expected = vec![
+        let expected = [
             PluginRequest::Connect {
-                port: "/dev/ttyACM0".to_string(),
-                baud_rate: 115200,
+                port: Some("/dev/ttyACM0".to_string()),
+                baud_rate: Some(115200),
             },
             PluginRequest::Disconnect,
-            PluginRequest::Reconnect,
             PluginRequest::SerialTx {
                 msg: msg.as_bytes().to_vec(),
             },
@@ -445,16 +455,15 @@ mod tests {
         let expected = vec![
             (
                 PluginRequest::Connect {
-                    port: "/dev/ttyACM0".to_string(),
-                    baud_rate: 115200,
+                    port: Some("/dev/ttyACM0".to_string()),
+                    baud_rate: Some(115200),
                 },
                 PluginRequest::Connect {
-                    port: "/dev/ttyACM0".to_string(),
-                    baud_rate: 115200,
+                    port: Some("/dev/ttyACM0".to_string()),
+                    baud_rate: Some(115200),
                 },
             ),
             (PluginRequest::Disconnect, PluginRequest::Disconnect),
-            (PluginRequest::Reconnect, PluginRequest::Reconnect),
             (
                 PluginRequest::SerialTx {
                     msg: msg[0].as_bytes().to_vec(),
@@ -501,13 +510,12 @@ mod tests {
             .collect();
         let plugin = Plugin::new(PathBuf::from("plugins/test.lua"))?;
         let user_command_call = plugin.user_command_call(arg_list);
-        let expected = vec![
+        let expected = [
             PluginRequest::Connect {
-                port: "/dev/ttyACM0".to_string(),
-                baud_rate: 115200,
+                port: Some("/dev/ttyACM0".to_string()),
+                baud_rate: Some(115200),
             },
             PluginRequest::Disconnect,
-            PluginRequest::Reconnect,
             PluginRequest::SerialTx {
                 msg: "Hello".as_bytes().to_vec(),
             },
@@ -549,16 +557,15 @@ mod tests {
         let expected = vec![
             (
                 PluginRequest::Connect {
-                    port: "/dev/ttyACM0".to_string(),
-                    baud_rate: 115200,
+                    port: Some("/dev/ttyACM0".to_string()),
+                    baud_rate: Some(115200),
                 },
                 PluginRequest::Connect {
-                    port: "/dev/ttyACM0".to_string(),
-                    baud_rate: 115200,
+                    port: Some("/dev/ttyACM0".to_string()),
+                    baud_rate: Some(115200),
                 },
             ),
             (PluginRequest::Disconnect, PluginRequest::Disconnect),
-            (PluginRequest::Reconnect, PluginRequest::Reconnect),
             (
                 PluginRequest::SerialTx {
                     msg: arg_list[0][0].as_bytes().to_vec(),

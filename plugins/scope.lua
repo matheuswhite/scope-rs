@@ -43,9 +43,6 @@ scope = {
     disconnect = function()
         coroutine.yield({ ":disconnect" })
     end,
-    reconnect = function()
-        coroutine.yield({ ":reconnect" })
-    end,
     serial_tx = function(msg)
         coroutine.yield({ ":serial_tx", msg })
     end,
