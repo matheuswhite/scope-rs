@@ -342,6 +342,14 @@ impl CommandBar {
                 self.update_command_list();
                 self.history_index = None;
             }
+            KeyCode::PageUp if key.modifiers == KeyModifiers::CONTROL => {
+                self.text_view.lock().await.scroll_to_start();
+            }
+            KeyCode::PageUp => self.text_view.lock().await.page_up(),
+            KeyCode::PageDown if key.modifiers == KeyModifiers::CONTROL => {
+                self.text_view.lock().await.scroll_to_end();
+            }
+            KeyCode::PageDown => self.text_view.lock().await.page_down(),
             KeyCode::Backspace => {
                 if self.command_line.chars().count() == 1 {
                     self.show_hint();
