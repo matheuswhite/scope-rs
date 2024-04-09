@@ -356,7 +356,6 @@ impl CommandBar {
                 }
 
                 if self.command_line_idx > 0 {
-                    self.update_command_list();
                     self.command_line_idx -= 1;
                     self.command_line = self
                         .command_line
@@ -370,6 +369,7 @@ impl CommandBar {
                             }
                         })
                         .collect();
+                    self.update_command_list();
                 }
 
                 if self.command_line.chars().count() > 0
@@ -381,11 +381,10 @@ impl CommandBar {
                 }
             }
             KeyCode::Delete => {
-                if self.command_line.chars().count() == 1 {
+                if self.command_line.chars().count() == 0 {
                     self.show_hint();
                 }
 
-                self.update_command_list();
                 self.command_line = self
                     .command_line
                     .chars()
@@ -398,6 +397,7 @@ impl CommandBar {
                         }
                     })
                     .collect();
+                self.update_command_list();
 
                 if self.command_line.chars().count() > 0
                     && self.command_line.chars().all(|x| x.is_whitespace())
