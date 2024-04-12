@@ -17,6 +17,8 @@ use ratatui::Terminal;
 use std::io;
 use std::io::Stdout;
 use std::path::PathBuf;
+use crate::cli::Commands;
+use clap::Args;
 
 mod blink_color;
 mod command_bar;
@@ -32,14 +34,16 @@ mod serial;
 mod task_bridge;
 mod text;
 mod typewriter;
+mod cli;
 
 pub type ConcreteBackend = CrosstermBackend<Stdout>;
 
-#[derive(Parser)]
+#[derive(Args)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    port: String,
-    baudrate: u32,
+    #[command(subcommand)]
+    #[arg(required = true)]
+    command: Commands,
     #[clap(short, long)]
     view_length: Option<usize>,
     #[clap(short, long)]
@@ -60,52 +64,57 @@ async fn app() -> Result<(), String> {
 
     let cli = Cli::parse();
 
-    let interface = SerialIF::build_and_connect(&cli.port, cli.baudrate);
+    let port = cli.exec();
+    let mut interface;
+    match port {
+        Ok(v) => {
+            interface = SerialIF::build_and_connect(v.0, *v.1);
+            let view_length = cli.view_length.unwrap_or(CAPACITY);
+            let cmd_file = cli.cmd_file.unwrap_or(PathBuf::from(CMD_FILEPATH));
 
-    let view_length = cli.view_length.unwrap_or(CAPACITY);
-    let cmd_file = cli.cmd_file.unwrap_or(PathBuf::from(CMD_FILEPATH));
+            enable_raw_mode().map_err(|_| "Cannot enable terminal raw mode".to_string())?;
+            let mut stdout = io::stdout();
+            execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
+                .map_err(|_| "Cannot enable alternate screen and mouse capture".to_string())?;
+            let backend = CrosstermBackend::new(stdout);
+            let mut terminal =
+                Terminal::new(backend).map_err(|_| "Cannot create terminal backend".to_string())?;
 
-    enable_raw_mode().map_err(|_| "Cannot enable terminal raw mode".to_string())?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
-        .map_err(|_| "Cannot enable alternate screen and mouse capture".to_string())?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal =
-        Terminal::new(backend).map_err(|_| "Cannot create terminal backend".to_string())?;
+            let datetime = Local::now().format("%Y%m%d_%H%M%S");
+            let mut command_bar = CommandBar::new(interface, view_length, format!("{}.txt", datetime))
+                .with_command_file(cmd_file.as_path().to_str().unwrap());
 
-    let datetime = Local::now().format("%Y%m%d_%H%M%S");
-    let mut command_bar = CommandBar::new(interface, view_length, format!("{}.txt", datetime))
-        .with_command_file(cmd_file.as_path().to_str().unwrap());
+            'main: loop {
+                {
+                    let text_view = command_bar.get_text_view().await;
+                    let interface = command_bar.get_interface().await;
 
-    'main: loop {
-        {
-            let text_view = command_bar.get_text_view().await;
-            let interface = command_bar.get_interface().await;
+                    terminal
+                        .draw(|f| command_bar.draw(f, &text_view, &interface))
+                        .map_err(|_| "Fail at terminal draw".to_string())?;
+                }
 
+                if command_bar
+                    .update(terminal.backend().size().unwrap())
+                    .await
+                    .is_err()
+                {
+                    break 'main;
+                }
+            }
+
+            disable_raw_mode().map_err(|_| "Cannot disable terminal raw mode".to_string())?;
+            execute!(
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            ).map_err(|_| "Cannot disable alternate screen and mouse capture".to_string())?;
             terminal
-                .draw(|f| command_bar.draw(f, &text_view, &interface))
-                .map_err(|_| "Fail at terminal draw".to_string())?;
+                .show_cursor()
+                .map_err(|_| "Cannot show mouse cursor".to_string())?;
         }
-
-        if command_bar
-            .update(terminal.backend().size().unwrap())
-            .await
-            .is_err()
-        {
-            break 'main;
-        }
+        _ => {}
     }
-
-    disable_raw_mode().map_err(|_| "Cannot disable terminal raw mode".to_string())?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )
-    .map_err(|_| "Cannot disable alternate screen and mouse capture".to_string())?;
-    terminal
-        .show_cursor()
-        .map_err(|_| "Cannot show mouse cursor".to_string())?;
 
     Ok(())
 }
