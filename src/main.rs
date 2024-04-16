@@ -6,7 +6,7 @@ use crate::command_bar::CommandBar;
 use crate::plugin_installer::PluginInstaller;
 use crate::serial::SerialIF;
 use chrono::Local;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -17,7 +17,6 @@ use ratatui::Terminal;
 use std::io;
 use std::io::Stdout;
 use std::path::PathBuf;
-use crate::cli::Commands;
 use clap::Args;
 
 mod blink_color;
@@ -34,15 +33,25 @@ mod serial;
 mod task_bridge;
 mod text;
 mod typewriter;
-mod cli;
 
 pub type ConcreteBackend = CrosstermBackend<Stdout>;
 
-#[derive(Args)]
+#[derive(Subcommand)]
+pub enum Commands {
+    Serial{
+        port: Option<std::string::String>,
+        baudrate: Option<u32>,
+    },
+    Ble{
+        name_device: std::string::String,
+        mtu: u32
+    },
+}
+
+#[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     #[command(subcommand)]
-    #[arg(required = true)]
     command: Commands,
     #[clap(short, long)]
     view_length: Option<usize>,
@@ -64,13 +73,15 @@ async fn app() -> Result<(), String> {
 
     let cli = Cli::parse();
 
-    let port = cli.exec();
-    let mut interface;
-    match port {
-        Ok(v) => {
-            interface = SerialIF::build_and_connect(v.0, *v.1);
-            let view_length = cli.view_length.unwrap_or(CAPACITY);
-            let cmd_file = cli.cmd_file.unwrap_or(PathBuf::from(CMD_FILEPATH));
+    let view_length = cli.view_length.unwrap_or(CAPACITY);
+    let cmd_file = cli.cmd_file.unwrap_or(PathBuf::from(CMD_FILEPATH));
+
+    match cli.command {
+        Commands::Serial {port, baudrate} => {
+            let port_select = port.unwrap_or("".to_string());
+            let baudrate_select= baudrate.unwrap_or(0);
+
+            let interface = SerialIF::build_and_connect(port_select, baudrate_select);
 
             enable_raw_mode().map_err(|_| "Cannot enable terminal raw mode".to_string())?;
             let mut stdout = io::stdout();
@@ -112,11 +123,13 @@ async fn app() -> Result<(), String> {
             terminal
                 .show_cursor()
                 .map_err(|_| "Cannot show mouse cursor".to_string())?;
-        }
-        _ => {}
-    }
 
-    Ok(())
+            Ok(())
+        }
+        _ => {
+            Ok(())
+        }
+    }
 }
 
 #[tokio::main]

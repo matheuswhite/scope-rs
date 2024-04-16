@@ -25,7 +25,7 @@ pub struct SerialIFSynchronized {
 }
 
 impl SerialIF {
-    pub fn build_and_connect(port: &str, baudrate: u32) -> Self {
+    pub fn build_and_connect(port: String, baudrate: u32) -> Self {
         let info = SerialInfo {
             port: port.to_string(),
             baudrate,
