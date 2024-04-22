@@ -159,7 +159,7 @@ impl Task<SerialIFShared, UserTxData, SerialRxData> for SerialTask {
                 shared.is_connected.store(false, Ordering::SeqCst);
                 let Ok(serial) = tokio_serial::new(&shared.info.port, shared.info.baudrate)
                     .data_bits(tokio_serial::DataBits::Eight)
-                    .flow_control(tokio_serial::FlowControl::Hardware)
+                    .flow_control(tokio_serial::FlowControl::None)
                     .parity(tokio_serial::Parity::None)
                     .stop_bits(tokio_serial::StopBits::One)
                     .timeout(Self::SERIAL_TIMEOUT)
