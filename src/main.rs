@@ -1,6 +1,4 @@
 #![deny(warnings)]
-#![feature(utf8_chunks)]
-#![feature(never_type)]
 
 extern crate core;
 
