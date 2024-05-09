@@ -300,7 +300,7 @@ impl PluginManager {
                 }
             }
             PluginRequest::Sleep { time } => tokio::time::sleep(time).await,
-            PluginRequest::Exec { cmd } => match origin {
+            PluginRequest::Exec { cmd, quiet } => match origin {
                 ExecutionOrigin::SerialRx => {
                     Plugin::eprintln(
                         text_view,
@@ -313,7 +313,7 @@ impl PluginManager {
                     flags.has_process_running.store(true, Ordering::SeqCst);
                     let res = Some(
                         process_runner
-                            .run(plugin_name, cmd, flags.stop_process.clone())
+                            .run(plugin_name, cmd, quiet, flags.stop_process.clone())
                             .await
                             .unwrap(),
                     );
