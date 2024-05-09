@@ -3,7 +3,6 @@ use crate::text::ViewData;
 use chrono::{DateTime, Local};
 use ratatui::style::Color;
 use std::borrow::Cow;
-use std::str::Utf8Chunks;
 
 pub enum UserTxData {
     Data {
@@ -64,7 +63,7 @@ impl SerialRxData {
     }
 
     fn from_utf8_print_invalid(v: &[u8]) -> Cow<'_, str> {
-        let mut iter = Utf8Chunks::new(v);
+        let mut iter = v.utf8_chunks();
 
         let chunk = if let Some(chunk) = iter.next() {
             let valid = chunk.valid();
