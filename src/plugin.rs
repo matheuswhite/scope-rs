@@ -36,6 +36,7 @@ pub enum PluginRequest {
     },
     Exec {
         cmd: String,
+        quiet: bool,
     },
 }
 
@@ -150,6 +151,7 @@ impl<'a> TryFrom<Table<'a>> for PluginRequest {
             }
             ":exec" => Ok(PluginRequest::Exec {
                 cmd: value.get(2).map_err(|err| err.to_string())?,
+                quiet: value.get(3).map_err(|err| err.to_string())?,
             }),
             _ => Err("Unknown function".to_string()),
         }

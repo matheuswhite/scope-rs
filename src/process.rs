@@ -28,9 +28,12 @@ impl ProcessRunner {
         &self,
         plugin_name: String,
         cmd: String,
+        quiet: bool,
         stop_process_flag: Arc<AtomicBool>,
     ) -> Result<PluginRequestResult, String> {
-        Plugin::println(self.text_view.clone(), plugin_name.clone(), cmd.clone()).await;
+        if !quiet {
+            Plugin::println(self.text_view.clone(), plugin_name.clone(), cmd.clone()).await;
+        }
 
         let mut child = if cfg!(target_os = "windows") {
             Command::new("cmd")
@@ -67,7 +70,9 @@ impl ProcessRunner {
                 }
 
                 buffer.push(line.clone());
-                Plugin::println(text_view2.clone(), plugin_name.clone(), line.clone()).await;
+                if !quiet {
+                    Plugin::println(text_view2.clone(), plugin_name.clone(), line.clone()).await;
+                }
             }
 
             buffer
@@ -84,7 +89,9 @@ impl ProcessRunner {
                 }
 
                 buffer.push(line.clone());
-                Plugin::eprintln(text_view3.clone(), plugin_name2.clone(), line).await;
+                if !quiet {
+                    Plugin::eprintln(text_view3.clone(), plugin_name2.clone(), line).await;
+                }
             }
 
             buffer

@@ -49,8 +49,9 @@ scope = {
     sleep = function(time)
         coroutine.yield({ ":sleep", time })
     end,
-    exec = function(cmd)
-        local _, stdout, stderr = coroutine.yield({ ":exec", cmd })
+    exec = function(cmd, quiet)
+        quiet = quiet or false
+        local _, stdout, stderr = coroutine.yield({ ":exec", cmd, quiet })
         return stdout, stderr
     end
 }
