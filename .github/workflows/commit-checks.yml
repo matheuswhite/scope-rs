@@ -17,4 +17,4 @@ jobs:
 
       - name: Verifica os commits temporal e posicionalmente.
         run: |
-          python ./.github/commit_checks.py -s origin/"${{github.head_ref}}"
+          python .github/commit_checks.py -s origin/"${{github.head_ref}}"
