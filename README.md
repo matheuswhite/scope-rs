@@ -1,7 +1,7 @@
 <p align="center">
     <br><img src="imgs/scope-logo.png" width="800" alt="Scope Banner">
     <br><img src="https://github.com/matheuswhite/scope-rs/actions/workflows/rust.yml/badge.svg" alt="Build Status">
-    <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg"></a>
+    <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" alt="License BSD-3"></a>
     <a href="https://crates.io/crates/scope-monitor"><img src="https://img.shields.io/crates/v/scope-monitor.svg" alt="Version info"></a>
     <br><b>Scope</b> is a multi-platform serial monitor with user-extensible features.
 </p>
@@ -74,6 +74,31 @@ its representation, such as: `\n`, `\r` and `\0`.
 
 ![Special character gif](videos/invisible.gif)
 
+### Setup Serial Port
+
+It's possible change serial port and its baudrate while the tool is open. To do that,
+type `!serial connect COM4 9600` to set serial port to `COM4` and baudrate to `9600`. You can also omit port to change
+only the baudrate (`!serial connect 9600`) or omit the baudrate to change only the port (`!serial connect COM4`). If you
+want to release the serial port, you'll type `!serial disconnect`.
+
+![Setup serial port]()
+
+### Save history
+
+To save the all messages captured (and sent) since the start, you can hit `Ctrl+s`. The history box will blink and a
+message will be displayed on history. The filename is shown at top of history box with `.txt` extension. There is, at
+the history's top-right corner, the size of all message captured.
+
+![Save history]()
+
+However, if you want to save only the message captured from now, you'll use the record feature. Hitting `Ctrl+r`, you'll
+start a record session. While in a record session, the history block is yellow and the `Scope` will store all messages
+captured from now. To stop the record session, you need to hit `Ctrl+r` again. The right-corner indicator will show the
+size of the record session. A new filename is created each time a new record session is started. Both: start session and
+stop session, prints a message on the history box to indicate when it occurs.
+
+![Save record]()
+
 ### Message Timestamp
 
 All the data written or read has a gray timestamp on the left of the message and with the following
@@ -84,6 +109,10 @@ format: `HH:MM:SS.ms`.
 You can use `Scope` on multiple platforms, like: Linux, Windows and macOS[^1].
 
 [^1]: Not tested yet.
+
+### History Navigation
+
+You can navigate through the message history using the mouse wheel or hitting `PageUp` and `PageDown`.
 
 ### Plugins
 
@@ -160,11 +189,11 @@ cargo install scope-monitor
 
 ## How to Use
 
-After the installation, type `scope` followed by the serial port and the desired baud rate. For example, to open
+After the installation, type `scope serial` followed by the serial port and the desired baud rate. For example, to open
 the port `COM3` at `115200 bps` type:
 
 ```shell
-scope COM3 115200
+scope serial COM3 115200
 ```
 
 When the command bar at the bottom is green, it starts to capture messages from serial port and allows for sending
@@ -172,16 +201,16 @@ messages.
 
 To load a list of commands, from a YAML file, use should use `-c <YOUR_COMMANDS>.yml`
 or `--cmd-file <YOUR_COMMANDS>.yml`
-between `scope` and its parameters. For example, to load `cmd.yml` file, use can type:
+between `scope` and `serial`. For example, to load `cmd.yml` file, use can type:
 
 ```shell
-scope -c cmd.yml COM3 115200
+scope -c cmd.yml serial COM3 115200
 ```
 
 or
 
 ```shell
-scope --cmd-file cmd.yml COM3 115200
+scope --cmd-file cmd.yml serial COM3 115200
 ```
 
 ## Project Goals
