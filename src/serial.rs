@@ -50,6 +50,10 @@ impl SerialIF {
         )
     }
 
+    pub fn get_info(&self) -> SerialInfo {
+        self.synchronized().info.clone()
+    }
+
     pub fn is_connected(&self) -> bool {
         self.synchronized().is_connected.load(Ordering::SeqCst)
     }
@@ -320,4 +324,14 @@ impl Task<SerialIFShared, UserTxData, SerialRxData> for SerialTask {
 pub struct SerialInfo {
     port: String,
     baudrate: u32,
+}
+
+impl SerialInfo {
+    pub fn port(&self) -> &str {
+        &self.port
+    }
+
+    pub fn baudrate(&self) -> u32 {
+        self.baudrate
+    }
 }

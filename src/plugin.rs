@@ -38,6 +38,7 @@ pub enum PluginRequest {
         cmd: String,
         quiet: bool,
     },
+    Info,
 }
 
 pub enum PluginRequestResult {
@@ -45,6 +46,25 @@ pub enum PluginRequestResult {
         stdout: Vec<String>,
         stderr: Vec<String>,
     },
+    Info {
+        serial: SerialInfoResult,
+    },
+}
+
+pub struct SerialInfoResult {
+    port: String,
+    baudrate: u32,
+    is_connected: bool,
+}
+
+impl SerialInfoResult {
+    pub fn new(port: String, baudrate: u32, is_connected: bool) -> Self {
+        Self {
+            port,
+            baudrate,
+            is_connected,
+        }
+    }
 }
 
 pub struct SerialRxCall {
@@ -153,6 +173,7 @@ impl<'a> TryFrom<Table<'a>> for PluginRequest {
                 cmd: value.get(2).map_err(|err| err.to_string())?,
                 quiet: value.get(3).map_err(|err| err.to_string())?,
             }),
+            ":info" => Ok(PluginRequest::Info),
             _ => Err("Unknown function".to_string()),
         }
     }
@@ -349,6 +370,40 @@ impl Iterator for SerialRxCall {
                     Err(_) => None,
                 }
             }
+            PluginRequestResult::Info {
+                serial:
+                    SerialInfoResult {
+                        port,
+                        baudrate,
+                        is_connected,
+                    },
+            } => {
+                let serial = self
+                    .lua
+                    .create_table()
+                    .expect("Cannot create serial lua table");
+                serial.set("port", port).expect("Cannot add port");
+                serial
+                    .set("baudrate", baudrate)
+                    .expect("Cannot add baudrate");
+                serial
+                    .set("is_connected", is_connected)
+                    .expect("Cannot add baudrate");
+
+                let table = self.lua.create_table().expect("Cannot create a lua table");
+                table.set("serial", serial).expect("Cannot add serial");
+
+                match serial_rx.resume::<_, Table>((msg, table)) {
+                    Ok(req) => {
+                        let req: PluginRequest = match req.try_into() {
+                            Ok(req) => req,
+                            Err(msg) => return Some(PluginRequest::Eprintln { msg }),
+                        };
+                        Some(req)
+                    }
+                    Err(_) => None,
+                }
+            }
         }
     }
 }
@@ -373,6 +428,40 @@ impl Iterator for UserCommandCall {
         match req_result {
             PluginRequestResult::Exec { stdout, stderr } => {
                 match user_command.resume::<_, Table>((arg_list, stdout, stderr)) {
+                    Ok(req) => {
+                        let req: PluginRequest = match req.try_into() {
+                            Ok(req) => req,
+                            Err(msg) => return Some(PluginRequest::Eprintln { msg }),
+                        };
+                        Some(req)
+                    }
+                    Err(_) => None,
+                }
+            }
+            PluginRequestResult::Info {
+                serial:
+                    SerialInfoResult {
+                        port,
+                        baudrate,
+                        is_connected,
+                    },
+            } => {
+                let serial = self
+                    .lua
+                    .create_table()
+                    .expect("Cannot create serial lua table");
+                serial.set("port", port).expect("Cannot add port");
+                serial
+                    .set("baudrate", baudrate)
+                    .expect("Cannot add baudrate");
+                serial
+                    .set("is_connected", is_connected)
+                    .expect("Cannot add baudrate");
+
+                let table = self.lua.create_table().expect("Cannot create a lua table");
+                table.set("serial", serial).expect("Cannot add serial");
+
+                match user_command.resume::<_, Table>((arg_list, table)) {
                     Ok(req) => {
                         let req: PluginRequest = match req.try_into() {
                             Ok(req) => req,

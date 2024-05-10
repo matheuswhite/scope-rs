@@ -53,5 +53,9 @@ scope = {
         quiet = quiet or false
         local _, stdout, stderr = coroutine.yield({ ":exec", cmd, quiet })
         return stdout, stderr
+    end,
+    info = function()
+        local _, output = coroutine.yield({ ":info" })
+        return output
     end
 }
