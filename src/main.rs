@@ -6,7 +6,7 @@ use crate::command_bar::CommandBar;
 use crate::plugin_installer::PluginInstaller;
 use crate::serial::SerialIF;
 use chrono::Local;
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
@@ -35,11 +35,23 @@ mod typewriter;
 
 pub type ConcreteBackend = CrosstermBackend<Stdout>;
 
+#[derive(Subcommand)]
+pub enum Commands {
+    Serial {
+        port: Option<String>,
+        baudrate: Option<u32>,
+    },
+    Ble {
+        name_device: String,
+        mtu: u32,
+    },
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
-    port: String,
-    baudrate: u32,
+    #[command(subcommand)]
+    command: Commands,
     #[clap(short, long)]
     view_length: Option<usize>,
     #[clap(short, long)]
@@ -60,10 +72,21 @@ async fn app() -> Result<(), String> {
 
     let cli = Cli::parse();
 
-    let interface = SerialIF::build_and_connect(&cli.port, cli.baudrate);
-
     let view_length = cli.view_length.unwrap_or(CAPACITY);
     let cmd_file = cli.cmd_file.unwrap_or(PathBuf::from(CMD_FILEPATH));
+    let interface;
+
+    match cli.command {
+        Commands::Serial { port, baudrate } => {
+            let port_select = port.unwrap_or("".to_string());
+            let baudrate_select = baudrate.unwrap_or(0);
+
+            interface = SerialIF::build_and_connect(&port_select, baudrate_select);
+        }
+        _ => {
+            unimplemented!()
+        }
+    }
 
     enable_raw_mode().map_err(|_| "Cannot enable terminal raw mode".to_string())?;
     let mut stdout = io::stdout();
@@ -98,11 +121,10 @@ async fn app() -> Result<(), String> {
 
     disable_raw_mode().map_err(|_| "Cannot disable terminal raw mode".to_string())?;
     execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )
-    .map_err(|_| "Cannot disable alternate screen and mouse capture".to_string())?;
+                terminal.backend_mut(),
+                LeaveAlternateScreen,
+                DisableMouseCapture
+            ).map_err(|_| "Cannot disable alternate screen and mouse capture".to_string())?;
     terminal
         .show_cursor()
         .map_err(|_| "Cannot show mouse cursor".to_string())?;
