@@ -249,8 +249,8 @@ Take a look at the [CONTRIBUTING](CONTRIBUTING.md) guide
 
 ## Acknowledges
 
-+ [Emilio Bottoni](https://github.com/MilhoNerfado) for being a heavy tester of this tool;
-+ [José Gomes](https://github.com/JoseGomesJr) for some features and tests.
++ [Emilio Bottoni](https://github.com/MilhoNerfado) and [José Gomes](https://github.com/JoseGomesJr) for the ideas that
+  pushes forward this tool, for the tests that finds hidden bugs and for good features implementations.
 
 ## License
 
