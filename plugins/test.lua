@@ -7,17 +7,23 @@
 require "scope"
 
 function serial_rx(msg)
-    scope.connect('/dev/ttyACM0', 115200)
     scope.disconnect()
+    scope.connect('COM1', 115200)
     scope.serial_tx(msg)
     scope.println('Sent ' .. bytes2str(msg))
     scope.eprintln('Timeout')
 end
 
 function user_command(arg_list)
-    scope.connect('/dev/ttyACM0', 115200)
     scope.disconnect()
+    scope.connect('COM1', 115200)
     scope.serial_tx(str2bytes(arg_list[1]))
     scope.println('Sent ' .. arg_list[2])
     scope.eprintln('Timeout')
+    scope.exec('echo hello', true)
+    scope.exec('echo hello')
+    info = scope.info()
+    -- info: {'serial': {port: 'COM1', baudrate: '115200', is_connected: true}}
+    text = '[' .. tostring(info.serial.is_connected) .. '] serial: ' .. info.serial.port .. '@' .. tostring(info.serial.baudrate) .. 'bps'
+    scope.println(text)
 end

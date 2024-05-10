@@ -508,11 +508,11 @@ mod tests {
         let plugin = Plugin::new(PathBuf::from("plugins/test.lua"))?;
         let serial_rx_call = plugin.serial_rx_call(msg.as_bytes().to_vec());
         let expected = [
+            PluginRequest::Disconnect,
             PluginRequest::Connect {
-                port: Some("/dev/ttyACM0".to_string()),
+                port: Some("COM1".to_string()),
                 baud_rate: Some(115200),
             },
-            PluginRequest::Disconnect,
             PluginRequest::SerialTx {
                 msg: msg.as_bytes().to_vec(),
             },
@@ -521,6 +521,14 @@ mod tests {
             },
             PluginRequest::Eprintln {
                 msg: "Timeout".to_string(),
+            },
+            PluginRequest::Exec {
+                cmd: "echo hello".to_string(),
+                quiet: false,
+            },
+            PluginRequest::Info,
+            PluginRequest::Println {
+                msg: "".to_string(),
             },
         ];
 
@@ -544,17 +552,17 @@ mod tests {
             plugin[1].serial_rx_call(msg[1].as_bytes().to_vec()),
         ];
         let expected = vec![
+            (PluginRequest::Disconnect, PluginRequest::Disconnect),
             (
                 PluginRequest::Connect {
-                    port: Some("/dev/ttyACM0".to_string()),
+                    port: Some("COM1".to_string()),
                     baud_rate: Some(115200),
                 },
                 PluginRequest::Connect {
-                    port: Some("/dev/ttyACM0".to_string()),
+                    port: Some("COM1".to_string()),
                     baud_rate: Some(115200),
                 },
             ),
-            (PluginRequest::Disconnect, PluginRequest::Disconnect),
             (
                 PluginRequest::SerialTx {
                     msg: msg[0].as_bytes().to_vec(),
@@ -602,11 +610,11 @@ mod tests {
         let plugin = Plugin::new(PathBuf::from("plugins/test.lua"))?;
         let user_command_call = plugin.user_command_call(arg_list);
         let expected = [
+            PluginRequest::Disconnect,
             PluginRequest::Connect {
-                port: Some("/dev/ttyACM0".to_string()),
+                port: Some("COM1".to_string()),
                 baud_rate: Some(115200),
             },
-            PluginRequest::Disconnect,
             PluginRequest::SerialTx {
                 msg: "Hello".as_bytes().to_vec(),
             },
@@ -616,6 +624,15 @@ mod tests {
             PluginRequest::Eprintln {
                 msg: "Timeout".to_string(),
             },
+            PluginRequest::Exec {
+                cmd: "echo hello".to_string(),
+                quiet: true,
+            },
+            PluginRequest::Exec {
+                cmd: "echo hello".to_string(),
+                quiet: false,
+            },
+            PluginRequest::Info,
         ];
 
         for (i, req) in user_command_call.enumerate() {
@@ -646,17 +663,17 @@ mod tests {
             plugin[1].user_command_call(arg_list[1].clone()),
         ];
         let expected = vec![
+            (PluginRequest::Disconnect, PluginRequest::Disconnect),
             (
                 PluginRequest::Connect {
-                    port: Some("/dev/ttyACM0".to_string()),
+                    port: Some("COM1".to_string()),
                     baud_rate: Some(115200),
                 },
                 PluginRequest::Connect {
-                    port: Some("/dev/ttyACM0".to_string()),
+                    port: Some("COM1".to_string()),
                     baud_rate: Some(115200),
                 },
             ),
-            (PluginRequest::Disconnect, PluginRequest::Disconnect),
             (
                 PluginRequest::SerialTx {
                     msg: arg_list[0][0].as_bytes().to_vec(),
