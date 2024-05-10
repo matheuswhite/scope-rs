@@ -1,0 +1,20 @@
+name: commit-checks
+
+on:
+  pull_request:
+    branches: [ "main" ]
+
+jobs:
+  commit-check:
+    name: Check the branch base commit
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout para a branch a ser testada.
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Verifica os commits temporal e posicionalmente.
+        run: |
+          python ./.github/commit_checks.py -s origin/"${{github.head_ref}}"
