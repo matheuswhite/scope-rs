@@ -121,10 +121,11 @@ async fn app() -> Result<(), String> {
 
     disable_raw_mode().map_err(|_| "Cannot disable terminal raw mode".to_string())?;
     execute!(
-                terminal.backend_mut(),
-                LeaveAlternateScreen,
-                DisableMouseCapture
-            ).map_err(|_| "Cannot disable alternate screen and mouse capture".to_string())?;
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        DisableMouseCapture
+    )
+    .map_err(|_| "Cannot disable alternate screen and mouse capture".to_string())?;
     terminal
         .show_cursor()
         .map_err(|_| "Cannot show mouse cursor".to_string())?;
