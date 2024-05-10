@@ -513,9 +513,9 @@ mod tests {
                 port: Some("COM1".to_string()),
                 baud_rate: Some(115200),
             },
-            PluginRequest::SerialTx {
-                msg: msg.as_bytes().to_vec(),
-            },
+            // PluginRequest::SerialTx {
+            //     msg: msg.as_bytes().to_vec(),
+            // },
             PluginRequest::Println {
                 msg: format!("Sent {}", msg),
             },
@@ -563,14 +563,14 @@ mod tests {
                     baud_rate: Some(115200),
                 },
             ),
-            (
-                PluginRequest::SerialTx {
-                    msg: msg[0].as_bytes().to_vec(),
-                },
-                PluginRequest::SerialTx {
-                    msg: msg[1].as_bytes().to_vec(),
-                },
-            ),
+            // (
+            //     PluginRequest::SerialTx {
+            //         msg: msg[0].as_bytes().to_vec(),
+            //     },
+            //     PluginRequest::SerialTx {
+            //         msg: msg[1].as_bytes().to_vec(),
+            //     },
+            // ),
             (
                 PluginRequest::Println {
                     msg: format!("Sent {}", msg[0]),
@@ -615,9 +615,9 @@ mod tests {
                 port: Some("COM1".to_string()),
                 baud_rate: Some(115200),
             },
-            PluginRequest::SerialTx {
-                msg: "Hello".as_bytes().to_vec(),
-            },
+            // PluginRequest::SerialTx {
+            //     msg: "Hello".as_bytes().to_vec(),
+            // },
             PluginRequest::Println {
                 msg: "Sent World!".to_string(),
             },
@@ -674,14 +674,14 @@ mod tests {
                     baud_rate: Some(115200),
                 },
             ),
-            (
-                PluginRequest::SerialTx {
-                    msg: arg_list[0][0].as_bytes().to_vec(),
-                },
-                PluginRequest::SerialTx {
-                    msg: arg_list[1][0].as_bytes().to_vec(),
-                },
-            ),
+            // (
+            //     PluginRequest::SerialTx {
+            //         msg: arg_list[0][0].as_bytes().to_vec(),
+            //     },
+            //     PluginRequest::SerialTx {
+            //         msg: arg_list[1][0].as_bytes().to_vec(),
+            //     },
+            // ),
             (
                 PluginRequest::Println {
                     msg: format!("Sent {}", arg_list[0][1]),

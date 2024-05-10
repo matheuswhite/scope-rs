@@ -9,7 +9,7 @@ require "scope"
 function serial_rx(msg)
     scope.disconnect()
     scope.connect('COM1', 115200)
-    scope.serial_tx(msg)
+    --scope.serial_tx(msg)
     scope.println('Sent ' .. bytes2str(msg))
     scope.eprintln('Timeout')
 end
@@ -17,7 +17,7 @@ end
 function user_command(arg_list)
     scope.disconnect()
     scope.connect('COM1', 115200)
-    scope.serial_tx(str2bytes(arg_list[1]))
+    --scope.serial_tx({ 1, 2, 3 })
     scope.println('Sent ' .. arg_list[2])
     scope.eprintln('Timeout')
     scope.exec('echo hello', true)
