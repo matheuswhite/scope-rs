@@ -1,7 +1,7 @@
 use crate::messages::{SerialRxData, UserTxData};
 use crate::plugin::{
-    Plugin, PluginRequest, PluginRequestResult, PluginRequestResultHolder, SerialRxCall,
-    UserCommandCall,
+    Plugin, PluginRequest, PluginRequestResult, PluginRequestResultHolder, SerialInfoResult,
+    SerialRxCall, UserCommandCall,
 };
 use crate::process::ProcessRunner;
 use crate::serial::SerialIF;
@@ -322,6 +322,19 @@ impl PluginManager {
                     return res;
                 }
             },
+            PluginRequest::Info => {
+                let serial_if = interface.lock().await;
+                let serial_info = serial_if.get_info();
+                let serial_is_connected = serial_if.is_connected();
+
+                return Some(PluginRequestResult::Info {
+                    serial: SerialInfoResult::new(
+                        serial_info.port().to_owned(),
+                        serial_info.baudrate(),
+                        serial_is_connected,
+                    ),
+                });
+            }
         }
 
         None

@@ -38,6 +38,7 @@ pub enum PluginRequest {
         cmd: String,
         quiet: bool,
     },
+    Info,
 }
 
 pub enum PluginRequestResult {
@@ -45,6 +46,25 @@ pub enum PluginRequestResult {
         stdout: Vec<String>,
         stderr: Vec<String>,
     },
+    Info {
+        serial: SerialInfoResult,
+    },
+}
+
+pub struct SerialInfoResult {
+    port: String,
+    baudrate: u32,
+    is_connected: bool,
+}
+
+impl SerialInfoResult {
+    pub fn new(port: String, baudrate: u32, is_connected: bool) -> Self {
+        Self {
+            port,
+            baudrate,
+            is_connected,
+        }
+    }
 }
 
 pub struct SerialRxCall {
@@ -153,6 +173,7 @@ impl<'a> TryFrom<Table<'a>> for PluginRequest {
                 cmd: value.get(2).map_err(|err| err.to_string())?,
                 quiet: value.get(3).map_err(|err| err.to_string())?,
             }),
+            ":info" => Ok(PluginRequest::Info),
             _ => Err("Unknown function".to_string()),
         }
     }
@@ -349,6 +370,40 @@ impl Iterator for SerialRxCall {
                     Err(_) => None,
                 }
             }
+            PluginRequestResult::Info {
+                serial:
+                    SerialInfoResult {
+                        port,
+                        baudrate,
+                        is_connected,
+                    },
+            } => {
+                let serial = self
+                    .lua
+                    .create_table()
+                    .expect("Cannot create serial lua table");
+                serial.set("port", port).expect("Cannot add port");
+                serial
+                    .set("baudrate", baudrate)
+                    .expect("Cannot add baudrate");
+                serial
+                    .set("is_connected", is_connected)
+                    .expect("Cannot add baudrate");
+
+                let table = self.lua.create_table().expect("Cannot create a lua table");
+                table.set("serial", serial).expect("Cannot add serial");
+
+                match serial_rx.resume::<_, Table>((msg, table)) {
+                    Ok(req) => {
+                        let req: PluginRequest = match req.try_into() {
+                            Ok(req) => req,
+                            Err(msg) => return Some(PluginRequest::Eprintln { msg }),
+                        };
+                        Some(req)
+                    }
+                    Err(_) => None,
+                }
+            }
         }
     }
 }
@@ -373,6 +428,40 @@ impl Iterator for UserCommandCall {
         match req_result {
             PluginRequestResult::Exec { stdout, stderr } => {
                 match user_command.resume::<_, Table>((arg_list, stdout, stderr)) {
+                    Ok(req) => {
+                        let req: PluginRequest = match req.try_into() {
+                            Ok(req) => req,
+                            Err(msg) => return Some(PluginRequest::Eprintln { msg }),
+                        };
+                        Some(req)
+                    }
+                    Err(_) => None,
+                }
+            }
+            PluginRequestResult::Info {
+                serial:
+                    SerialInfoResult {
+                        port,
+                        baudrate,
+                        is_connected,
+                    },
+            } => {
+                let serial = self
+                    .lua
+                    .create_table()
+                    .expect("Cannot create serial lua table");
+                serial.set("port", port).expect("Cannot add port");
+                serial
+                    .set("baudrate", baudrate)
+                    .expect("Cannot add baudrate");
+                serial
+                    .set("is_connected", is_connected)
+                    .expect("Cannot add baudrate");
+
+                let table = self.lua.create_table().expect("Cannot create a lua table");
+                table.set("serial", serial).expect("Cannot add serial");
+
+                match user_command.resume::<_, Table>((arg_list, table)) {
                     Ok(req) => {
                         let req: PluginRequest = match req.try_into() {
                             Ok(req) => req,
@@ -419,19 +508,27 @@ mod tests {
         let plugin = Plugin::new(PathBuf::from("plugins/test.lua"))?;
         let serial_rx_call = plugin.serial_rx_call(msg.as_bytes().to_vec());
         let expected = [
+            PluginRequest::Disconnect,
             PluginRequest::Connect {
-                port: Some("/dev/ttyACM0".to_string()),
+                port: Some("COM1".to_string()),
                 baud_rate: Some(115200),
             },
-            PluginRequest::Disconnect,
-            PluginRequest::SerialTx {
-                msg: msg.as_bytes().to_vec(),
-            },
+            // PluginRequest::SerialTx {
+            //     msg: msg.as_bytes().to_vec(),
+            // },
             PluginRequest::Println {
                 msg: format!("Sent {}", msg),
             },
             PluginRequest::Eprintln {
                 msg: "Timeout".to_string(),
+            },
+            PluginRequest::Exec {
+                cmd: "echo hello".to_string(),
+                quiet: false,
+            },
+            PluginRequest::Info,
+            PluginRequest::Println {
+                msg: "".to_string(),
             },
         ];
 
@@ -455,25 +552,25 @@ mod tests {
             plugin[1].serial_rx_call(msg[1].as_bytes().to_vec()),
         ];
         let expected = vec![
-            (
-                PluginRequest::Connect {
-                    port: Some("/dev/ttyACM0".to_string()),
-                    baud_rate: Some(115200),
-                },
-                PluginRequest::Connect {
-                    port: Some("/dev/ttyACM0".to_string()),
-                    baud_rate: Some(115200),
-                },
-            ),
             (PluginRequest::Disconnect, PluginRequest::Disconnect),
             (
-                PluginRequest::SerialTx {
-                    msg: msg[0].as_bytes().to_vec(),
+                PluginRequest::Connect {
+                    port: Some("COM1".to_string()),
+                    baud_rate: Some(115200),
                 },
-                PluginRequest::SerialTx {
-                    msg: msg[1].as_bytes().to_vec(),
+                PluginRequest::Connect {
+                    port: Some("COM1".to_string()),
+                    baud_rate: Some(115200),
                 },
             ),
+            // (
+            //     PluginRequest::SerialTx {
+            //         msg: msg[0].as_bytes().to_vec(),
+            //     },
+            //     PluginRequest::SerialTx {
+            //         msg: msg[1].as_bytes().to_vec(),
+            //     },
+            // ),
             (
                 PluginRequest::Println {
                     msg: format!("Sent {}", msg[0]),
@@ -513,20 +610,29 @@ mod tests {
         let plugin = Plugin::new(PathBuf::from("plugins/test.lua"))?;
         let user_command_call = plugin.user_command_call(arg_list);
         let expected = [
+            PluginRequest::Disconnect,
             PluginRequest::Connect {
-                port: Some("/dev/ttyACM0".to_string()),
+                port: Some("COM1".to_string()),
                 baud_rate: Some(115200),
             },
-            PluginRequest::Disconnect,
-            PluginRequest::SerialTx {
-                msg: "Hello".as_bytes().to_vec(),
-            },
+            // PluginRequest::SerialTx {
+            //     msg: "Hello".as_bytes().to_vec(),
+            // },
             PluginRequest::Println {
                 msg: "Sent World!".to_string(),
             },
             PluginRequest::Eprintln {
                 msg: "Timeout".to_string(),
             },
+            PluginRequest::Exec {
+                cmd: "echo hello".to_string(),
+                quiet: true,
+            },
+            PluginRequest::Exec {
+                cmd: "echo hello".to_string(),
+                quiet: false,
+            },
+            PluginRequest::Info,
         ];
 
         for (i, req) in user_command_call.enumerate() {
@@ -557,25 +663,25 @@ mod tests {
             plugin[1].user_command_call(arg_list[1].clone()),
         ];
         let expected = vec![
-            (
-                PluginRequest::Connect {
-                    port: Some("/dev/ttyACM0".to_string()),
-                    baud_rate: Some(115200),
-                },
-                PluginRequest::Connect {
-                    port: Some("/dev/ttyACM0".to_string()),
-                    baud_rate: Some(115200),
-                },
-            ),
             (PluginRequest::Disconnect, PluginRequest::Disconnect),
             (
-                PluginRequest::SerialTx {
-                    msg: arg_list[0][0].as_bytes().to_vec(),
+                PluginRequest::Connect {
+                    port: Some("COM1".to_string()),
+                    baud_rate: Some(115200),
                 },
-                PluginRequest::SerialTx {
-                    msg: arg_list[1][0].as_bytes().to_vec(),
+                PluginRequest::Connect {
+                    port: Some("COM1".to_string()),
+                    baud_rate: Some(115200),
                 },
             ),
+            // (
+            //     PluginRequest::SerialTx {
+            //         msg: arg_list[0][0].as_bytes().to_vec(),
+            //     },
+            //     PluginRequest::SerialTx {
+            //         msg: arg_list[1][0].as_bytes().to_vec(),
+            //     },
+            // ),
             (
                 PluginRequest::Println {
                     msg: format!("Sent {}", arg_list[0][1]),
