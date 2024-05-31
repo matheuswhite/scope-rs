@@ -481,6 +481,7 @@ mod tests {
     use crate::plugin::{Plugin, PluginRequest};
     use crate::plugin_installer::PluginInstaller;
     use std::path::PathBuf;
+    use std::time::Duration;
 
     #[test]
     fn test_echo() -> Result<(), String> {
@@ -509,13 +510,16 @@ mod tests {
         let serial_rx_call = plugin.serial_rx_call(msg.as_bytes().to_vec());
         let expected = [
             PluginRequest::Disconnect,
+            PluginRequest::Sleep {
+                time: Duration::from_millis(500),
+            },
             PluginRequest::Connect {
                 port: Some("COM1".to_string()),
                 baud_rate: Some(115200),
             },
-            // PluginRequest::SerialTx {
-            //     msg: msg.as_bytes().to_vec(),
-            // },
+            PluginRequest::Sleep {
+                time: Duration::from_millis(500),
+            },
             PluginRequest::Println {
                 msg: format!("Sent {}", msg),
             },
@@ -554,6 +558,14 @@ mod tests {
         let expected = vec![
             (PluginRequest::Disconnect, PluginRequest::Disconnect),
             (
+                PluginRequest::Sleep {
+                    time: Duration::from_millis(500),
+                },
+                PluginRequest::Sleep {
+                    time: Duration::from_millis(500),
+                },
+            ),
+            (
                 PluginRequest::Connect {
                     port: Some("COM1".to_string()),
                     baud_rate: Some(115200),
@@ -563,14 +575,14 @@ mod tests {
                     baud_rate: Some(115200),
                 },
             ),
-            // (
-            //     PluginRequest::SerialTx {
-            //         msg: msg[0].as_bytes().to_vec(),
-            //     },
-            //     PluginRequest::SerialTx {
-            //         msg: msg[1].as_bytes().to_vec(),
-            //     },
-            // ),
+            (
+                PluginRequest::Sleep {
+                    time: Duration::from_millis(500),
+                },
+                PluginRequest::Sleep {
+                    time: Duration::from_millis(500),
+                },
+            ),
             (
                 PluginRequest::Println {
                     msg: format!("Sent {}", msg[0]),
@@ -603,7 +615,7 @@ mod tests {
     #[test]
     fn test_user_command_iter() -> Result<(), String> {
         PluginInstaller.post()?;
-        let arg_list = vec!["Hello", "World!"]
+        let arg_list = vec!["Hello"]
             .into_iter()
             .map(|arg| arg.to_string())
             .collect();
@@ -611,15 +623,24 @@ mod tests {
         let user_command_call = plugin.user_command_call(arg_list);
         let expected = [
             PluginRequest::Disconnect,
+            PluginRequest::Sleep {
+                time: Duration::from_millis(500),
+            },
             PluginRequest::Connect {
                 port: Some("COM1".to_string()),
                 baud_rate: Some(115200),
             },
-            // PluginRequest::SerialTx {
-            //     msg: "Hello".as_bytes().to_vec(),
-            // },
+            PluginRequest::Sleep {
+                time: Duration::from_millis(500),
+            },
             PluginRequest::Println {
-                msg: "Sent World!".to_string(),
+                msg: "Sending Hello ...".to_string(),
+            },
+            PluginRequest::SerialTx {
+                msg: "Hello".as_bytes().to_vec(),
+            },
+            PluginRequest::Println {
+                msg: "Sent Hello".to_string(),
             },
             PluginRequest::Eprintln {
                 msg: "Timeout".to_string(),
@@ -645,7 +666,7 @@ mod tests {
     #[test]
     fn test_2_user_command_iter() -> Result<(), String> {
         PluginInstaller.post()?;
-        let arg_list = [vec!["Hello", "World!"], vec!["Other", "Message"]]
+        let arg_list = [vec!["Hello"], vec!["Other"]]
             .into_iter()
             .map(|arg_list| {
                 arg_list
@@ -665,6 +686,14 @@ mod tests {
         let expected = vec![
             (PluginRequest::Disconnect, PluginRequest::Disconnect),
             (
+                PluginRequest::Sleep {
+                    time: Duration::from_millis(500),
+                },
+                PluginRequest::Sleep {
+                    time: Duration::from_millis(500),
+                },
+            ),
+            (
                 PluginRequest::Connect {
                     port: Some("COM1".to_string()),
                     baud_rate: Some(115200),
@@ -674,20 +703,36 @@ mod tests {
                     baud_rate: Some(115200),
                 },
             ),
-            // (
-            //     PluginRequest::SerialTx {
-            //         msg: arg_list[0][0].as_bytes().to_vec(),
-            //     },
-            //     PluginRequest::SerialTx {
-            //         msg: arg_list[1][0].as_bytes().to_vec(),
-            //     },
-            // ),
+            (
+                PluginRequest::Sleep {
+                    time: Duration::from_millis(500),
+                },
+                PluginRequest::Sleep {
+                    time: Duration::from_millis(500),
+                },
+            ),
             (
                 PluginRequest::Println {
-                    msg: format!("Sent {}", arg_list[0][1]),
+                    msg: format!("Sending {} ...", arg_list[0][0]),
                 },
                 PluginRequest::Println {
-                    msg: format!("Sent {}", arg_list[1][1]),
+                    msg: format!("Sending {} ...", arg_list[1][0]),
+                },
+            ),
+            (
+                PluginRequest::SerialTx {
+                    msg: arg_list[0][0].as_bytes().to_vec(),
+                },
+                PluginRequest::SerialTx {
+                    msg: arg_list[1][0].as_bytes().to_vec(),
+                },
+            ),
+            (
+                PluginRequest::Println {
+                    msg: format!("Sent {}", arg_list[0][0]),
+                },
+                PluginRequest::Println {
+                    msg: format!("Sent {}", arg_list[1][0]),
                 },
             ),
             (

@@ -8,7 +8,9 @@ require "scope"
 
 function serial_rx(msg)
     scope.disconnect()
+    scope.sleep(500)
     scope.connect('COM1', 115200)
+    scope.sleep(500)
     scope.println('Sent ' .. bytes2str(msg))
     scope.eprintln('Timeout')
 end
