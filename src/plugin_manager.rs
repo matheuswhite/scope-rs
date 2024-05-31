@@ -11,6 +11,7 @@ use std::env;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::Mutex;
 
@@ -282,9 +283,12 @@ impl PluginManager {
                 let mut text_view = text_view.lock().await;
                 let mut interface = interface.lock().await;
                 interface.send(UserTxData::PluginSerialTx {
-                    plugin_name,
-                    content: msg,
+                    plugin_name: plugin_name.clone(),
+                    content: msg.clone(),
                 });
+
+                /* time to serial task respond us, with SerialRxData::PluginSerialTx */
+                tokio::time::sleep(Duration::from_millis(200)).await;
 
                 'plugin_serial_tx: loop {
                     match interface.recv().await {

@@ -94,8 +94,6 @@ impl SerialIF {
     }
 }
 
-impl SerialIFShared {}
-
 struct SerialTask;
 
 impl SerialTask {
@@ -263,7 +261,7 @@ impl Task<SerialIFShared, UserTxData, SerialRxData> for SerialTask {
                                 content,
                                 is_successful: true,
                             })
-                            .expect("Cannot send hex string comfirm"),
+                            .expect("Cannot send plugin serial tx comfirm"),
                         Err(_) => to_bridge
                             .send(SerialRxData::PluginSerialTx {
                                 timestamp: Local::now(),
@@ -271,7 +269,7 @@ impl Task<SerialIFShared, UserTxData, SerialRxData> for SerialTask {
                                 content,
                                 is_successful: false,
                             })
-                            .expect("Cannot send hex string fail"),
+                            .expect("Cannot send plugin serial tx fail"),
                     },
                 }
             }
