@@ -1,6 +1,6 @@
 <p align="center">
     <br><img src="imgs/scope-logo.png" width="800" alt="Scope Banner">
-    <br><img src="https://github.com/matheuswhite/scope-rs/actions/workflows/rust.yml/badge.svg" alt="Build Status">
+    <br><img src="https://github.com/matheuswhite/scope-rs/actions/workflows/build.yml/badge.svg" alt="Build Status">
     <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" alt="License BSD-3"></a>
     <a href="https://crates.io/crates/scope-monitor"><img src="https://img.shields.io/crates/v/scope-monitor.svg" alt="Version info"></a>
     <br><b>Scope</b> is a multi-platform serial monitor with user-extensible features.
