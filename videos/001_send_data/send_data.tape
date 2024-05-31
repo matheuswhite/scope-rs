@@ -2,16 +2,16 @@ Output send_data.gif
 
 Require echo
 
-Set Padding 0
+Set Padding 2
 Set LineHeight 1.0
 Set Shell "bash"
 Set FontFamily "CaskaydiaMono Nerd Font"
 Set WindowBar Colorful
 Set BorderRadius 10
 Set Theme "tokyonight"
-Set FontSize 18
-Set Width 1200
-Set Height 750
+Set FontSize 14
+Set Width 902
+Set Height 549
 
 Type@100ms "scope serial COM1 115200"
 Sleep 500ms
