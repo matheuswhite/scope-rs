@@ -18,21 +18,21 @@
 
 With `Scope`, you can type a message on the command bar (at bottom) and hit `Enter` to send it through the serial port.
 
-![Send data gif](videos/001_send_data/send_data.gif)
+![Send data gif](videos/001_send_data/video.gif)
 
 ### Send in Hexadecimal
 
 You also can send bytes in hexadecimal. To do it, type `$` and write your bytes in a hexadecimal format. The message
 can have spaces and commas as separators (`Scope` will send the bytes of message without spaces and commas).
 
-![Send hex gif](videos/002_hexa/hexa.gif)
+![Send hex gif](videos/002_hexa/video.gif)
 
 ### Send Commands
 
 You can send commands using the command bar. To send a command, type `/` and a list of all available commands is
 shown above the command bar. Continue typing the command and hit `Enter` to send the command.
 
-![Send command gif](videos/003_cmds/cmds.gif)
+![Send command gif](videos/003_cmds/video.gif)
 
 The commands are loaded from a user YAML file, passed at start of program (using `-c` flag). An example of YAML file is
 shown below:
@@ -51,14 +51,14 @@ json_again: '{"cmd":2, "args":"world"}'
 It's possible to retrieve old data and commands sent. You can hit `Up Arrow` and `Down Arrow` to navigate through
 the history of sent data and commands.
 
-![Command history](videos/004_history/history.gif)
+![Command history](videos/004_history/video.gif)
 
 ### Auto Reconnect
 
 The `Scope` tool has an auto-reconnect feature. When the serial port isn't available, `Scope` will keep trying to
 reconnect to the serial port until it's available again.
 
-![Reconnect gif](videos/005_reconnect/reconnect.gif)
+![Reconnect gif](videos/005_reconnect/video.gif)
 
 ### Colorful
 
@@ -66,13 +66,13 @@ reconnect to the serial port until it's available again.
 connected. Beyond status, the content read and written are colored too. The messages read is colored using ANSI terminal
 color standard.
 
-![Read ANSI color gif](videos/006_ansi/ansi.gif)
+![Read ANSI color gif](videos/006_ansi/video.gif)
 
 The data sent to serial port always has a background to differentiate it from read data. Characters outside the
 printable range of the ASCII table are shown in magenta and in the hexadecimal format. Some characters are printed as
 its representation, such as: `\n`, `\r` and `\0`.
 
-![Special character gif](videos/007_invisible/invisible.gif)
+![Special character gif](videos/007_invisible/video.gif)
 
 ### Setup Serial Port
 
@@ -81,7 +81,7 @@ type `!serial connect COM4 9600` to set serial port to `COM4` and baudrate to `9
 only the baudrate (`!serial connect 9600`) or omit the baudrate to change only the port (`!serial connect COM4`). If you
 want to release the serial port, you'll type `!serial disconnect`.
 
-![Setup serial port](videos/008_setup_serial/setup_serial.gif)
+![Setup serial port](videos/008_setup_serial/video.gif)
 
 ### Save history
 
@@ -89,7 +89,7 @@ To save the all messages captured (and sent) since the start, you can hit `Ctrl+
 message will be displayed on history. The filename is shown at top of history box with `.txt` extension. There is, at
 the history's top-right corner, the size of all message captured.
 
-![Save history](videos/009_save/save.gif)
+![Save history](videos/009_save/video.gif)
 
 However, if you want to save only the message captured from now, you'll use the record feature. Hitting `Ctrl+r`, you'll
 start a record session. While in a record session, the history block is yellow and the `Scope` will store all messages
@@ -97,7 +97,7 @@ captured from now. To stop the record session, you need to hit `Ctrl+r` again. T
 size of the record session. A new filename is created each time a new record session is started. Both: start session and
 stop session, prints a message on the history box to indicate when it occurs.
 
-![Save record](videos/010_record/record.gif)
+![Save record](videos/010_record/video.gif)
 
 ### Message Timestamp
 
@@ -153,7 +153,7 @@ the serial port, send data to serial port, print some message in `Scope` text vi
 the development of plugins for `Scope` you can read
 the [Plugins Developer Guide](https://github.com/matheuswhite/scope-rs/wiki/Plugin-Developer-Guide).
 
-![Plugin usage](videos/011_plugin/plugin.gif)
+![Plugin usage](videos/011_plugin/video.gif)
 
 ## Scope vs Others
 

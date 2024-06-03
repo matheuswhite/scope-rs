@@ -24,11 +24,10 @@ if __name__ == '__main__':
 
     with Serial('COM1_out') as s:
         while True:
-            sleep(1)
+            sleep(0.5)
             message = b''
             for _ in range(3):
                 color = random.choice(color_pool)
                 message += to_color(b'Hello, World!', color) + b' '
             message += b'\r\n'
-            print(f'Sending message {message}')
             s.write(message)
