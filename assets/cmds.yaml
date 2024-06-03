@@ -1,1 +1,0 @@
-connect: 'AT+CGDCONT=1,"IPV4V6","operator.com.br"'
