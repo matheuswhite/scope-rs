@@ -8,23 +8,32 @@ require("scope")
 
 -- Validates if esp-idf is available
 local function check_esp_idf()
-	local _, stderr = scope.exec("idf.py")
-	return stderr ~= nil
+	stdout, stderr = scope.exec("idf.py", true)
+	return #stderr == 0
 end
 
 function serial_rx(msg) end
 
 function user_command(arg_list)
+  if arg_list[1] == "monitor" then
+    scope.eprintln("Cannot run idf.py monitor inside Scope")
+    return
+  end
+
 	if not check_esp_idf() then
-		scope.eprintln("esp-idf not found, try exporting esp-idf environment variables first")
+		scope.eprintln("idf.py not found, try exporting idf.py environment variables first")
 		return
 	end
 
 	local cmd = "idf.py " .. table.concat(arg_list, " ")
 
-	if arg_list[2] == "flash" or "monitor" then
+	if arg_list[1] == "flash" then
 		scope.disconnect()
-		scope.exec(cmd)
-		scope.connect()
+  end
+	
+  scope.exec(cmd)
+
+	if arg_list[1] == "flash" then
+    scope.connect()
 	end
 end
