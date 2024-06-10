@@ -1,8 +1,24 @@
-local Shell = require("shell.Shell")
+local M = {
+  plugin = {},
+  bytes = {},
+  str = {},
+  log = {},
+  serial = {},
+  ble = {},
+  sys = {},
+}
 
-local scope = {}
+M.plugin.new = function ()
+  return {
+    evt = {
+      serial = {},
+      ble = {},
+    },
+    cmd = {},
+  }
+end
 
-scope.bytes.to_str = function (bytes)
+M.bytes.to_str = function (bytes)
   local str = ""
 
   for _, byte in pairs(bytes) do
@@ -13,7 +29,7 @@ scope.bytes.to_str = function (bytes)
 end
 
 
-scope.string.to_bytes = function (str)
+M.str.to_bytes = function (str)
   local bytes = {}
 
   for _, c in utf8.codes(str) do
@@ -23,51 +39,47 @@ scope.string.to_bytes = function (str)
   return bytes
 end
 
-scope.log = {
-  dbg = function (msg)
-    coroutine.yield({":log.dbg", msg})
-  end,
-  inf = function (msg)
-    coroutine.yield({":log.inf", msg})
-  end,
-  wrn = function (msg)
-    coroutine.yield({":log.wrn", msg})
-  end,
-  err = function (msg)
-    coroutine.yield({":log.err", msg})
-  end,
-}
+M.log.dbg = function (msg)
+  coroutine.yield({":log.dbg", msg})
+end
 
-scope.serial = {
-  info = function ()
+M.log.inf = function (msg)
+  coroutine.yield({":log.inf", msg})
+end
+
+M.log.wrn = function (msg)
+  coroutine.yield({":log.wrn", msg})
+end
+
+M.log.err = function (msg)
+  coroutine.yield({":log.err", msg})
+end
+
+M.serial.info = function ()
     local _, port, baud_rate = coroutine.yield({":serial.info"})
     return port, baud_rate
-  end,
-  send = function (msg)
-    coroutine.yield({":serial.send", msg})
-  end,
-  recv = function (timeout_ms)
-    local _, err, msg = coroutine.yield({":serial.recv", timeout_ms})
-    return err, msg
-  end,
-}
+  end
 
-scope.sys = {
-  os = function ()
-    if os.getenv("OS") == "Windows_NT" then
-      return "windows"
-    else
-      return "unix"
-    end
-  end,
-  sleep = function (time_ms)
-    coroutine.yield({":sys.sleep", time_ms})
-  end,
-  shell = function ()
-    local _, id = coroutine.yield({":sys.shell"})
-    return Shell:new(id)
-  end,
-}
+M.serial.send = function (msg)
+  coroutine.yield({":serial.send", msg})
+end
 
-return scope
+M.serial.recv = function (timeout_ms)
+  local _, err, msg = coroutine.yield({":serial.recv", timeout_ms})
+  return err, msg
+end
+
+M.sys.os = function ()
+  if os.getenv("OS") == "Windows_NT" then
+    return "windows"
+  else
+    return "unix"
+  end
+end
+
+M.sys.sleep = function (time_ms)
+  coroutine.yield({":sys.sleep", time_ms})
+end
+
+return M
 

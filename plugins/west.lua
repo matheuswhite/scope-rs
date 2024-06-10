@@ -1,36 +1,39 @@
-local scope = require("scope")
+local plugin = require("scope").plugin
+local log = require("scope").log
+local serial = require("serial").serial
+local shell = require("shell")
 
 local check_zephyr_base = function (sh)
   local stdout, _ = sh:run("echo $ZEPHYR_BASE")
   return stdout and stdout ~= "" and stdout ~= "\n"
 end
 
-local west = {}
+local M = plugin.new()
 
-west.load = function ()
-  west.shell = scope.sys.shell()
+M.on_load = function ()
+  M.shell = shell.new()
 
-  local res = check_zephyr_base(west.shell)
+  local res = check_zephyr_base(M.shell)
   if not res then
-    scope.log.err("$ZEPHYR_BASE is empty")
+    log.err("$ZEPHYR_BASE is empty")
   end
 
-  west.shell:run("source $ZEPHYR_BASE/../.venv/bin/activate")
+  M.shell:run("source $ZEPHYR_BASE/../.venv/bin/activate")
 
   return res
 end
 
-west.action.build = function ()
-  west.shell:run("west build")
+M.cmd.build = function ()
+  M.shell:run("west build")
 end
 
-west.action.flash = function ()
-  local info = scope.serial.info()
+M.cmd.flash = function ()
+  local info = serial.info()
 
-  scope.serial.disconnect()
-  west.shell:run("west flash")
-  scope.serial.connect(info.port, info.baudrate)
+  serial.disconnect()
+  M.shell:run("west flash")
+  serial.connect(info.port, info.baudrate)
 end
 
-return west
+return M
 
