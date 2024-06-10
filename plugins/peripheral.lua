@@ -51,6 +51,7 @@ M.serial.on_send = function (msg)
 
   local tries = M.tries
   for i=1,tries do
+    sys.sleep_ms(50)
     log.wrn(tostring(i) .. ord_ends(i) .. " try fail")
     log.wrn("Trying to send \"" .. msg .. "\" again...")
     serial.send(msg)
