@@ -134,6 +134,7 @@ local M = {
         on_write_without_rsp = function (serv, char, val) end
         on_notify = function(serv, char, val) end
         on_indicate = function(serv, char, val) end
+        on_mtu_change = function (uuid, val) end
     }, 
 }
 ```
