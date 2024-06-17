@@ -466,6 +466,12 @@ impl CommandBar {
                 self.command_line_idx = self.command_line.chars().count();
                 self.update_command_list();
             }
+            KeyCode::End => {
+                self.command_line_idx = self.command_line.chars().count();
+            }
+            KeyCode::Home => {
+                self.command_line_idx = 0;
+            }
             KeyCode::Esc => {
                 let interface = self.interface.lock().await;
                 interface.exit().await;
