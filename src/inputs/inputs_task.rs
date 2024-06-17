@@ -336,6 +336,30 @@ impl InputsTask {
                     }
                 }
             }
+            KeyCode::End => {
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                match sw.mode {
+                    InputMode::Normal => {
+                        sw.cursor = sw.command_line.chars().count();
+                    }
+                    InputMode::Search => {
+                        sw.search_cursor = sw.search_buffer.chars().count();
+                    }
+                }
+            }
+            KeyCode::Home => {
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                match sw.mode {
+                    InputMode::Normal => {
+                        sw.cursor = 0;
+                    }
+                    InputMode::Search => {
+                        sw.search_cursor = 0;
+                    }
+                }
+            }
             KeyCode::Up => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
