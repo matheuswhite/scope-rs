@@ -4,6 +4,7 @@ local M = {
   serial = {},
   ble = {},
   sys = {},
+  re = {},
 }
 
 function M.fmt.to_str(val)
@@ -56,6 +57,15 @@ end
 
 function M.sys.sleep_ms(time)
   coroutine.yield({":sys.sleep", time})
+end
+
+function M.re.literal(str)
+end
+
+function M.re.matches(str, pattern_table)
+end
+
+function M.re.match(str, pattern, code)
 end
 
 return M
