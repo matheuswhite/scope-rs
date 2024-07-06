@@ -1,234 +1,224 @@
-# Plugin API
+# Plugins Developer Guide
+
+## Plugin Interfaces
+
+You have a idea to extend some Scope's feature. The first question that you do to yourself is: _How can I implement this new 
+feature?_. Actually, you would say this: _What are the functions I need to write to implement the feature a thought?_. In this
+section, I'll show to you all the possible functions you can write, on your plugin, to implement you new feature. But, before
+we start the function's descriptions, I need to say that you don't need to implement all functions. You only need to implement
+the functions you want.
+
 
 ### `on_load`
 
+This function is called when the user runs `load` or `reload` command. On `reload` command, the function call occurs after the 
+`on_unload` call. 
+
 ```lua
 function M.on_load()
-    -- code ...
+    -- ...
 end
 ```
 
-## Serial
+You can use this function to initialize any data or behaviour of your plugin.
 
-### `on_send`
+### `on_unload`
+
+This function is called when the user runs `reload` or `unload` command. On `reload` command, the function call occurs before the
+`on_load` call. 
 
 ```lua
---- Event function called when a message is sent via serial. 
---- 
---- @param msg string The message sent via serial.
-function M.serial.on_send(msg)
-    -- code ...
+function M.on_unload()
+    -- ...
 end
 ```
 
-The message transmission occurs before the call of the `on_send` event function. 
-It'll call this function again, only if the current call finish. 
-So, be careful when using blocking functions, such as `sys.sleep` and `serial.recv`, 
-inside a event function.
+You can use this function to clean-up some resources or to unlock some resources.
+
+### `on_serial_send`
+
+This function is called when the user, or another plugin, sends a message to serial interface. This function has one parameter: 
+`msg` the message sent to serial interface. This argument is a copy os message, so it's not possible to change the original message
+sent to serial. This function isn't parallel, so the next call only occurs after the current call. Thus, be careful when using 
+blocking function from Scope's API.
 
 ```lua
---- @type { pattern: string, evt_fn: function}[]
-M.serial.on_send = {
-    {
-        -- Sample pattern
-        pattern = "AT\r",
-        evt_fn = function (msg)
-        end
-    }
-    {
-        -- Any message
-        pattern = ".*",
-        evt_fn = function (msg)
-        end
-    },
-}
+function M.on_serial_send(msg)
+    -- ...
+end
 ```
 
-The on_send could also be a list of event functions. Each event function must has a pattern. 
-So, a event function is called, when the sent message matches the pattern. The patterns is tested
-in order it appers on the array. The messages sent to serial ends with `\n`. So the pattern, must
-not contains `\n` in the end.
+You can use this function to show aditional infos about the sent message, to send messages automaticaly based on sent messages
+or to store some metadatas about sent messages.
 
-### `on_recv`
+### `on_serial_recv`
 
 ```lua
---- Event function called when a message is received from serial
---- 
---- @param msg string The message received from serial
-function on_recv(msg)
-    -- code ...
+function M.on_serial_recv(msg)
+    -- ...
+end
+```
+
+### `on_serial_connect`
+
+```lua
+function M.on_serial_connect(port, baudrate)
+    -- ...
+end
+```
+
+### `on_serial_disconnect`
+
+```lua
+function M.on_serial_disconnect()
+    -- ...
+end
+```
+
+### `on_ble_connect`
+
+```lua
+function M.on_ble_connect(uuid)
+    -- ...
+end
+```
+
+### `on_ble_disconnect`
+
+```lua
+function M.on_ble_disconnect(uuid)
+    -- ...
+end
+```
+
+### `on_ble_write`
+
+```lua
+function M.on_ble_write(serv, char, val)
+    -- ...
+end
+```
+
+### `on_ble_write_nowait`
+
+```lua
+function M.on_ble_write_nowait(serv, char, val)
+    -- ...
+end
+```
+
+### `on_ble_read`
+
+```lua
+function M.on_ble_read(serv, char, val)
+    -- ...
+end
+```
+
+### `on_ble_notify`
+
+```lua
+function M.on_ble_notify(serv, char, val)
+    -- ...
+end
+```
+
+### `on_ble_indicate`
+
+```lua
+function M.on_ble_indicate(serv, char, val)
+    -- ...
+end
+```
+
+### `on_mtu_change`
+
+```lua
+function M.on_mtu_change(uuid, val)
+    -- ...
+end
+```
+
+### User Commands
+
+```lua
+--- A command to greeting the user using random words
+--- @param name string The user name
+--- @param age number The user age
+function M.greetings(name, age)
+    -- ...
+end
+```
+
+
+## Plugin API
+
+```lua
+function scope.fmt.to_str(bytes)
 end
 ```
 
 ```lua
---- @type { pattern: string, evt_fn: function}[]
-M.serial.on_recv = {
-    {
-        -- Sample pattern
-        pattern = "OK\r",
-        evt_fn = function (msg)
-        end
-    }
-    {
-        -- Any message
-        pattern = ".*",
-        evt_fn = function (msg)
-        end
-    },
-}
-```
-
-
-### `on_connect`
-
-```lua
---- Event function called when Scope connects to a serial port
---- 
---- @param port string Name of the serial port
---- @param baudrate integer Baudrate of the serial port
-function on_connect(port, baudrate)
-    -- code ...
+function scope.fmt.to_bytes(str)
 end
 ```
 
 ```lua
---- @type { pattern: string, evt_fn: function}[]
-M.serial.on_connect = {
-    {
-        -- Connected on Unix
-        port = "/dev/tty.*",
-        baudrate = ".*",
-        evt_fn = function (port, baudrate)
-        end
-    }
-    {
-        -- Connected on Windows
-        port = "COM[1-9][0-9]*",
-        baudrate = ".*",
-        evt_fn = function (msg)
-        end
-    },
-}
-```
-
-
-### `on_disconnect`
-
-```lua
---- Event function called when Scope disconnect from a serial port
---- 
-function on_disconnect()
-    -- code ...
+function scope.log.debug(msg)
 end
 ```
 
-## BLE
-
 ```lua
-local M = {
-    ble = {
-        on_connect = function (uuid) end
-        on_disconnect = function (uuid) end
-        on_read = function (serv, char, val) end
-        on_write = function (serv, char, val) end
-        on_write_without_rsp = function (serv, char, val) end
-        on_notify = function(serv, char, val) end
-        on_indicate = function(serv, char, val) end
-        on_mtu_change = function (uuid, val) end
-    }, 
-}
-```
-
-
-## User Commands
-
-```lua
-local M = { 
-    cmd = {
-        <cmd_name> = function (arg_1, arg_2, ...)
-            -- code here
-        end
-        -- Examples:
---   !plugin bye
-        --   bye = function()
-        --       log.inf("Good bye!")
-        --   end
-        --  
-        --   !plugin world "Matheus" 28
-        --   greetings = function(name, age)
-        --       log.inf("Hello, " .. name)
-        --       log.inf("Are you " .. tostring(age) .. " years old?")
-        --   end
-    },
-}
-```
-
-
-# Scope API
-
-## Plugin
-
-```lua
---- @return 
-function scope.plugin.new()
+function scope.log.info(msg)
 end
 ```
 
-## Bytes
-
 ```lua
---- @param bytes integer[]
---- @return string
-function scope.bytes.to_str(bytes)
+function scope.log.success(msg)
 end
 ```
 
-## String
-
 ```lua
---- @param str string
---- @return integer[]
-function scope.str.to_bytes(str)
+function scope.log.warning(msg)
 end
 ```
 
-## Log
-
 ```lua
---- @param msg string
-function scope.log.dbg(msg)
+function scope.log.error(msg)
 end
 ```
 
-## Serial
-
 ```lua
---- @return {port: string, baudrate: integer}
 function scope.serial.info()
 end
+```
 
---- @param msg string
+```lua
 function scope.serial.send(msg)
 end
+```
 
---- @param opts {timeout_ms: integer}
---- @return {err: integer, msg: string}
+```lua
 function scope.serial.recv(opts)
 end
 ```
 
-## System
-
 ```lua
---- @return "windows" | "unix"
 function scope.sys.os_name()
 end
-
---- @param time integer
+```
+    
+```lua
 function scope.sys.sleep_ms(time)
 end
 ```
 
-# Shell API
+```lua
+function shell.new()
+end
+```
 
-
+```lua
+function Shell:run(cmd)
+end
+```
