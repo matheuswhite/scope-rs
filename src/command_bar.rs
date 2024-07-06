@@ -18,7 +18,6 @@ use ratatui::widgets::{Block, BorderType, Borders, Clear, Paragraph};
 use ratatui::Frame;
 use std::cmp::{max, min};
 use std::collections::btree_map::BTreeMap;
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -538,17 +537,16 @@ impl CommandBar {
                                     .plugin_manager
                                     .handle_plugin_command(command_line_split[1..].to_vec())
                                 {
-                                    Ok((cmd, plugin_name)) => {
-                                        let mut msg_lut = HashMap::new();
-                                        msg_lut.insert("load".to_string(), "Plugin loaded!");
-                                        msg_lut.insert("reload".to_string(), "Plugin reloaded!");
-
+                                    Ok(plugin_name) => {
                                         let mut text_view = self.text_view.lock().await;
                                         text_view
                                             .add_data_out(SerialRxData::Plugin {
                                                 timestamp: Local::now(),
-                                                plugin_name,
-                                                content: msg_lut[&cmd].to_string(),
+                                                plugin_name: plugin_name.clone(),
+                                                content: format!(
+                                                    "Plugin \"{}\" loaded!",
+                                                    plugin_name
+                                                ),
                                                 is_successful: true,
                                             })
                                             .await;
