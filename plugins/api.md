@@ -214,6 +214,21 @@ end
 ```
 
 ```lua
+function M.re.literal(str)
+end
+```
+
+```lua
+function M.re.matches(str, pattern_table)
+end
+```
+
+```lua
+function M.re.match(str, pattern, code)
+end
+```
+
+```lua
 function Shell.new()
 end
 ```
