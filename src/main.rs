@@ -3,7 +3,6 @@
 extern crate core;
 
 use crate::command_bar::CommandBar;
-use crate::plugin_installer::PluginInstaller;
 use crate::serial::SerialIF;
 use chrono::Local;
 use clap::{Parser, Subcommand};
@@ -22,10 +21,7 @@ mod blink_color;
 mod command_bar;
 mod error_pop_up;
 mod messages;
-mod plugin;
-mod plugin_installer;
-mod plugin_manager;
-mod process;
+mod mpmc;
 mod recorder;
 mod rich_string;
 mod serial;
@@ -65,10 +61,6 @@ async fn app() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     ctrlc::set_handler(|| { /* Do nothing on user ctrl+c */ })
         .expect("Error setting Ctrl-C handler");
-
-    let plugin_installer = PluginInstaller;
-
-    plugin_installer.post()?;
 
     let cli = Cli::parse();
 

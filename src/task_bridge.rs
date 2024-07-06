@@ -48,10 +48,6 @@ where
         &self.synchronized
     }
 
-    pub fn synchronized_mut(&mut self) -> &mut Synchronized {
-        &mut self.synchronized
-    }
-
     pub async fn shared(&self) -> MutexGuard<Shared> {
         self.shared.lock().await
     }
@@ -62,10 +58,6 @@ where
 
     pub fn try_recv(&mut self) -> Result<FromTask, TryRecvError> {
         self.from_task.try_recv()
-    }
-
-    pub async fn recv(&mut self) -> Option<FromTask> {
-        self.from_task.recv().await
     }
 }
 

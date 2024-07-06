@@ -50,10 +50,6 @@ impl SerialIF {
         )
     }
 
-    pub fn get_info(&self) -> SerialInfo {
-        self.synchronized().info.clone()
-    }
-
     pub fn is_connected(&self) -> bool {
         self.synchronized().is_connected.load(Ordering::SeqCst)
     }
@@ -66,31 +62,6 @@ impl SerialIF {
 
     pub async fn exit(&self) {
         self.shared().await.is_exit = true;
-    }
-
-    pub async fn setup(&mut self, port: Option<String>, baudrate: Option<u32>) {
-        self.synchronized_mut().info = {
-            let mut shared = self.shared().await;
-
-            if let Some(port) = port {
-                shared.info.port = port;
-            }
-
-            if let Some(baudrate) = baudrate {
-                shared.info.baudrate = baudrate;
-            }
-
-            shared.reconnect = true;
-
-            shared.info.clone()
-        };
-    }
-
-    pub async fn disconnect(&mut self) {
-        let mut shared = self.shared().await;
-        shared.reconnect = false;
-        let info = shared.info.clone();
-        let _ = shared.disconnect.insert(info);
     }
 }
 
@@ -250,27 +221,6 @@ impl Task<SerialIFShared, UserTxData, SerialRxData> for SerialTask {
                             })
                             .expect("Cannot send hex string fail"),
                     },
-                    UserTxData::PluginSerialTx {
-                        plugin_name,
-                        content,
-                    } => match serial.write(&content) {
-                        Ok(_) => to_bridge
-                            .send(SerialRxData::PluginSerialTx {
-                                timestamp: Local::now(),
-                                plugin_name,
-                                content,
-                                is_successful: true,
-                            })
-                            .expect("Cannot send plugin serial tx comfirm"),
-                        Err(_) => to_bridge
-                            .send(SerialRxData::PluginSerialTx {
-                                timestamp: Local::now(),
-                                plugin_name,
-                                content,
-                                is_successful: false,
-                            })
-                            .expect("Cannot send plugin serial tx fail"),
-                    },
                 }
             }
 
@@ -323,14 +273,4 @@ impl Task<SerialIFShared, UserTxData, SerialRxData> for SerialTask {
 pub struct SerialInfo {
     port: String,
     baudrate: u32,
-}
-
-impl SerialInfo {
-    pub fn port(&self) -> &str {
-        &self.port
-    }
-
-    pub fn baudrate(&self) -> u32 {
-        self.baudrate
-    }
 }

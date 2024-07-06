@@ -2,7 +2,6 @@ use crate::blink_color::BlinkColor;
 use crate::command_bar::InputEvent::{HorizontalScroll, Key, VerticalScroll};
 use crate::error_pop_up::ErrorPopUp;
 use crate::messages::{SerialRxData, UserTxData};
-use crate::plugin_manager::PluginManager;
 use crate::serial::SerialIF;
 use crate::text::TextView;
 use chrono::Local;
@@ -39,7 +38,6 @@ pub struct CommandBar {
     key_receiver: UnboundedReceiver<InputEvent>,
     current_hint: Option<&'static str>,
     hints: Vec<&'static str>,
-    plugin_manager: PluginManager,
     blink_color: BlinkColor,
 }
 
@@ -62,8 +60,6 @@ impl CommandBar {
         let interface = Arc::new(Mutex::new(interface));
         let text_view = Arc::new(Mutex::new(TextView::new(view_capacity, save_filename)));
 
-        let plugin_manager = PluginManager::new(interface.clone(), text_view.clone());
-
         Self {
             interface,
             text_view,
@@ -78,7 +74,6 @@ impl CommandBar {
             command_list: CommandList::new(),
             hints: hints.clone(),
             current_hint: Some(hints.choose(&mut rand::thread_rng()).unwrap()),
-            plugin_manager,
             blink_color: BlinkColor::new(Color::Black, Duration::from_millis(200), 2),
         }
     }
@@ -147,9 +142,7 @@ impl CommandBar {
             chunks[1].x + self.command_line_idx as u16 + 2,
             chunks[1].y + 1,
         );
-        let bar_color = if self.plugin_manager.has_process_running() {
-            Color::DarkGray
-        } else if is_connected {
+        let bar_color = if is_connected {
             Color::LightGreen
         } else {
             Color::LightRed
@@ -255,9 +248,6 @@ impl CommandBar {
             }
             KeyCode::Char('q') if key.modifiers == KeyModifiers::CONTROL => {
                 self.error_pop_up.take();
-            }
-            KeyCode::Char('c') if key.modifiers == KeyModifiers::CONTROL => {
-                self.plugin_manager.stop_process().await;
             }
             KeyCode::Char('s') if key.modifiers == KeyModifiers::CONTROL => {
                 let is_recording = {
@@ -472,13 +462,6 @@ impl CommandBar {
                 return Err(());
             }
             KeyCode::Enter if !self.command_line.is_empty() => {
-                if self.plugin_manager.has_process_running() {
-                    self.set_error_pop_up(
-                        "Cannot send data or command while a command is running".to_string(),
-                    );
-                    return Ok(());
-                }
-
                 let command_line = self.command_line.clone();
                 self.show_hint();
                 self.history.push(self.command_line.clone());
@@ -513,60 +496,6 @@ impl CommandBar {
                             command_name: key.to_string(),
                             content: data_to_send,
                         });
-                    }
-                    '!' => {
-                        let command_line_split = command_line
-                            .strip_prefix('!')
-                            .unwrap()
-                            .split_whitespace()
-                            .map(|arg| arg.to_string())
-                            .collect::<Vec<_>>();
-                        if command_line_split.is_empty() {
-                            let interface = self.interface.lock().await;
-                            interface.send(UserTxData::Data {
-                                content: command_line,
-                            });
-                            return Ok(());
-                        }
-
-                        let name = command_line_split[0].to_lowercase();
-
-                        match name.as_str() {
-                            "plugin" => {
-                                match self
-                                    .plugin_manager
-                                    .handle_plugin_command(command_line_split[1..].to_vec())
-                                {
-                                    Ok(plugin_name) => {
-                                        let mut text_view = self.text_view.lock().await;
-                                        text_view
-                                            .add_data_out(SerialRxData::Plugin {
-                                                timestamp: Local::now(),
-                                                plugin_name: plugin_name.clone(),
-                                                content: format!(
-                                                    "Plugin \"{}\" loaded!",
-                                                    plugin_name
-                                                ),
-                                                is_successful: true,
-                                            })
-                                            .await;
-                                    }
-                                    Err(err_msg) => {
-                                        self.set_error_pop_up(err_msg);
-                                        return Ok(());
-                                    }
-                                }
-                            }
-                            _ => {
-                                if let Err(err_msg) = self.plugin_manager.call_plugin_user_command(
-                                    &name,
-                                    command_line_split[1..].to_vec(),
-                                ) {
-                                    self.set_error_pop_up(err_msg);
-                                    return Ok(());
-                                }
-                            }
-                        }
                     }
                     '$' => {
                         let command_line = command_line
@@ -619,8 +548,6 @@ impl CommandBar {
             if let Ok(data_out) = interface.try_recv() {
                 let mut text_view = self.text_view.lock().await;
                 text_view.add_data_out(data_out.clone()).await;
-
-                self.plugin_manager.call_plugins_serial_rx(data_out);
             }
         }
 

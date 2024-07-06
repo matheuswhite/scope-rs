@@ -15,10 +15,6 @@ pub enum UserTxData {
     HexString {
         content: Vec<u8>,
     },
-    PluginSerialTx {
-        plugin_name: String,
-        content: Vec<u8>,
-    },
 }
 
 #[derive(Clone)]
@@ -49,19 +45,9 @@ pub enum SerialRxData {
         content: String,
         is_successful: bool,
     },
-    PluginSerialTx {
-        timestamp: DateTime<Local>,
-        plugin_name: String,
-        content: Vec<u8>,
-        is_successful: bool,
-    },
 }
 
 impl SerialRxData {
-    pub fn is_plugin_serial_tx(&self) -> bool {
-        matches!(self, SerialRxData::PluginSerialTx { .. })
-    }
-
     fn from_utf8_print_invalid(v: &[u8]) -> Cow<'_, str> {
         let mut iter = v.utf8_chunks();
 
@@ -150,20 +136,6 @@ impl SerialRxData {
                     if *is_successful { success } else { fail },
                     plugin_name,
                     content
-                )
-            }
-            SerialRxData::PluginSerialTx {
-                timestamp,
-                content,
-                is_successful,
-                plugin_name,
-            } => {
-                format!(
-                    "[{}|=>|{}|!{}]{}",
-                    timestamp.format("%H:%M:%S.%3f"),
-                    if *is_successful { success } else { fail },
-                    plugin_name,
-                    Self::from_utf8_print_invalid(content)
                 )
             }
         }
@@ -259,33 +231,6 @@ impl Into<ViewData> for SerialRxData {
                 } else {
                     RichText::from_string(
                         format!(" [{plugin_name}] {content} "),
-                        Color::White,
-                        Color::Red,
-                    )
-                    .highlight_invisible()
-                    .into_view_data(timestamp)
-                }
-            }
-            SerialRxData::PluginSerialTx {
-                timestamp,
-                plugin_name,
-                content,
-                is_successful,
-            } => {
-                if is_successful {
-                    RichText::from_string(
-                        format!(" [{plugin_name}] => {} ", String::from_utf8_lossy(&content)),
-                        Color::Black,
-                        Color::White,
-                    )
-                    .highlight_invisible()
-                    .into_view_data(timestamp)
-                } else {
-                    RichText::from_string(
-                        format!(
-                            " [{plugin_name}] => Fail to send {} ",
-                            String::from_utf8_lossy(&content)
-                        ),
                         Color::White,
                         Color::Red,
                     )
