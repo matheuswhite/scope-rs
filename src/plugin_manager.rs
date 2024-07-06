@@ -126,10 +126,7 @@ impl PluginManager {
         }
     }
 
-    pub fn handle_plugin_command(
-        &mut self,
-        arg_list: Vec<String>,
-    ) -> Result<(String, String), String> {
+    pub fn handle_plugin_command(&mut self, arg_list: Vec<String>) -> Result<String, String> {
         if arg_list.is_empty() {
             return Err("Please, use !plugin followed by a command".to_string());
         }
@@ -138,7 +135,7 @@ impl PluginManager {
         let mut plugin_path = env::current_dir().expect("Cannot get the current directory");
 
         let plugin_name = match command {
-            "load" => {
+            "load" | "reload" => {
                 if arg_list.len() < 2 {
                     return Err("Please, inform the plugin path to be loaded".to_string());
                 }
@@ -153,36 +150,6 @@ impl PluginManager {
                 let plugin_name = plugin.name().to_string();
 
                 if self.plugins.contains_key(plugin_name.as_str()) {
-                    return Err(format!(
-                        "Plugin {} already loaded. Use the reload command instead.",
-                        plugin_name
-                    ));
-                }
-
-                self.plugins.insert(plugin_name.clone(), plugin.clone());
-
-                plugin_name
-            }
-            "reload" => {
-                if arg_list.len() < 2 {
-                    return Err("Please, inform the plugin path to be loaded".to_string());
-                }
-
-                plugin_path.push(PathBuf::from(arg_list[1].as_str()));
-
-                let plugin = match Plugin::new(plugin_path.clone()) {
-                    Ok(plugin) => plugin,
-                    Err(err) => return Err(err),
-                };
-
-                let plugin_name = plugin.name().to_string();
-
-                if !self.plugins.contains_key(plugin_name.as_str()) {
-                    return Err(format!(
-                        "Plugin {} already loaded. Use the reload command instead.",
-                        plugin_name
-                    ));
-                } else {
                     self.plugins.remove(plugin_name.as_str());
                 }
 
@@ -193,7 +160,7 @@ impl PluginManager {
             _ => return Err(format!("Unknown command {} for !plugin", command)),
         };
 
-        Ok((command.to_string(), plugin_name))
+        Ok(plugin_name)
     }
 
     pub fn call_plugin_user_command(
