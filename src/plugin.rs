@@ -4,6 +4,7 @@ use anyhow::Result;
 use chrono::Local;
 use homedir::get_my_home;
 use mlua::{Function, Lua, RegistryKey, Table, Thread};
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -188,6 +189,9 @@ impl Plugin {
             .to_str()
             .ok_or("Cannot convert plugin name to string".to_string())?
             .to_string();
+        let extension = filepath.extension().unwrap_or(OsStr::new("lua"));
+        let filepath = filepath.with_extension(extension);
+
         let code = std::fs::read_to_string(filepath).map_err(|_| "Cannot read plugin file")?;
 
         Self::from_string(name, code)
