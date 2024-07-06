@@ -154,12 +154,12 @@ end
 ## Plugin API
 
 ```lua
-function scope.fmt.to_str(bytes)
+function scope.fmt.to_str(val)
 end
 ```
 
 ```lua
-function scope.fmt.to_bytes(str)
+function scope.fmt.to_bytes(val)
 end
 ```
 
@@ -214,11 +214,16 @@ end
 ```
 
 ```lua
-function shell.new()
+function Shell.new()
 end
 ```
 
 ```lua
-function Shell:run(cmd)
+function Shell:run(cmd, opts)
+end
+```
+
+```lua
+function Shell:exist(program)
 end
 ```

@@ -11,9 +11,13 @@ function Shell.new()
 end
 
 function Shell:run(cmd, opts)
-  local _, stdout, stderr = coroutine.yield({":Shell:run", cmd, opts})
+  local _, stdout, stderr = coroutine.yield({":Shell:run", self, cmd, opts})
   return stdout, stderr
 end
 
-return Shell
+function Shell:exist(program)
+  local _, res = coroutine.yield({"Shell:run", self, program})
+  return res
+end
 
+return Shell

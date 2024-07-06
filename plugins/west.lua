@@ -1,33 +1,27 @@
-local plugin = require("scope").plugin
 local log = require("scope").log
-local serial = require("serial").serial
+local serial = require("scope").serial
 local shell = require("shell")
 
-local check_zephyr_base = function (sh)
-  local stdout, _ = sh:run("echo $ZEPHYR_BASE")
-  return stdout and stdout ~= "" and stdout ~= "\n"
-end
+local M = {}
 
-local M = plugin.new()
-
-M.on_load = function ()
+function M.on_load()
   M.shell = shell.new()
 
-  local res = check_zephyr_base(M.shell)
-  if not res then
-    log.err("$ZEPHYR_BASE is empty")
+  if not M.shell:exist("west") then
+    log.err("west not found. Export it before enter in Scope")
+    return false
   end
 
-  M.shell:run("source $ZEPHYR_BASE/../.venv/bin/activate")
-
-  return res
+  return true
 end
 
-M.cmd.build = function ()
+--- Build the firmware
+function M.build()
   M.shell:run("west build")
 end
 
-M.cmd.flash = function ()
+--- Flash the firmware
+function M.flash()
   local info = serial.info()
 
   serial.disconnect()
@@ -36,4 +30,3 @@ M.cmd.flash = function ()
 end
 
 return M
-

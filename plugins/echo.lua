@@ -1,35 +1,33 @@
 local log = require("scope").log
-local serial = require("scope").serial
-local plugin = require("scope").plugin
 
-local M = plugin.new()
-
-M.serial.on_recv = {
-  {
-    "AT\r",
-    function (_)
-      log.inf("Sending msg \"OK\" via serial tx...")
-      serial.send("\r\nOK\r\n")
-      log.inf("Message sent!")
-    end
-  },
-  {
-    "AT+COPS?\r",
-    function (_)
-      serial.send("+COPS: 0\r\nOK\r\n")
-    end
-  },
-  {
-    ".*",
-    function (_)
-      serial.send("ERROR\r\n")
-    end
+local M = {
+  data = {
+    level = 'info'
   }
 }
 
-M.cmd.hello = function ()
-  log.inf("Hello, World!\r\n")
+function M.on_serial_recv(msg)
+  if M.data.level == "debug" then
+    log.debug(msg)
+  elseif M.data.level == "info" then
+    log.info(msg)
+  elseif M.data.level == "success" then
+    log.success(msg)
+  elseif M.data.level == "warning" then
+    log.warning(msg)
+  elseif M.data.level == "error" then
+    log.error(msg)
+  end
+end
+
+--- Set up the level of echo message
+--- @param lvl string The level of echo message
+function M.level(lvl)
+  if not (lvl == "debug" or lvl == "info" or lvl == "success" or lvl == "warning" or lvl == "error") then
+    return
+  end
+    
+  M.data.level = level
 end
 
 return M
-

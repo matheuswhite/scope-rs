@@ -1,26 +1,28 @@
-local plugin = require("scope").plugin
 local log = require("scope").log
 local serial = require("scope").serial
 local shell = require("shell")
 
-local M = plugin.new()
+local M = {}
 
-M.on_load = function ()
+function M.on_load()
   M.shell = shell.new()
 
   if not M.shell:exist("idf.py") then
-    log.err("There isn't a command called idf.py. Export it before enter in scope")
-    return
+    log.err("There isn't a command called idf.py. Export it before enter in Scope")
+    return false
   end
+
+  return true
 end
 
-M.cmd.build = function ()
+--- Build the firmware
+function M.build()
   M.shell:run("idf.py build")
 end
 
---- comment
---- @param port string?
-M.cmd.flash = function (port)
+--- Flash the firmware
+--- @param port string? The board port
+function M.flash(port)
   local cmd = "west flash"
   if port then
     cmd = cmd .. " -p " .. port
@@ -34,4 +36,3 @@ M.cmd.flash = function (port)
 end
 
 return M
-

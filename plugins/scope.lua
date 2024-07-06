@@ -1,75 +1,52 @@
 local M = {
-  plugin = {},
-  bytes = {},
-  str = {},
+  fmt = {},
   log = {},
   serial = {},
   ble = {},
   sys = {},
 }
 
-M.plugin.new = function ()
-  return {
-    evt = {
-      serial = {},
-      ble = {},
-    },
-    cmd = {},
-  }
+function M.fmt.to_str(val)
 end
 
-M.bytes.to_str = function (bytes)
-  local str = ""
-
-  for _, byte in pairs(bytes) do
-    str = str .. string.char(byte)
-  end
-
-  return str
+function M.fmt.to_bytes(val)
 end
 
-
-M.str.to_bytes = function (str)
-  local bytes = {}
-
-  for _, c in utf8.codes(str) do
-    table.insert(bytes, c)
-  end
-
-  return bytes
+function M.log.debug(msg)
+  coroutine.yield({":log.debug", msg})
 end
 
-M.log.dbg = function (msg)
-  coroutine.yield({":log.dbg", msg})
+function M.log.info(msg)
+  coroutine.yield({":log.info", msg})
 end
 
-M.log.inf = function (msg)
-  coroutine.yield({":log.inf", msg})
+function M.log.success(msg)
+  coroutine.yield({":log.success", msg})
 end
 
-M.log.wrn = function (msg)
-  coroutine.yield({":log.wrn", msg})
+function M.log.warning(msg)
+  coroutine.yield({":log.warning", msg})
 end
 
-M.log.err = function (msg)
-  coroutine.yield({":log.err", msg})
+function M.log.error(msg)
+  coroutine.yield({":log.error", msg})
 end
 
-M.serial.info = function ()
-    local _, port, baud_rate = coroutine.yield({":serial.info"})
-    return port, baud_rate
-  end
+function M.serial.info()
+  local _, port, baud_rate = coroutine.yield({":serial.info"})
+  return port, baud_rate
+end
 
-M.serial.send = function (msg)
+function M.serial.send(msg)
   coroutine.yield({":serial.send", msg})
 end
 
-M.serial.recv = function (timeout_ms)
-  local _, err, msg = coroutine.yield({":serial.recv", timeout_ms})
+function M.serial.recv(opts)
+  local _, err, msg = coroutine.yield({":serial.recv", opts})
   return err, msg
 end
 
-M.sys.os = function ()
+function M.sys.os_name()
   if os.getenv("OS") == "Windows_NT" then
     return "windows"
   else
@@ -77,9 +54,8 @@ M.sys.os = function ()
   end
 end
 
-M.sys.sleep = function (time_ms)
-  coroutine.yield({":sys.sleep", time_ms})
+function M.sys.sleep_ms(time)
+  coroutine.yield({":sys.sleep", time})
 end
 
 return M
-

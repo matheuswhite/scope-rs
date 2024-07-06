@@ -1,35 +1,29 @@
-local plugin = require("scope").plugin
 local log = require("scope").plugin
 local serial = require("scope").plugin
 local sys = require("scope").sys
+local re = require("scope").re
 
-local M = plugin.new()
-M.tries = 1
-M.success = "OK\r"
+local M = {
+  tries = 1,
+  success = "OK\r"
+}
 
-M.serial.on_recv = {
-  {
-    "AT\r",
-    function (_)
+function M.serial_on_recv(msg)
+  re.matches(msg, {
+    ["AT\r"] = function (_)
       serial.send("OK\r\n")
     end,
-  },
-  {
-    "AT+COPS?\r",
-    function (_)
+    [re.literal("AT+COPS?")] = function (_)
       sys.sleep(1000)
       serial.send("+COPS: 0\r\n")
       serial.send("OK\r\n")
     end,
-  },
-  {
-    ".*",
-    function (msg)
+    [".*"] = function (msg)
       serial.send("+CMERR: Invalid " .. msg .. "\r\n")
       serial.send("ERROR\r\n")
     end
-  },
-}
+  })
+end
 
 local function ord_ends(n)
   if n == 1 then
@@ -43,25 +37,4 @@ local function ord_ends(n)
   end
 end
 
-M.serial.on_send = function (msg)
-  local err, rsp = serial.recv({timeout = 200})
-  if not err and rsp == M.success then
-    return
-  end
-
-  local tries = M.tries
-  for i=1,tries do
-    sys.sleep_ms(50)
-    log.wrn(tostring(i) .. ord_ends(i) .. " try fail")
-    log.wrn("Trying to send \"" .. msg .. "\" again...")
-    serial.send(msg)
-
-    err, rsp = serial.recv({timeout = 200})
-    if not err and rsp == "OK\r" then
-      break
-    end
-  end
-end
-
 return M
-
