@@ -276,6 +276,7 @@ impl Task<SerialIFShared, UserTxData, SerialRxData> for SerialTask {
 
             match serial.read(&mut buffer) {
                 Ok(_) => {
+                    now = Instant::now();
                     line.push(buffer[0]);
                     if buffer[0] == b'\n' {
                         to_bridge
