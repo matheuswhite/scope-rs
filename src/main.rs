@@ -1,133 +1,113 @@
 #![deny(warnings)]
+// TODO remove this allow after migration
+#![allow(unused)]
 
 extern crate core;
 
-use crate::command_bar::CommandBar;
-use crate::serial::SerialIF;
-use chrono::Local;
-use clap::{Parser, Subcommand};
-use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
-use crossterm::execute;
-use crossterm::terminal::{
-    disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
-};
-use ratatui::backend::{Backend, CrosstermBackend};
-use ratatui::Terminal;
-use std::io;
-use std::io::Stdout;
-use std::path::PathBuf;
-
-mod blink_color;
-mod command_bar;
-mod error_pop_up;
-mod messages;
-mod mpmc;
-mod recorder;
-mod rich_string;
+mod graphics;
+mod infra;
+mod inputs;
+mod plugin;
 mod serial;
-mod task_bridge;
-mod text;
-mod typewriter;
 
-pub type ConcreteBackend = CrosstermBackend<Stdout>;
+use chrono::Local;
+use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
+use infra::logger::Logger;
+use infra::mpmc::Channel;
+use inputs::inputs_task::{InputsConnections, InputsTask};
+use plugin::plugin_engine::{PluginEngine, PluginEngineConnections};
+use serial::serial_if::{SerialConnections, SerialInterface, SerialSetup};
+use std::sync::mpsc::channel;
+use std::sync::Arc;
 
-#[derive(Subcommand)]
-pub enum Commands {
-    Serial {
-        port: Option<String>,
-        baudrate: Option<u32>,
-    },
-    Ble {
-        name_device: String,
-        mtu: u32,
-    },
-}
+fn app(capacity: usize) -> Result<(), String> {
+    let (logger, logger_receiver) = Logger::new();
+    let mut tx_channel = Channel::default();
+    let mut rx_channel = Channel::default();
 
-#[derive(Parser)]
-#[command(author, version, about, long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-    #[clap(short, long)]
-    view_length: Option<usize>,
-    #[clap(short, long)]
-    cmd_file: Option<PathBuf>,
-}
+    let mut tx_channel_consumers = (0..3)
+        .map(|_| tx_channel.new_consumer())
+        .collect::<Vec<_>>();
+    let mut rx_channel_consumers = (0..2)
+        .map(|_| rx_channel.new_consumer())
+        .collect::<Vec<_>>();
 
-const CMD_FILEPATH: &str = "cmds.yaml";
-const CAPACITY: usize = 2000;
+    let rx_channel = Arc::new(rx_channel);
+    let tx_channel = Arc::new(tx_channel);
 
-async fn app() -> Result<(), String> {
-    #[cfg(target_os = "windows")]
-    ctrlc::set_handler(|| { /* Do nothing on user ctrl+c */ })
-        .expect("Error setting Ctrl-C handler");
+    let (serial_if_cmd_sender, serial_if_cmd_receiver) = channel();
+    let (inputs_cmd_sender, inputs_cmd_receiver) = channel();
+    let (graphics_cmd_sender, graphics_cmd_receiver) = channel();
+    let (plugin_engine_cmd_sender, plugin_engine_cmd_receiver) = channel();
 
-    let cli = Cli::parse();
+    let serial_connections = SerialConnections::new(
+        logger.clone(),
+        tx_channel_consumers.pop().unwrap(),
+        rx_channel.clone().new_producer(),
+    );
+    let inputs_connections = InputsConnections::new(
+        logger.clone(),
+        tx_channel.clone().new_producer(),
+        graphics_cmd_sender.clone(),
+        serial_if_cmd_sender.clone(),
+        plugin_engine_cmd_sender.clone(),
+    );
+    let plugin_engine_connections = PluginEngineConnections::new(
+        logger.clone(),
+        tx_channel.new_producer(),
+        tx_channel_consumers.pop().unwrap(),
+        rx_channel_consumers.pop().unwrap(),
+    );
 
-    let view_length = cli.view_length.unwrap_or(CAPACITY);
-    let cmd_file = cli.cmd_file.unwrap_or(PathBuf::from(CMD_FILEPATH));
-    let interface;
+    let serial_if = SerialInterface::spawn_serial_interface(
+        serial_connections,
+        serial_if_cmd_sender,
+        serial_if_cmd_receiver,
+        SerialSetup::default(),
+    );
+    let inputs_task =
+        InputsTask::spawn_inputs_task(inputs_connections, inputs_cmd_sender, inputs_cmd_receiver);
 
-    match cli.command {
-        Commands::Serial { port, baudrate } => {
-            let port_select = port.unwrap_or("".to_string());
-            let baudrate_select = baudrate.unwrap_or(0);
+    let inputs_shared = inputs_task.shared_ref();
+    let serial_shared = serial_if.shared_ref();
 
-            interface = SerialIF::build_and_connect(&port_select, baudrate_select);
-        }
-        _ => {
-            unimplemented!()
-        }
-    }
+    let now_str = Local::now().format("%Y%m%d_%H%M%S");
+    let storage_base_filename = format!("{}.txt", now_str);
+    let graphics_connections = GraphicsConnections::new(
+        logger.clone(),
+        logger_receiver,
+        tx_channel_consumers.pop().unwrap(),
+        rx_channel_consumers.pop().unwrap(),
+        inputs_shared,
+        serial_shared,
+        storage_base_filename,
+        capacity,
+    );
+    let text_view = GraphicsTask::spawn_graphics_task(
+        graphics_connections,
+        graphics_cmd_sender,
+        graphics_cmd_receiver,
+    );
+    let plugin_engine = PluginEngine::spawn_plugin_engine(
+        plugin_engine_connections,
+        plugin_engine_cmd_sender,
+        plugin_engine_cmd_receiver,
+    );
 
-    enable_raw_mode().map_err(|_| "Cannot enable terminal raw mode".to_string())?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
-        .map_err(|_| "Cannot enable alternate screen and mouse capture".to_string())?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal =
-        Terminal::new(backend).map_err(|_| "Cannot create terminal backend".to_string())?;
-
-    let datetime = Local::now().format("%Y%m%d_%H%M%S");
-    let mut command_bar = CommandBar::new(interface, view_length, format!("{}.txt", datetime))
-        .with_command_file(cmd_file.as_path().to_str().unwrap());
-
-    'main: loop {
-        {
-            let text_view = command_bar.get_text_view().await;
-            let interface = command_bar.get_interface().await;
-
-            terminal
-                .draw(|f| command_bar.draw(f, &text_view, &interface))
-                .map_err(|_| "Fail at terminal draw".to_string())?;
-        }
-
-        if command_bar
-            .update(terminal.backend().size().unwrap())
-            .await
-            .is_err()
-        {
-            break 'main;
-        }
-    }
-
-    disable_raw_mode().map_err(|_| "Cannot disable terminal raw mode".to_string())?;
-    execute!(
-        terminal.backend_mut(),
-        LeaveAlternateScreen,
-        DisableMouseCapture
-    )
-    .map_err(|_| "Cannot disable alternate screen and mouse capture".to_string())?;
-    terminal
-        .show_cursor()
-        .map_err(|_| "Cannot show mouse cursor".to_string())?;
+    serial_if.join();
+    inputs_task.join();
+    text_view.join();
+    plugin_engine.join();
 
     Ok(())
 }
 
-#[tokio::main]
-async fn main() {
-    if let Err(err) = app().await {
+fn main() {
+    #[cfg(target_os = "windows")]
+    ctrlc::set_handler(|| { /* Do nothing on user ctrl+c */ })
+        .expect("Error setting Ctrl-C handler");
+
+    if let Err(err) = app() {
         println!("[\x1b[31mERR\x1b[0m] {}", err);
     }
 }

@@ -1,4 +1,3 @@
-use crate::text::ViewData;
 use chrono::{DateTime, Local};
 use ratatui::style::{Color, Style};
 use ratatui::text::Span;
@@ -72,6 +71,17 @@ impl RichText {
 
 pub struct RichTextWithInvisible {
     rich_texts: Vec<RichText>,
+}
+
+pub struct ViewData {
+    timestamp: DateTime<Local>,
+    data: Vec<RichText>,
+}
+
+impl ViewData {
+    pub fn new(timestamp: DateTime<Local>, data: Vec<RichText>) -> Self {
+        Self { timestamp, data }
+    }
 }
 
 impl RichTextWithInvisible {

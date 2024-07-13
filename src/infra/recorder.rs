@@ -1,7 +1,8 @@
-use crate::text::into_byte_format;
 use std::path::PathBuf;
 use tokio::fs::File;
 use tokio::io::AsyncWriteExt;
+
+use super::into_byte_format;
 
 pub struct Recorder {
     base_filename: String,

@@ -531,9 +531,9 @@ checksum = "1e186cfbae8084e513daff4240b4797e342f988cecda4fb6c939150f96315fd8"
 
 [[package]]
 name = "io-kit-sys"
-version = "0.4.0"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4769cb30e5dcf1710fc6730d3e94f78c47723a014a567de385e113c737394640"
+checksum = "617ee6cf8e3f66f3b4ea67a4058564628cde41901316e19f559e14c7c72c5e7b"
 dependencies = [
  "core-foundation-sys",
  "mach2",
@@ -568,6 +568,26 @@ name = "libc"
 version = "0.2.153"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9c198f91728a82281a64e1f4f9eeb25d82cb32a5de251c6bd1b5154d63a8e7bd"
+
+[[package]]
+name = "libudev"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78b324152da65df7bb95acfcaab55e3097ceaab02fb19b228a9eb74d55f135e0"
+dependencies = [
+ "libc",
+ "libudev-sys",
+]
+
+[[package]]
+name = "libudev-sys"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c8469b4a23b962c1396b9b451dda50ef5b283e8dd309d69033475fa9b334324"
+dependencies = [
+ "libc",
+ "pkg-config",
+]
 
 [[package]]
 name = "linux-raw-sys"
@@ -662,19 +682,6 @@ dependencies = [
  "log",
  "wasi",
  "windows-sys 0.48.0",
-]
-
-[[package]]
-name = "mio-serial"
-version = "5.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "20a4c60ca5c9c0e114b3bd66ff4aa5f9b2b175442be51ca6c4365d687a97a2ac"
-dependencies = [
- "log",
- "mio",
- "nix 0.26.4",
- "serialport",
- "winapi",
 ]
 
 [[package]]
@@ -976,8 +983,8 @@ dependencies = [
  "regex",
  "serde",
  "serde_yaml",
+ "serialport",
  "tokio",
- "tokio-serial",
 ]
 
 [[package]]
@@ -1021,14 +1028,15 @@ dependencies = [
 
 [[package]]
 name = "serialport"
-version = "4.3.0"
+version = "4.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8f5a15d0be940df84846264b09b51b10b931fb2f275becb80934e3568a016828"
+checksum = "de7c4f0cce25b9b3518eea99618112f9ee4549f974480c8f43d3c06f03c131a0"
 dependencies = [
  "bitflags 2.4.2",
  "cfg-if",
  "core-foundation-sys",
  "io-kit-sys",
+ "libudev",
  "mach2",
  "nix 0.26.4",
  "regex",
@@ -1209,23 +1217,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "tokio-serial"
-version = "5.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aa6e2e4cf0520a99c5f87d5abb24172b5bd220de57c3181baaaa5440540c64aa"
-dependencies = [
- "cfg-if",
- "futures",
- "log",
- "mio-serial",
- "tokio",
-]
-
-[[package]]
 name = "unescaper"
-version = "0.1.4"
+version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0adf6ad32eb5b3cadff915f7b770faaac8f7ff0476633aa29eb0d9584d889d34"
+checksum = "c878a167baa8afd137494101a688ef8c67125089ff2249284bd2b5f9bfedb815"
 dependencies = [
  "thiserror",
 ]

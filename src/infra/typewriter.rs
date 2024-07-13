@@ -1,7 +1,8 @@
-use crate::text::into_byte_format;
 use std::ops::AddAssign;
 use tokio::fs::OpenOptions;
 use tokio::io::AsyncWriteExt;
+
+use super::into_byte_format;
 
 pub struct TypeWriter {
     contents: Vec<String>,
