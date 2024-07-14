@@ -40,10 +40,12 @@ impl<T: Clone> Channel<T> {
 }
 
 impl<T: Clone> Consumer<T> {
+    #[allow(unused)]
     pub fn id(&self) -> Id {
         self.id
     }
 
+    #[allow(unused)]
     pub fn recv(&self) -> Result<T, mpsc::RecvError> {
         self.receiver.recv()
     }
@@ -58,6 +60,7 @@ impl<T: Clone> Producer<T> {
         self.channel.clone().send_data(data, None)
     }
 
+    #[allow(unused)]
     pub fn produce_without_loopback(&self, data: T, id: Id) {
         self.channel.clone().send_data(data, Some(id))
     }

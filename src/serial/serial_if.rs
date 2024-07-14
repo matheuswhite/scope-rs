@@ -1,14 +1,15 @@
 use crate::{
     error,
     infra::{
-        logger::{self, LogLevel, Logger},
+        logger::{LogLevel, Logger},
         messages::TimedBytes,
         mpmc::{Consumer, Producer},
         task::Task,
     },
+    success, warning,
 };
 use chrono::Local;
-use serialport::{DataBits, FlowControl, Parity, SerialPortBuilder, StopBits, TTYPort};
+use serialport::{DataBits, FlowControl, Parity, StopBits, TTYPort};
 use std::{
     io::{self, Read, Write},
     sync::{
@@ -98,6 +99,15 @@ impl SerialInterface {
         )
     }
 
+    fn set_mode(shared: Arc<RwLock<SerialShared>>, mode: Option<SerialMode>) {
+        let Some(mode) = mode else {
+            return;
+        };
+
+        let mut sw = shared.write().expect("Cannot get serial lock for write");
+        sw.mode = mode;
+    }
+
     fn task(
         shared: Arc<RwLock<SerialShared>>,
         connections: SerialConnections,
@@ -106,39 +116,41 @@ impl SerialInterface {
         let SerialConnections { logger, tx, rx } = connections;
         let mut line = vec![];
         let mut buffer = [0u8];
-        let mut mode = shared
-            .read()
-            .expect("Cannot get serial shared for read")
-            .mode;
-        #[cfg(target_os = "linux")]
-        let mut serial: Option<SerialPort> = None;
+        let mut serial = None;
         let mut now = Instant::now();
 
         'task_loop: loop {
             if let Ok(cmd) = cmd_receiver.try_recv() {
-                match cmd {
-                    SerialCommand::Connect => mode = Self::connect(shared.clone(), &mut serial),
+                let new_mode = match cmd {
+                    SerialCommand::Connect => Self::connect(shared.clone(), &mut serial, &logger),
                     SerialCommand::Disconnect => {
-                        mode = Self::disconnect(shared.clone(), &mut serial);
+                        Self::disconnect(shared.clone(), &mut serial, &logger)
                     }
                     SerialCommand::Exit => break 'task_loop,
                     SerialCommand::Setup(setup) => {
-                        if let Some(new_mode) = Self::setup(shared.clone(), setup, &mut serial) {
-                            mode = new_mode;
-                        }
+                        Self::setup(shared.clone(), setup, &mut serial, &logger)
                     }
-                }
+                };
+                Self::set_mode(shared.clone(), new_mode);
             }
 
-            match mode {
-                SerialMode::DoNotConnect => {
-                    std::thread::yield_now();
-                    continue;
+            {
+                let mode = shared
+                    .read()
+                    .expect("Cannot get serial shared for read")
+                    .mode;
+
+                match mode {
+                    SerialMode::DoNotConnect => {
+                        std::thread::yield_now();
+                        continue;
+                    }
+                    SerialMode::Reconnecting => {
+                        let new_mode = Self::connect(shared.clone(), &mut serial, &logger);
+                        Self::set_mode(shared.clone(), new_mode);
+                    }
+                    SerialMode::Connected => { /* Do nothing. It's already connected. */ }
                 }
-                SerialMode::Reconnecting => {
-                    mode = Self::connect(shared.clone(), &mut serial);
-                }
-                SerialMode::Connected => { /* Do nothing. It's already connected. */ }
             }
 
             let Some(mut ser) = serial.take() else {
@@ -169,7 +181,8 @@ impl SerialInterface {
                     if e.kind() == io::ErrorKind::PermissionDenied
                         || e.kind() == io::ErrorKind::BrokenPipe =>
                 {
-                    mode = Self::disconnect(shared.clone(), &mut Some(ser));
+                    let _ = Self::disconnect(shared.clone(), &mut Some(ser), &logger);
+                    Self::set_mode(shared.clone(), Some(SerialMode::Reconnecting));
                     continue;
                 }
                 Err(_) => {}
@@ -190,10 +203,18 @@ impl SerialInterface {
         }
     }
 
-    fn connect(shared: Arc<RwLock<SerialShared>>, serial: &mut Option<SerialPort>) -> SerialMode {
+    fn connect(
+        shared: Arc<RwLock<SerialShared>>,
+        serial: &mut Option<SerialPort>,
+        logger: &Logger,
+    ) -> Option<SerialMode> {
         let sw = shared
             .read()
             .expect("Cannot get serial share lock for write");
+
+        if let SerialMode::Connected = sw.mode {
+            return None;
+        }
 
         let connect_res = serialport::new(sw.port.clone(), sw.baudrate)
             .data_bits(sw.data_bits)
@@ -202,14 +223,24 @@ impl SerialInterface {
             .stop_bits(sw.stop_bits)
             .timeout(Duration::from_millis(Self::SERIAL_TIMEOUT_MS))
             .open_native();
+
         match connect_res {
             Ok(ser) => {
                 *serial = Some(ser);
-                SerialMode::Connected
+                success!(
+                    logger,
+                    "Connected at \"{}\" with {}bps",
+                    sw.port,
+                    sw.baudrate
+                );
+                Some(SerialMode::Connected)
             }
             Err(_) => {
                 let _ = serial.take();
-                SerialMode::Reconnecting
+                match sw.mode {
+                    SerialMode::Reconnecting => None,
+                    _ => Some(SerialMode::Reconnecting),
+                }
             }
         }
     }
@@ -217,17 +248,30 @@ impl SerialInterface {
     fn disconnect(
         shared: Arc<RwLock<SerialShared>>,
         serial: &mut Option<SerialPort>,
-    ) -> SerialMode {
+        logger: &Logger,
+    ) -> Option<SerialMode> {
         let _ = serial.take();
-        let mut sw = shared.write().expect("");
-        sw.mode = SerialMode::DoNotConnect;
-        sw.mode
+        let sw = shared.read().expect("Cannot get serial lock for read");
+        if let SerialMode::Connected = sw.mode {
+            warning!(
+                logger,
+                "Disconnected from \"{}\" with {}bps",
+                sw.port,
+                sw.baudrate
+            );
+        }
+
+        match sw.mode {
+            SerialMode::DoNotConnect => None,
+            _ => Some(SerialMode::DoNotConnect),
+        }
     }
 
     fn setup(
         shared: Arc<RwLock<SerialShared>>,
         setup: SerialSetup,
         serial: &mut Option<SerialPort>,
+        logger: &Logger,
     ) -> Option<SerialMode> {
         let mut has_changes = false;
         let mut sw = shared
@@ -264,9 +308,15 @@ impl SerialInterface {
             has_changes = true;
         }
 
+        let last_mode = sw.mode;
         if has_changes {
-            Self::disconnect(shared.clone(), serial);
-            Some(SerialMode::Reconnecting)
+            drop(sw);
+            let _ = Self::disconnect(shared.clone(), serial, &logger);
+
+            match last_mode {
+                SerialMode::Reconnecting => None,
+                _ => Some(SerialMode::Reconnecting),
+            }
         } else {
             None
         }

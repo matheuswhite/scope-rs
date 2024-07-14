@@ -1,45 +1,50 @@
-use std::time::Duration;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
-use super::timer::Timer;
+use super::timer::{Timeout, Timer};
 
-pub struct Blink<T: Clone, F> {
+#[derive(Default)]
+struct TimerOn;
+#[derive(Default)]
+struct TimerOff;
+
+pub struct Blink<T: Clone> {
     on: T,
     off: T,
-    current: Option<T>,
-    timer_on: Timer<F>,
-    timer_off: Timer<F>,
+    current: T,
+    timer_on: Timer<TimerOn, Self>,
+    timer_off: Timer<TimerOff, Self>,
     total_blinks: usize,
     num_blinks: usize,
 }
 
-impl<T: Clone, F: FnMut()> Blink<T, F> {
-    pub fn new(duration: Duration, total_blinks: usize, on: T, off: T) -> Self {
-        Self {
-            on,
+impl<T: Clone> Blink<T> {
+    pub fn new(duration: Duration, total_blinks: usize, on: T, off: T) -> Arc<Mutex<Self>> {
+        let obj = Self {
+            on: on.clone(),
             off,
-            current: None,
+            current: on,
             timer_on: Timer::new(duration),
             timer_off: Timer::new(duration),
             total_blinks,
             num_blinks: 0,
+        };
+        let obj = Arc::new(Mutex::new(obj));
+        {
+            let mut o = obj.lock().unwrap();
+            o.timer_on.set_action(obj.clone());
+            o.timer_off.set_action(obj.clone());
         }
-    }
 
-    fn timer_on_timeout(&mut self) {
-        self.timer_off.start();
-        self.current = Some(self.off.clone());
-    }
-
-    fn timer_off_timeout(&mut self) {
-        self.timer_on.start();
-        self.current = Some(self.on.clone());
+        obj
     }
 
     pub fn start(&mut self) {
+        self.num_blinks = 0;
         self.timer_on.start();
-        self.current = Some(self.on.clone());
-
-        self.timer_on.set_action(|| self.timer_on_timeout());
+        self.current = self.on.clone();
     }
 
     pub fn tick(&mut self) {
@@ -47,7 +52,25 @@ impl<T: Clone, F: FnMut()> Blink<T, F> {
         self.timer_off.tick();
     }
 
-    pub fn get_current(&self) -> Option<&T> {
-        self.current.as_ref()
+    pub fn get_current(&self) -> T {
+        self.current.clone()
+    }
+}
+
+impl<T: Clone> Timeout<TimerOn> for Blink<T> {
+    fn action(&mut self) {
+        self.timer_off.start();
+        self.current = self.off.clone();
+    }
+}
+
+impl<T: Clone> Timeout<TimerOff> for Blink<T> {
+    fn action(&mut self) {
+        self.num_blinks += 1;
+        self.current = self.on.clone();
+
+        if self.num_blinks < self.total_blinks {
+            self.timer_on.start();
+        }
     }
 }

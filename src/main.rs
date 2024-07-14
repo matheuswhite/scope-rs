@@ -1,6 +1,4 @@
 #![deny(warnings)]
-// TODO remove this allow after migration
-#![allow(unused)]
 
 extern crate core;
 
@@ -11,16 +9,49 @@ mod plugin;
 mod serial;
 
 use chrono::Local;
+use clap::{Parser, Subcommand};
 use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
 use infra::logger::Logger;
 use infra::mpmc::Channel;
 use inputs::inputs_task::{InputsConnections, InputsTask};
 use plugin::plugin_engine::{PluginEngine, PluginEngineConnections};
 use serial::serial_if::{SerialConnections, SerialInterface, SerialSetup};
+use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
 
-fn app(capacity: usize) -> Result<(), String> {
+const DEFAULT_CAPACITY: usize = 2000;
+const DEFAULT_TAG_FILE: &str = "tags.yml";
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    #[command(subcommand)]
+    command: Commands,
+    #[clap(short, long)]
+    capacity: Option<usize>,
+    #[clap(short, long)]
+    tag_file: Option<PathBuf>,
+}
+
+#[derive(Subcommand)]
+pub enum Commands {
+    Serial {
+        port: Option<String>,
+        baudrate: Option<u32>,
+    },
+    Ble {
+        name_device: String,
+        mtu: u32,
+    },
+}
+
+fn app(
+    capacity: usize,
+    tag_file: PathBuf,
+    port: Option<String>,
+    baudrate: Option<u32>,
+) -> Result<(), String> {
     let (logger, logger_receiver) = Logger::new();
     let mut tx_channel = Channel::default();
     let mut rx_channel = Channel::default();
@@ -40,6 +71,12 @@ fn app(capacity: usize) -> Result<(), String> {
     let (graphics_cmd_sender, graphics_cmd_receiver) = channel();
     let (plugin_engine_cmd_sender, plugin_engine_cmd_receiver) = channel();
 
+    let _ = serial_if_cmd_sender.send(serial::serial_if::SerialCommand::Setup(SerialSetup {
+        port,
+        baudrate,
+        ..SerialSetup::default()
+    }));
+
     let serial_connections = SerialConnections::new(
         logger.clone(),
         tx_channel_consumers.pop().unwrap(),
@@ -51,6 +88,7 @@ fn app(capacity: usize) -> Result<(), String> {
         graphics_cmd_sender.clone(),
         serial_if_cmd_sender.clone(),
         plugin_engine_cmd_sender.clone(),
+        tag_file,
     );
     let plugin_engine_connections = PluginEngineConnections::new(
         logger.clone(),
@@ -102,12 +140,33 @@ fn app(capacity: usize) -> Result<(), String> {
     Ok(())
 }
 
-fn main() {
+fn main() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     ctrlc::set_handler(|| { /* Do nothing on user ctrl+c */ })
         .expect("Error setting Ctrl-C handler");
 
-    if let Err(err) = app() {
-        println!("[\x1b[31mERR\x1b[0m] {}", err);
+    let cli = Cli::parse();
+
+    if cli.tag_file.is_some() {
+        return Err("Sorry! We're developing tag files and it's not available yet".to_string());
     }
+
+    let (port, baudrate) = match cli.command {
+        Commands::Serial { port, baudrate } => (port, baudrate),
+        Commands::Ble { .. } => {
+            return Err(
+                "Sorry! We're developing BLE interface and it's not available yet".to_string(),
+            );
+        }
+    };
+
+    let capacity = cli.capacity.unwrap_or(DEFAULT_CAPACITY);
+    let tag_file = cli.tag_file.unwrap_or(PathBuf::from(DEFAULT_TAG_FILE));
+
+    if let Err(err) = app(capacity, tag_file, port, baudrate) {
+        return Err(format!("[\x1b[31mERR\x1b[0m] {}", err));
+    }
+
+    println!("See you later ^^");
+    Ok(())
 }

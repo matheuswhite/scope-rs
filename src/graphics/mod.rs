@@ -1,2 +1,5 @@
 pub mod graphics_task;
-pub mod rich_string;
+
+pub trait Serialize {
+    fn serialize(&self) -> String;
+}

@@ -13,6 +13,7 @@ pub struct LogMessage {
     pub level: LogLevel,
 }
 
+#[allow(unused)]
 pub enum LogLevel {
     Error,
     Warning,
@@ -44,34 +45,34 @@ impl Logger {
 #[macro_export]
 macro_rules! debug {
     ($logger:expr, $($arg:tt)+) => {
-        $logger.write(format!($($arg)+), LogLevel::Debug)
+        {let _ = $logger.write(format!($($arg)+), LogLevel::Debug);}
     };
 }
 
 #[macro_export]
 macro_rules! info {
     ($logger:expr, $($arg:tt)+) => {
-        $logger.write(format!($($arg)+), LogLevel::Info)
+        {let _ = $logger.write(format!($($arg)+), LogLevel::Info);}
     };
 }
 
 #[macro_export]
 macro_rules! success {
     ($logger:expr, $($arg:tt)+) => {
-        $logger.write(format!($($arg)+), LogLevel::Success)
+        {let _ = $logger.write(format!($($arg)+), LogLevel::Success);}
     };
 }
 
 #[macro_export]
 macro_rules! warning {
     ($logger:expr, $($arg:tt)+) => {
-        $logger.write(format!($($arg)+), LogLevel::Warning)
+        {let _ = $logger.write(format!($($arg)+), LogLevel::Warning);}
     };
 }
 
 #[macro_export]
 macro_rules! error {
     ($logger:expr, $($arg:tt)+) => {
-        $logger.write(format!($($arg)+), LogLevel::Error)
+        {let _ = $logger.write(format!($($arg)+), LogLevel::Error);}
     };
 }

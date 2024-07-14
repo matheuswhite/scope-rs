@@ -52,6 +52,7 @@ where
         }
     }
 
+    #[allow(unused)]
     pub fn cmd_sender(&self) -> Sender<M> {
         self.cmd_sender.clone()
     }
@@ -67,6 +68,7 @@ impl<S> Shared<S> {
         self.shared.read()
     }
 
+    #[allow(unused)]
     pub fn try_read(
         &self,
     ) -> Result<
