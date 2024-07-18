@@ -437,7 +437,7 @@ impl GraphicsTask {
 
                 new_messages.push(GraphicalMessage::Rx {
                     timestamp: rx_msg.timestamp,
-                    message: vec![(Self::bytes_to_string(&rx_msg.message), Color::Reset)],
+                    message: Self::bytes_to_string(&rx_msg.message, Color::Reset),
                 });
             }
 
@@ -448,7 +448,7 @@ impl GraphicsTask {
 
                 new_messages.push(GraphicalMessage::Tx {
                     timestamp: tx_msg.timestamp,
-                    message: vec![(Self::bytes_to_string(&tx_msg.message), Color::Black)],
+                    message: Self::bytes_to_string(&tx_msg.message, Color::Black),
                 });
             }
 
@@ -512,16 +512,38 @@ impl GraphicsTask {
         terminal.show_cursor().expect("Cannot show mouse cursor");
     }
 
-    fn bytes_to_string(msg: &[u8]) -> String {
-        let mut output = "".to_string();
+    fn bytes_to_string(msg: &[u8], color: Color) -> Vec<(String, Color)> {
+        let mut output = vec![];
+        let mut buffer = "".to_string();
+        let mut in_plain_text = true;
 
         for byte in msg {
             match *byte {
-                x if 0x20 <= x && x <= 0x7E => output.push(x as char),
-                0x0a => output += "\\n",
-                0x0d => output += "\\r",
-                _ => output += &format!("\\x{:02x}", byte),
+                x if 0x20 <= x && x <= 0x7E => {
+                    if !in_plain_text {
+                        output.push((buffer.drain(..).collect(), Color::Magenta));
+                        in_plain_text = true;
+                    }
+
+                    buffer.push(x as char);
+                }
+                x => {
+                    if in_plain_text {
+                        output.push((buffer.drain(..).collect(), color));
+                        in_plain_text = false;
+                    }
+
+                    match x {
+                        0x0a => buffer += "\\n",
+                        0x0d => buffer += "\\r",
+                        _ => buffer += &format!("\\x{:02x}", byte),
+                    }
+                }
             }
+        }
+
+        if !buffer.is_empty() {
+            output.push((buffer, if in_plain_text { color } else { Color::Magenta }));
         }
 
         output
@@ -578,7 +600,7 @@ impl GraphicsTask {
                 continue;
             }
 
-            let cropped_message = if scroll_x < (msg.len() + offset) {
+            let cropped_message = if scroll_x < (msg.len() + offset) && scroll_x >= offset {
                 &msg[(scroll_x - offset)..]
             } else {
                 &msg

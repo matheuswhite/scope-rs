@@ -268,7 +268,7 @@ impl InputsTask {
 
                     private.tx.produce(Arc::new(TimedBytes {
                         timestamp: Local::now(),
-                        message: command_line.as_bytes().to_vec(),
+                        message: (command_line + "\r\n").as_bytes().to_vec(),
                     }));
                 }
             }
