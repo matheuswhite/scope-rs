@@ -43,7 +43,6 @@ clap = { version = "4.1.9", features = ["derive"] }
 mlua = { version = "0.9.6", features = ["lua54", "vendored", "async", "send"] }
 anyhow = "1.0.79"
 homedir = "0.2.1"
-regex = { version = "1.10.3", features = [] }
 tokio = { version = "1.36.0", features = ["full"] }
 
 [target.'cfg(windows)'.dependencies]

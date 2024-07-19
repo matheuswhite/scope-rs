@@ -155,7 +155,7 @@ impl GraphicsTask {
             .map(|msg| match msg {
                 GraphicalMessage::Log(log_msg) => Self::line_from_log_message(log_msg, scroll),
                 GraphicalMessage::Tx { timestamp, message } => {
-                    Self::line_from_message(timestamp, message, Color::Cyan, scroll)
+                    Self::line_from_message(timestamp, message, Color::LightCyan, scroll)
                 }
                 GraphicalMessage::Rx { timestamp, message } => {
                     Self::line_from_message(timestamp, message, Color::Reset, scroll)
@@ -312,6 +312,17 @@ impl GraphicsTask {
         let mut terminal = Terminal::new(backend).expect("Cannot create terminal backend");
         let blink = Blink::new(Duration::from_millis(200), 2, Color::Reset, Color::Black);
         let mut new_messages = vec![];
+        let patterns = [
+            ("\x1b[0m", Color::Reset),
+            ("\x1b[30m", Color::Black),
+            ("\x1b[31m", Color::Red),
+            ("\x1b[32m", Color::Green),
+            ("\x1b[33m", Color::Yellow),
+            ("\x1b[34m", Color::Blue),
+            ("\x1b[35m", Color::Magenta),
+            ("\x1b[36m", Color::Cyan),
+            ("\x1b[37m", Color::White),
+        ];
 
         'draw_loop: loop {
             {
@@ -437,7 +448,7 @@ impl GraphicsTask {
 
                 new_messages.push(GraphicalMessage::Rx {
                     timestamp: rx_msg.timestamp,
-                    message: Self::bytes_to_string(&rx_msg.message, Color::Reset),
+                    message: Self::ansi_colors(&patterns, &rx_msg.message),
                 });
             }
 
@@ -512,16 +523,55 @@ impl GraphicsTask {
         terminal.show_cursor().expect("Cannot show mouse cursor");
     }
 
+    fn ansi_colors(patterns: &[(&'static str, Color)], msg: &[u8]) -> Vec<(String, Color)> {
+        let mut output = vec![];
+        let mut buffer = "".to_string();
+        let mut color = Color::Reset;
+
+        for byte in msg {
+            buffer.push(*byte as char);
+
+            if (*byte as char) != 'm' {
+                continue;
+            }
+
+            'pattern_loop: for (pattern, new_color) in patterns {
+                if buffer.contains(pattern) {
+                    output.push((buffer.replace(pattern, ""), color));
+
+                    buffer.clear();
+                    color = *new_color;
+
+                    break 'pattern_loop;
+                }
+            }
+        }
+
+        if !buffer.is_empty() {
+            output.push((buffer, color));
+        }
+
+        output
+            .into_iter()
+            .flat_map(|(msg, color)| Self::bytes_to_string(msg.as_bytes(), color))
+            .collect()
+    }
+
     fn bytes_to_string(msg: &[u8], color: Color) -> Vec<(String, Color)> {
         let mut output = vec![];
         let mut buffer = "".to_string();
         let mut in_plain_text = true;
+        let accent_color = if color == Color::Magenta {
+            Color::DarkGray
+        } else {
+            Color::Magenta
+        };
 
         for byte in msg {
             match *byte {
                 x if 0x20 <= x && x <= 0x7E => {
                     if !in_plain_text {
-                        output.push((buffer.drain(..).collect(), Color::Magenta));
+                        output.push((buffer.drain(..).collect(), accent_color));
                         in_plain_text = true;
                     }
 
@@ -543,7 +593,7 @@ impl GraphicsTask {
         }
 
         if !buffer.is_empty() {
-            output.push((buffer, if in_plain_text { color } else { Color::Magenta }));
+            output.push((buffer, if in_plain_text { color } else { accent_color }));
         }
 
         output

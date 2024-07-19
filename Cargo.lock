@@ -980,7 +980,6 @@ dependencies = [
  "mlua",
  "rand",
  "ratatui",
- "regex",
  "serde",
  "serde_yaml",
  "serialport",
