@@ -1,52 +1,37 @@
-use std::{
-    marker::PhantomData,
-    sync::{Arc, Mutex},
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 pub trait Timeout<Id> {
-    fn action(&mut self);
+    fn action(&mut self, id: Id);
 }
 
-pub struct Timer<Id: Default, T: Timeout<Id>> {
+pub struct Timer {
     duration: Duration,
-    action: Option<Arc<Mutex<T>>>,
     now: Option<Instant>,
-    marker: PhantomData<Id>,
 }
 
-impl<Id: Default, T: Timeout<Id>> Timer<Id, T> {
+impl Timer {
     pub fn new(duration: Duration) -> Self {
         Self {
             duration,
-            action: None,
             now: None,
-            marker: PhantomData,
         }
-    }
-
-    pub fn set_action(&mut self, action: Arc<Mutex<T>>) {
-        self.action = Some(action);
     }
 
     pub fn start(&mut self) {
         self.now = Some(Instant::now());
     }
 
-    pub fn tick(&mut self) {
+    pub fn tick(&mut self) -> bool {
         let Some(now) = self.now.as_ref() else {
-            return;
+            return false;
         };
 
         if now.elapsed() < self.duration {
-            return;
-        }
-
-        if let Some(action) = self.action.as_ref() {
-            let mut action = action.lock().unwrap();
-            action.action();
+            return false;
         }
 
         self.now.take();
+
+        true
     }
 }

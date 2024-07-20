@@ -310,7 +310,7 @@ impl GraphicsTask {
             .expect("Cannot enable alternate screen and mouse capture");
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend).expect("Cannot create terminal backend");
-        let blink = Blink::new(Duration::from_millis(200), 2, Color::Reset, Color::Black);
+        let mut blink = Blink::new(Duration::from_millis(200), 2, Color::Reset, Color::Black);
         let mut new_messages = vec![];
         let patterns = [
             ("\x1b[0m", Color::Reset),
@@ -325,10 +325,7 @@ impl GraphicsTask {
         ];
 
         'draw_loop: loop {
-            {
-                let mut blk = blink.lock().unwrap();
-                blk.tick();
-            }
+            blink.tick();
 
             if let Ok(cmd) = cmd_receiver.try_recv() {
                 match cmd {
@@ -338,10 +335,7 @@ impl GraphicsTask {
                             continue;
                         }
 
-                        {
-                            let mut blk = blink.lock().unwrap();
-                            blk.start();
-                        }
+                        blink.start();
                         let filename = private.typewriter.get_filename();
 
                         match private.typewriter.flush() {
@@ -497,11 +491,7 @@ impl GraphicsTask {
                         ])
                         .split(f.size());
 
-                    let blink_color = {
-                        let blk = blink.lock().unwrap();
-                        blk.get_current()
-                    };
-                    Self::draw_history(&mut private, f, chunks[0], blink_color);
+                    Self::draw_history(&mut private, f, chunks[0], blink.get_current());
                     Self::draw_command_bar(
                         &private.inputs_shared,
                         &private.serial_shared,
@@ -719,16 +709,21 @@ impl Serialize for GraphicalMessage {
                     LogLevel::Debug => "DBG",
                 };
 
-                format!("[{}][{}] {}", log.timestamp, log_level, log.message)
+                format!(
+                    "[{}][{}] {}",
+                    log.timestamp.format("%H:%M:%S.%3f"),
+                    log_level,
+                    log.message
+                )
             }
             GraphicalMessage::Tx { timestamp, message } => {
                 let msg = message.iter().fold(String::new(), |acc, x| acc + &x.0);
 
-                format!("[{}][ =>] {}", timestamp, msg)
+                format!("[{}][ =>] {}", timestamp.format("%H:%M:%S.%3f"), msg)
             }
             GraphicalMessage::Rx { timestamp, message } => {
                 let msg = message.iter().fold(String::new(), |acc, x| acc + &x.0);
-                format!("[{}][ <=] {}", timestamp, msg)
+                format!("[{}][ <=] {}", timestamp.format("%H:%M:%S.%3f"), msg)
             }
         }
     }

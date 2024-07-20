@@ -1,28 +1,23 @@
-use std::{
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::time::Duration;
 
 use super::timer::{Timeout, Timer};
 
-#[derive(Default)]
 struct TimerOn;
-#[derive(Default)]
 struct TimerOff;
 
 pub struct Blink<T: Clone> {
     on: T,
     off: T,
     current: T,
-    timer_on: Timer<TimerOn, Self>,
-    timer_off: Timer<TimerOff, Self>,
+    timer_on: Timer,
+    timer_off: Timer,
     total_blinks: usize,
     num_blinks: usize,
 }
 
 impl<T: Clone> Blink<T> {
-    pub fn new(duration: Duration, total_blinks: usize, on: T, off: T) -> Arc<Mutex<Self>> {
-        let obj = Self {
+    pub fn new(duration: Duration, total_blinks: usize, on: T, off: T) -> Self {
+        Self {
             on: on.clone(),
             off,
             current: on,
@@ -30,15 +25,7 @@ impl<T: Clone> Blink<T> {
             timer_off: Timer::new(duration),
             total_blinks,
             num_blinks: 0,
-        };
-        let obj = Arc::new(Mutex::new(obj));
-        {
-            let mut o = obj.lock().unwrap();
-            o.timer_on.set_action(obj.clone());
-            o.timer_off.set_action(obj.clone());
         }
-
-        obj
     }
 
     pub fn start(&mut self) {
@@ -48,8 +35,13 @@ impl<T: Clone> Blink<T> {
     }
 
     pub fn tick(&mut self) {
-        self.timer_on.tick();
-        self.timer_off.tick();
+        if self.timer_on.tick() {
+            self.action(TimerOn);
+        }
+
+        if self.timer_off.tick() {
+            self.action(TimerOff);
+        }
     }
 
     pub fn get_current(&self) -> T {
@@ -58,14 +50,14 @@ impl<T: Clone> Blink<T> {
 }
 
 impl<T: Clone> Timeout<TimerOn> for Blink<T> {
-    fn action(&mut self) {
+    fn action(&mut self, _id: TimerOn) {
         self.timer_off.start();
         self.current = self.off.clone();
     }
 }
 
 impl<T: Clone> Timeout<TimerOff> for Blink<T> {
-    fn action(&mut self) {
+    fn action(&mut self, _id: TimerOff) {
         self.num_blinks += 1;
         self.current = self.on.clone();
 
