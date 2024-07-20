@@ -13,7 +13,7 @@ pub struct LogMessage {
     pub level: LogLevel,
 }
 
-#[allow(unused)]
+#[derive(Debug, Clone, Copy)]
 pub enum LogLevel {
     Error,
     Warning,

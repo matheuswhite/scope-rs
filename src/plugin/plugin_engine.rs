@@ -1,3 +1,12 @@
+use crate::{
+    infra::{
+        logger::{LogLevel, Logger},
+        messages::TimedBytes,
+        mpmc::{Consumer, Producer},
+        task::Task,
+    },
+    warning,
+};
 use std::{
     sync::{
         mpsc::{Receiver, Sender},
@@ -6,16 +15,10 @@ use std::{
     thread::yield_now,
 };
 
-use crate::infra::{
-    logger::Logger,
-    messages::TimedBytes,
-    mpmc::{Consumer, Producer},
-    task::Task,
-};
-
 pub type PluginEngine = Task<(), PluginEngineCommand>;
 
 pub enum PluginEngineCommand {
+    SetLogLevel(LogLevel),
     Exit,
 }
 
@@ -38,12 +41,15 @@ impl PluginEngine {
 
     pub fn task(
         _shared: Arc<RwLock<()>>,
-        _private: PluginEngineConnections,
+        private: PluginEngineConnections,
         cmd_receiver: Receiver<PluginEngineCommand>,
     ) {
         'plugin_engine_loop: loop {
             if let Ok(cmd) = cmd_receiver.try_recv() {
                 match cmd {
+                    PluginEngineCommand::SetLogLevel(_level) => {
+                        warning!(private.logger, "Sorry, but we're building this feature...");
+                    }
                     PluginEngineCommand::Exit => break 'plugin_engine_loop,
                 }
             }

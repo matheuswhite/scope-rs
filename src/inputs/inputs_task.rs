@@ -342,7 +342,7 @@ impl InputsTask {
                     _ => {
                         error!(
                             private.logger,
-                            "Invalid flow control. Choose one of these options: none, sw, hw"
+                            "Invalid flow control. Please, chose one of these options: none, sw, hw"
                         );
                         return;
                     }
@@ -362,6 +362,38 @@ impl InputsTask {
                         command_line_split[1]
                     ),
                     Err(err) => error!(private.logger, "Cannot set flow control: {}", err),
+                }
+            }
+            "log" => {
+                if command_line_split.len() < 3 {
+                    error!(
+                        private.logger,
+                        "Insufficient arguments for \"!log\" command"
+                    );
+                    return;
+                }
+
+                let module = command_line_split[1].as_str();
+                let level = match command_line_split[2].as_str() {
+                    "debug" | "dbg" | "all" => LogLevel::Debug,
+                    "info" | "inf" => LogLevel::Info,
+                    "success" | "ok" => LogLevel::Success,
+                    "warning" | "wrn" => LogLevel::Warning,
+                    "error" | "err" => LogLevel::Error,
+                    _ => {
+                        error!(private.logger, "Invalid log level. Please, chose one of these options: debug, info, success, warning, error");
+                        return;
+                    }
+                };
+
+                if module == "system" || module == "sys" {
+                    let _ = private
+                        .graphics_cmd_sender
+                        .send(GraphicsCommand::SetLogLevel(level));
+                } else {
+                    let _ = private
+                        .plugin_engine_cmd_sender
+                        .send(PluginEngineCommand::SetLogLevel(level));
                 }
             }
             _ => error!(private.logger, "Invalid command \"{}\"", cmd_name),

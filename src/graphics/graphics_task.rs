@@ -47,6 +47,7 @@ pub type GraphicsTask = Task<(), GraphicsCommand>;
 pub struct GraphicsConnections {
     logger: Logger,
     logger_receiver: Receiver<LogMessage>,
+    system_log_level: LogLevel,
     tx: Consumer<Arc<TimedBytes>>,
     rx: Consumer<Arc<TimedBytes>>,
     inputs_shared: Shared<InputsShared>,
@@ -61,6 +62,7 @@ pub struct GraphicsConnections {
 }
 
 pub enum GraphicsCommand {
+    SetLogLevel(LogLevel),
     SaveData,
     RecordData,
     ScrollLeft,
@@ -112,8 +114,14 @@ impl GraphicsTask {
         };
 
         let (coll, coll_size) = (
-            private.history.range(scroll.0 as usize..),
-            private.history.len(),
+            private.history.range(scroll.0 as usize..).filter(|msg| {
+                if let GraphicalMessage::Log(log) = msg {
+                    log.level as u32 <= private.system_log_level as u32
+                } else {
+                    true
+                }
+            }),
+            Self::history_length(private),
         );
         let border_type = if private.auto_scroll {
             BorderType::Thick
@@ -337,6 +345,10 @@ impl GraphicsTask {
 
             if let Ok(cmd) = cmd_receiver.try_recv() {
                 match cmd {
+                    GraphicsCommand::SetLogLevel(level) => {
+                        private.system_log_level = level;
+                        success!(private.logger, "Log setted to {:?}", level);
+                    }
                     GraphicsCommand::SaveData => {
                         if private.recorder.is_recording() {
                             warning!(private.logger, "Cannot save file while recording.");
@@ -664,9 +676,23 @@ impl GraphicsTask {
         Line::from(spans)
     }
 
+    fn history_length(private: &GraphicsConnections) -> usize {
+        private
+            .history
+            .iter()
+            .filter(|msg| {
+                if let GraphicalMessage::Log(log) = msg {
+                    log.level as u32 <= private.system_log_level as u32
+                } else {
+                    true
+                }
+            })
+            .count()
+    }
+
     fn max_main_axis(private: &GraphicsConnections) -> u16 {
         let main_axis_length = private.last_frame_height - Self::COMMAND_BAR_HEIGHT - 2;
-        let history_len = private.history.len() as u16;
+        let history_len = Self::history_length(private) as u16;
 
         if history_len > main_axis_length {
             history_len - main_axis_length
@@ -701,6 +727,7 @@ impl GraphicsConnections {
             auto_scroll: true,
             scroll: (0, 0),
             last_frame_height: u16::MAX,
+            system_log_level: LogLevel::Debug,
         }
     }
 }
