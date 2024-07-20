@@ -172,13 +172,14 @@ impl GraphicsTask {
         frame: &mut Frame,
         rect: Rect,
     ) {
-        let (port, baudrate, is_connected) = {
+        let (port, baudrate, flow_control, is_connected) = {
             let serial_shared = serial_shared
                 .read()
                 .expect("Cannot get serial lock for read");
             (
                 serial_shared.port.clone(),
                 serial_shared.baudrate,
+                serial_shared.flow_control,
                 matches!(serial_shared.mode, SerialMode::Connected),
             )
         };
@@ -208,8 +209,15 @@ impl GraphicsTask {
 
         let block = Block::default()
             .title(format!(
-                "[{:03}] Serial {}:{:04}bps",
-                history_len, port, baudrate
+                "[{:03}] Serial {}:{:04}bps{}",
+                history_len,
+                port,
+                baudrate,
+                match flow_control {
+                    serialport::FlowControl::None => "",
+                    serialport::FlowControl::Software => ":SW",
+                    serialport::FlowControl::Hardware => ":HW",
+                }
             ))
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)

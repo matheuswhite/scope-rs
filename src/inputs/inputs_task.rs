@@ -9,11 +9,13 @@ use crate::{
     },
     plugin::plugin_engine::PluginEngineCommand,
     serial::serial_if::{SerialCommand, SerialSetup},
+    success,
 };
 use chrono::Local;
 use core::panic;
 use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use rand::seq::SliceRandom;
+use serialport::FlowControl;
 use std::{
     path::PathBuf,
     sync::{
@@ -323,6 +325,44 @@ impl InputsTask {
             }
             "disconnect" => {
                 let _ = private.serial_if_cmd_sender.send(SerialCommand::Disconnect);
+            }
+            "flow" => {
+                if command_line_split.len() < 2 {
+                    error!(
+                        private.logger,
+                        "Insufficient arguments for \"!flow\" command"
+                    );
+                    return;
+                }
+
+                let flow_control = match command_line_split[1].as_str() {
+                    "none" => FlowControl::None,
+                    "sw" => FlowControl::Software,
+                    "hw" => FlowControl::Hardware,
+                    _ => {
+                        error!(
+                            private.logger,
+                            "Invalid flow control. Choose one of these options: none, sw, hw"
+                        );
+                        return;
+                    }
+                };
+
+                let res = private
+                    .serial_if_cmd_sender
+                    .send(SerialCommand::Setup(SerialSetup {
+                        flow_control: Some(flow_control),
+                        ..SerialSetup::default()
+                    }));
+
+                match res {
+                    Ok(_) => success!(
+                        private.logger,
+                        "Flow control setted to \"{}\"",
+                        command_line_split[1]
+                    ),
+                    Err(err) => error!(private.logger, "Cannot set flow control: {}", err),
+                }
             }
             _ => error!(private.logger, "Invalid command \"{}\"", cmd_name),
         }
