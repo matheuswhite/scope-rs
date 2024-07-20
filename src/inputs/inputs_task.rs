@@ -437,6 +437,7 @@ impl InputsTask {
                             output.push(hex as char);
                         }
                         hex_shift = 0;
+                        continue;
                     }
                 }
 
@@ -493,5 +494,31 @@ impl InputsConnections {
             backup_command_line: String::new(),
             tag_file,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::InputsTask;
+
+    #[test]
+    fn test_rhs_one() {
+        let res = InputsTask::replace_hex_sequence("$61".to_string());
+
+        assert_eq!(&res, "a");
+    }
+
+    #[test]
+    fn test_rhs_two_no_sep() {
+        let res = InputsTask::replace_hex_sequence("$6161".to_string());
+
+        assert_eq!(&res, "aa");
+    }
+
+    #[test]
+    fn test_rhs_two_comma() {
+        let res = InputsTask::replace_hex_sequence("$61,61".to_string());
+
+        assert_eq!(&res, "aa");
     }
 }
