@@ -34,7 +34,7 @@ function M.log.error(msg)
 end
 
 function M.serial.info()
-  local _, port, baud_rate = coroutine.yield({":serial.info"})
+  local port, baud_rate = coroutine.yield({":serial.info"})
   return port, baud_rate
 end
 
@@ -43,7 +43,7 @@ function M.serial.send(msg)
 end
 
 function M.serial.recv(opts)
-  local _, err, msg = coroutine.yield({":serial.recv", opts})
+  local err, msg = coroutine.yield({":serial.recv", opts})
   return err, msg
 end
 
@@ -60,12 +60,21 @@ function M.sys.sleep_ms(time)
 end
 
 function M.re.literal(str)
+  return coroutine.yield({":re.literal", str})
 end
 
 function M.re.matches(str, pattern_table)
+  local fn_name = coroutine.yield({":re.matches", str, pattern_table})
+  if fn_name ~= nil then
+    local fn = pattern_table[fn_name]
+    fn(str)
+  end
 end
 
 function M.re.match(str, pattern, code)
+  if coroutine.yield({":re.match", str, pattern}) then
+    code(str)
+  end
 end
 
 return M

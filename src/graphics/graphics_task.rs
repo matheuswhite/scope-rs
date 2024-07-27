@@ -352,7 +352,8 @@ impl GraphicsTask {
                     GraphicsCommand::SaveData => {
                         if private.recorder.is_recording() {
                             warning!(private.logger, "Cannot save file while recording.");
-                            continue;
+                            /* don't yield here, because we need to put this warning message on display */
+                            continue 'draw_loop;
                         }
 
                         blink.start();
@@ -482,6 +483,8 @@ impl GraphicsTask {
                     private.history.remove(0);
                 }
 
+                // TODO brake \n into multiple logs
+
                 new_messages.push(GraphicalMessage::Log(log_msg));
             }
 
@@ -521,6 +524,8 @@ impl GraphicsTask {
                     Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
                 })
                 .expect("Error to draw");
+
+            std::thread::yield_now();
         }
 
         disable_raw_mode().expect("Cannot disable terminal raw mode");

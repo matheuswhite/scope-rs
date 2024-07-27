@@ -14,7 +14,7 @@ use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
 use infra::logger::Logger;
 use infra::mpmc::Channel;
 use inputs::inputs_task::{InputsConnections, InputsTask};
-use plugin::plugin_engine::{PluginEngine, PluginEngineConnections};
+use plugin::engine::{PluginEngine, PluginEngineConnections};
 use serial::serial_if::{SerialConnections, SerialInterface, SerialSetup};
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
@@ -90,12 +90,6 @@ fn app(
         plugin_engine_cmd_sender.clone(),
         tag_file,
     );
-    let plugin_engine_connections = PluginEngineConnections::new(
-        logger.clone(),
-        tx_channel.new_producer(),
-        tx_channel_consumers.pop().unwrap(),
-        rx_channel_consumers.pop().unwrap(),
-    );
 
     let serial_if = SerialInterface::spawn_serial_interface(
         serial_connections,
@@ -103,6 +97,16 @@ fn app(
         serial_if_cmd_receiver,
         SerialSetup::default(),
     );
+    let serial_shared = serial_if.shared_ref();
+
+    let plugin_engine_connections = PluginEngineConnections::new(
+        logger.clone(),
+        tx_channel.new_producer(),
+        tx_channel_consumers.pop().unwrap(),
+        rx_channel_consumers.pop().unwrap(),
+        serial_shared,
+    );
+
     let inputs_task =
         InputsTask::spawn_inputs_task(inputs_connections, inputs_cmd_sender, inputs_cmd_receiver);
 

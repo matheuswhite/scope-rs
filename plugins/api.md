@@ -70,7 +70,7 @@ end
 ### `on_serial_disconnect`
 
 ```lua
-function M.on_serial_disconnect()
+function M.on_serial_disconnect(port, baudrate)
     -- ...
 end
 ```
@@ -131,10 +131,10 @@ function M.on_ble_indicate(serv, char, val)
 end
 ```
 
-### `on_mtu_change`
+### `on_ble_mtu_change`
 
 ```lua
-function M.on_mtu_change(uuid, val)
+function M.on_ble_mtu_change(uuid, val)
     -- ...
 end
 ```

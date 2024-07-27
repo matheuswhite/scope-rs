@@ -143,7 +143,7 @@ impl SerialInterface {
                 match mode {
                     SerialMode::DoNotConnect => {
                         std::thread::yield_now();
-                        continue;
+                        continue 'task_loop;
                     }
                     SerialMode::Reconnecting => {
                         let new_mode = Self::connect(shared.clone(), &mut serial, &logger);
@@ -155,7 +155,7 @@ impl SerialInterface {
 
             let Some(mut ser) = serial.take() else {
                 std::thread::yield_now();
-                continue;
+                continue 'task_loop;
             };
 
             if let Ok(data_to_sent) = tx.try_recv() {
@@ -183,7 +183,8 @@ impl SerialInterface {
                 {
                     let _ = Self::disconnect(shared.clone(), &mut Some(ser), &logger);
                     Self::set_mode(shared.clone(), Some(SerialMode::Reconnecting));
-                    continue;
+                    std::thread::yield_now();
+                    continue 'task_loop;
                 }
                 Err(_) => {}
             }
@@ -200,6 +201,8 @@ impl SerialInterface {
             }
 
             serial = Some(ser);
+
+            std::thread::yield_now();
         }
     }
 

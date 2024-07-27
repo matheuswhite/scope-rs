@@ -7,7 +7,7 @@ use crate::{
         mpmc::Producer,
         task::Task,
     },
-    plugin::plugin_engine::PluginEngineCommand,
+    plugin::engine::PluginEngineCommand,
     serial::serial_if::{SerialCommand, SerialSetup},
     success,
 };
@@ -374,7 +374,7 @@ impl InputsTask {
                 }
 
                 let module = command_line_split[1].as_str();
-                let level = match command_line_split[2].as_str() {
+                let log_level = match command_line_split[2].as_str() {
                     "debug" | "dbg" | "all" => LogLevel::Debug,
                     "info" | "inf" => LogLevel::Info,
                     "success" | "ok" => LogLevel::Success,
@@ -389,11 +389,15 @@ impl InputsTask {
                 if module == "system" || module == "sys" {
                     let _ = private
                         .graphics_cmd_sender
-                        .send(GraphicsCommand::SetLogLevel(level));
+                        .send(GraphicsCommand::SetLogLevel(log_level));
                 } else {
-                    let _ = private
-                        .plugin_engine_cmd_sender
-                        .send(PluginEngineCommand::SetLogLevel(level));
+                    let _ =
+                        private
+                            .plugin_engine_cmd_sender
+                            .send(PluginEngineCommand::SetLogLevel {
+                                plugin_name: module.to_string(),
+                                log_level,
+                            });
                 }
             }
             _ => error!(private.logger, "Invalid command \"{}\"", cmd_name),
@@ -460,6 +464,8 @@ impl InputsTask {
                 event::Event::Resize(_, _) => {}
                 _ => {}
             }
+
+            std::thread::yield_now();
         }
     }
 
