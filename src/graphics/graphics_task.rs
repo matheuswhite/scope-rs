@@ -478,14 +478,33 @@ impl GraphicsTask {
                 });
             }
 
-            while let Ok(log_msg) = private.logger_receiver.try_recv() {
+            while let Ok(LogMessage {
+                timestamp,
+                message,
+                level,
+            }) = private.logger_receiver.try_recv()
+            {
                 if private.history.len() + new_messages.len() >= private.capacity {
                     private.history.remove(0);
                 }
 
-                // TODO brake \n into multiple logs
+                let log_msg_splited = message
+                    .split('\n')
+                    .enumerate()
+                    .map(|(i, msg)| {
+                        GraphicalMessage::Log(LogMessage {
+                            timestamp,
+                            message: if i == 0 {
+                                msg.to_owned()
+                            } else {
+                                "  ".to_string() + msg
+                            },
+                            level,
+                        })
+                    })
+                    .collect::<Vec<_>>();
 
-                new_messages.push(GraphicalMessage::Log(log_msg));
+                new_messages.extend(log_msg_splited);
             }
 
             if !new_messages.is_empty() {
