@@ -27,7 +27,6 @@ use std::{path::Path, sync::mpsc::Receiver};
 use tokio::{runtime::Runtime, task::yield_now};
 pub type PluginEngine = Task<(), PluginEngineCommand>;
 
-#[allow(unused)]
 pub enum PluginEngineCommand {
     SetLogLevel {
         plugin_name: String,

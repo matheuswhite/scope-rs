@@ -6,6 +6,7 @@ use crate::{
         mpmc::{Consumer, Producer},
         task::Task,
     },
+    plugin::engine::PluginEngineCommand,
     success, warning,
 };
 use chrono::Local;
@@ -50,6 +51,7 @@ pub struct SerialConnections {
     logger: Logger,
     tx: Consumer<Arc<TimedBytes>>,
     rx: Producer<Arc<TimedBytes>>,
+    plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
 }
 
 pub enum SerialCommand {
@@ -113,7 +115,12 @@ impl SerialInterface {
         connections: SerialConnections,
         cmd_receiver: Receiver<SerialCommand>,
     ) {
-        let SerialConnections { logger, tx, rx } = connections;
+        let SerialConnections {
+            logger,
+            tx,
+            rx,
+            plugin_engine_cmd_sender,
+        } = connections;
         let mut line = vec![];
         let mut buffer = [0u8];
         let mut serial = None;
@@ -122,14 +129,26 @@ impl SerialInterface {
         'task_loop: loop {
             if let Ok(cmd) = cmd_receiver.try_recv() {
                 let new_mode = match cmd {
-                    SerialCommand::Connect => Self::connect(shared.clone(), &mut serial, &logger),
-                    SerialCommand::Disconnect => {
-                        Self::disconnect(shared.clone(), &mut serial, &logger)
-                    }
+                    SerialCommand::Connect => Self::connect(
+                        shared.clone(),
+                        &mut serial,
+                        &logger,
+                        &plugin_engine_cmd_sender,
+                    ),
+                    SerialCommand::Disconnect => Self::disconnect(
+                        shared.clone(),
+                        &mut serial,
+                        &logger,
+                        &plugin_engine_cmd_sender,
+                    ),
                     SerialCommand::Exit => break 'task_loop,
-                    SerialCommand::Setup(setup) => {
-                        Self::setup(shared.clone(), setup, &mut serial, &logger)
-                    }
+                    SerialCommand::Setup(setup) => Self::setup(
+                        shared.clone(),
+                        setup,
+                        &mut serial,
+                        &logger,
+                        &plugin_engine_cmd_sender,
+                    ),
                 };
                 Self::set_mode(shared.clone(), new_mode);
             }
@@ -146,7 +165,12 @@ impl SerialInterface {
                         continue 'task_loop;
                     }
                     SerialMode::Reconnecting => {
-                        let new_mode = Self::connect(shared.clone(), &mut serial, &logger);
+                        let new_mode = Self::connect(
+                            shared.clone(),
+                            &mut serial,
+                            &logger,
+                            &plugin_engine_cmd_sender,
+                        );
                         Self::set_mode(shared.clone(), new_mode);
                     }
                     SerialMode::Connected => { /* Do nothing. It's already connected. */ }
@@ -181,7 +205,12 @@ impl SerialInterface {
                     if e.kind() == io::ErrorKind::PermissionDenied
                         || e.kind() == io::ErrorKind::BrokenPipe =>
                 {
-                    let _ = Self::disconnect(shared.clone(), &mut Some(ser), &logger);
+                    let _ = Self::disconnect(
+                        shared.clone(),
+                        &mut Some(ser),
+                        &logger,
+                        &plugin_engine_cmd_sender,
+                    );
                     Self::set_mode(shared.clone(), Some(SerialMode::Reconnecting));
                     std::thread::yield_now();
                     continue 'task_loop;
@@ -210,6 +239,7 @@ impl SerialInterface {
         shared: Arc<RwLock<SerialShared>>,
         serial: &mut Option<SerialPort>,
         logger: &Logger,
+        plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
     ) -> Option<SerialMode> {
         let sw = shared
             .read()
@@ -236,6 +266,10 @@ impl SerialInterface {
                     sw.port,
                     sw.baudrate
                 );
+                let _ = plugin_engine_cmd_sender.send(PluginEngineCommand::SerialConnected {
+                    port: sw.port.clone(),
+                    baudrate: sw.baudrate,
+                });
                 Some(SerialMode::Connected)
             }
             Err(_) => {
@@ -252,6 +286,7 @@ impl SerialInterface {
         shared: Arc<RwLock<SerialShared>>,
         serial: &mut Option<SerialPort>,
         logger: &Logger,
+        plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
     ) -> Option<SerialMode> {
         let _ = serial.take();
         let sw = shared.read().expect("Cannot get serial lock for read");
@@ -262,6 +297,10 @@ impl SerialInterface {
                 sw.port,
                 sw.baudrate
             );
+            let _ = plugin_engine_cmd_sender.send(PluginEngineCommand::SerialDisconnected {
+                port: sw.port.clone(),
+                baudrate: sw.baudrate,
+            });
         }
 
         match sw.mode {
@@ -275,6 +314,7 @@ impl SerialInterface {
         setup: SerialSetup,
         serial: &mut Option<SerialPort>,
         logger: &Logger,
+        plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
     ) -> Option<SerialMode> {
         let mut has_changes = false;
         let mut sw = shared
@@ -314,7 +354,7 @@ impl SerialInterface {
         let last_mode = sw.mode;
         if has_changes {
             drop(sw);
-            let _ = Self::disconnect(shared.clone(), serial, &logger);
+            let _ = Self::disconnect(shared.clone(), serial, &logger, &plugin_engine_cmd_sender);
 
             match last_mode {
                 SerialMode::Reconnecting => None,
@@ -331,7 +371,13 @@ impl SerialConnections {
         logger: Logger,
         tx: Consumer<Arc<TimedBytes>>,
         rx: Producer<Arc<TimedBytes>>,
+        plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
     ) -> Self {
-        Self { logger, tx, rx }
+        Self {
+            logger,
+            tx,
+            rx,
+            plugin_engine_cmd_sender,
+        }
     }
 }

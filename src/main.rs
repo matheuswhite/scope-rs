@@ -81,6 +81,7 @@ fn app(
         logger.clone(),
         tx_channel_consumers.pop().unwrap(),
         rx_channel.clone().new_producer(),
+        plugin_engine_cmd_sender.clone(),
     );
     let inputs_connections = InputsConnections::new(
         logger.clone(),

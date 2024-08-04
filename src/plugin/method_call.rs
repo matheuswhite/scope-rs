@@ -184,7 +184,10 @@ impl PluginMethodCall {
                 PluginResponse::ReMatch { is_match }
             }
             PluginInternalRequest::ShellRun { cmd } => {
-                let (stdout, stderr) = Shell::run(cmd).await;
+                let (stdout, stderr) = match Shell::run(cmd).await {
+                    Ok(r) => r,
+                    Err(err) => ("".to_string(), err),
+                };
 
                 PluginResponse::ShellRun { stdout, stderr }
             }

@@ -381,7 +381,7 @@ impl InputsTask {
                     "warning" | "wrn" => LogLevel::Warning,
                     "error" | "err" => LogLevel::Error,
                     _ => {
-                        error!(private.logger, "Invalid log level. Please, chose one of these options: debug, info, success, warning, error");
+                        error!(private.logger, "Invalid log level. Please, choose one of these options: debug, info, success, warning, error");
                         return;
                     }
                 };
@@ -400,7 +400,59 @@ impl InputsTask {
                             });
                 }
             }
-            _ => error!(private.logger, "Invalid command \"{}\"", cmd_name),
+            "plugin" => {
+                if command_line_split.len() < 3 {
+                    error!(
+                        private.logger,
+                        "Insufficient arguments for \"!plugin\" command"
+                    );
+                    return;
+                }
+
+                let command = command_line_split[1].as_str();
+
+                match command {
+                    "load" | "reload" => {
+                        let filepath = command_line_split[2].clone();
+
+                        let _ = private
+                            .plugin_engine_cmd_sender
+                            .send(PluginEngineCommand::LoadPlugin { filepath });
+                    }
+                    "unload" => {
+                        let plugin_name = command_line_split[2].clone();
+
+                        let _ = private
+                            .plugin_engine_cmd_sender
+                            .send(PluginEngineCommand::UnloadPlugin { plugin_name });
+                    }
+                    _ => {
+                        error!(private.logger, "Invalid command. Please, choose one of these options: load, reload, unload");
+                        return;
+                    }
+                }
+            }
+            _ => {
+                if command_line_split.len() < 2 {
+                    error!(private.logger, "Insufficient arguments");
+                    return;
+                }
+
+                let plugin_name = command_line_split[0].clone();
+                let command = command_line_split[1].clone();
+                let options = command_line_split
+                    .get(2..)
+                    .map(|v| v.to_vec())
+                    .unwrap_or(vec![]);
+
+                let _ = private
+                    .plugin_engine_cmd_sender
+                    .send(PluginEngineCommand::UserCommand {
+                        plugin_name,
+                        command,
+                        options,
+                    });
+            }
         }
     }
 
