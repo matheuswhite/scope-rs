@@ -24,9 +24,12 @@ end
 --- @param lvl string The level of echo message
 function M.level(lvl)
   if not (lvl == "debug" or lvl == "info" or lvl == "success" or lvl == "warning" or lvl == "error") then
+    log.error("Level invalid: " .. lvl)
     return
   end
-    
+
+  log.debug("Level setted as " .. lvl)
+
   M.data.level = level
 end
 

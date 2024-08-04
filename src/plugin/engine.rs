@@ -24,7 +24,10 @@ use std::{
     time::Instant,
 };
 use std::{path::Path, sync::mpsc::Receiver};
-use tokio::{runtime::Runtime, task::yield_now};
+use tokio::{
+    runtime::Runtime,
+    task::{self, yield_now},
+};
 pub type PluginEngine = Task<(), PluginEngineCommand>;
 
 pub enum PluginEngineCommand {
@@ -79,7 +82,13 @@ impl PluginEngine {
         let rt = Runtime::new().expect("Cannot create tokio runtime");
 
         let _ = rt.block_on(async {
-            Self::task_async(shared, private, cmd_receiver).await;
+            let local = task::LocalSet::new();
+
+            local
+                .run_until(async move {
+                    Self::task_async(shared, private, cmd_receiver).await;
+                })
+                .await;
         });
     }
 
@@ -131,18 +140,25 @@ impl PluginEngine {
                         }
 
                         let Ok(filepath) = PathBuf::from_str(&filepath) else {
-                            error!(private.logger, "Invalid filepath \"{}\"", filepath);
-                            return;
+                            error!(private.logger, "Invalid filepath {}", filepath);
+                            continue 'plugin_engine_loop;
                         };
 
-                        Self::load_plugin(
+                        let plugin_name = Arc::new(plugin_name);
+
+                        match Self::load_plugin(
                             engine_gate.new_method_call_gate(),
-                            Arc::new(plugin_name),
+                            plugin_name.clone(),
                             filepath,
                             &mut plugin_list,
-                            &private.logger,
                         )
-                        .await;
+                        .await
+                        {
+                            Ok(_) => {
+                                success!(private.logger, "Plugin \"{}\" loaded", plugin_name);
+                            }
+                            Err(err) => error!(private.logger, "{}", err),
+                        }
                     }
                     PluginEngineCommand::UnloadPlugin { plugin_name } => {
                         let Some(plugin) = plugin_list.get_mut(&plugin_name) else {
@@ -251,17 +267,22 @@ impl PluginEngine {
                         Some(PluginResponse::Log)
                     }
                     messages::PluginExternalRequest::Finish { fn_name } => {
-                        if fn_name.as_str() == "on_unload"
-                            && matches!(plugin.unload_mode(), PluginUnloadMode::Reload)
-                        {
-                            Self::load_plugin(
-                                engine_gate.new_method_call_gate(),
-                                plugin_name,
-                                plugin.filepath(),
-                                &mut plugin_list,
-                                &private.logger,
-                            )
-                            .await;
+                        if fn_name.as_str() == "on_unload" {
+                            if matches!(plugin.unload_mode(), PluginUnloadMode::Reload) {
+                                success!(private.logger, "Plugin \"{}\" unloaded", plugin_name);
+                                if let Err(err) = Self::load_plugin(
+                                    engine_gate.new_method_call_gate(),
+                                    plugin_name.clone(),
+                                    plugin.filepath(),
+                                    &mut plugin_list,
+                                )
+                                .await
+                                {
+                                    error!(private.logger, "{}", err);
+                                }
+                            }
+                        } else {
+                            plugin_list.insert(plugin_name.clone(), plugin);
                         }
 
                         /* don't yield here! Because this request doesn't have response and we don't want to reinsert the plugin. */
@@ -337,6 +358,7 @@ impl PluginEngine {
 
     fn get_plugin_name(filepath: &str) -> Option<String> {
         Path::new(filepath)
+            .with_extension("")
             .file_name()
             .map(|filename| filename.to_str())
             .flatten()
@@ -348,30 +370,25 @@ impl PluginEngine {
         plugin_name: Arc<String>,
         filepath: PathBuf,
         plugin_list: &mut HashMap<Arc<String>, Plugin>,
-        logger: &Logger,
-    ) {
+    ) -> Result<(), String> {
         let filepath = match filepath.extension() {
             Some(extension) if extension.as_bytes() != b"lua" => {
-                error!(logger, "Invalid plugin extension: {:?}", extension);
-                return;
+                return Err(format!("Invalid plugin extension: {:?}", extension));
             }
             Some(_extension) => filepath,
             None => filepath.with_extension("lua"),
         };
 
         if !filepath.exists() {
-            error!(logger, "Filepath \"{:?}\" doesn't exist!", filepath);
-            return;
+            return Err(format!("Filepath \"{:?}\" doesn't exist!", filepath));
         }
 
-        let res = Plugin::new(plugin_name.clone(), filepath);
-        let Ok(mut plugin) = res else {
-            error!(logger, "{}", res.err().unwrap());
-            return;
-        };
+        let mut plugin = Plugin::new(plugin_name.clone(), filepath)?;
         plugin.spawn_method_call(gate, "on_load", ());
 
         plugin_list.insert(plugin_name, plugin);
+
+        Ok(())
     }
 }
 

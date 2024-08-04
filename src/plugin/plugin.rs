@@ -30,8 +30,8 @@ impl Plugin {
         let plugin_dir = filepath.parent().unwrap_or(Path::new("/"));
         let code = std::fs::read_to_string(&filepath).map_err(|err| err.to_string())?;
         lua.load(format!(
-            "package.path = package.path .. ';{:?}/?.lua'",
-            plugin_dir
+            "package.path = package.path .. ';{}/?.lua'",
+            plugin_dir.to_str().unwrap_or("")
         ))
         .exec()
         .map_err(|err| err.to_string())?;
@@ -138,7 +138,7 @@ mod tests {
     fn test_plugin_new() {
         let _plugin = Plugin::new(
             Arc::new("echo".to_string()),
-            Arc::new(PathBuf::from("plugins/echo.lua")),
+            PathBuf::from("plugins/echo.lua"),
         );
     }
 }

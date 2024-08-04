@@ -655,7 +655,7 @@ impl GraphicsTask {
             crate::infra::LogLevel::Warning => (Color::Yellow, Color::Black),
             crate::infra::LogLevel::Success => (Color::LightGreen, Color::Black),
             crate::infra::LogLevel::Info => (Color::White, Color::Black),
-            crate::infra::LogLevel::Debug => (Color::Reset, Color::Black),
+            crate::infra::LogLevel::Debug => (Color::Reset, Color::DarkGray),
         };
 
         if scroll_x < message.chars().count() {
