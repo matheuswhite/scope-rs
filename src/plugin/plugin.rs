@@ -2,6 +2,7 @@ use mlua::{IntoLuaMulti, Lua, LuaOptions, Table};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::infra::logger::Logger;
 use crate::infra::LogLevel;
 
 use super::bridge::PluginMethodCallGate;
@@ -14,6 +15,7 @@ pub struct Plugin {
     log_level: LogLevel,
     index: u128,
     unload_mode: PluginUnloadMode,
+    logger: Logger,
 }
 
 #[derive(Clone, Copy)]
@@ -24,7 +26,7 @@ pub enum PluginUnloadMode {
 }
 
 impl Plugin {
-    pub fn new(name: Arc<String>, filepath: PathBuf) -> Result<Self, String> {
+    pub fn new(name: Arc<String>, filepath: PathBuf, logger: Logger) -> Result<Self, String> {
         let lua = Lua::new_with(mlua::StdLib::ALL_SAFE, LuaOptions::default())
             .map_err(|err| err.to_string())?;
         let plugin_dir = filepath.parent().unwrap_or(Path::new("/"));
@@ -47,6 +49,7 @@ impl Plugin {
             index: 0,
             log_level: LogLevel::Info,
             unload_mode: PluginUnloadMode::None,
+            logger,
         })
     }
 
@@ -87,15 +90,18 @@ impl Plugin {
             self.lua.clone(),
             initial_args,
             gate,
+            self.logger.clone(),
         );
 
-        self.index = self.index.overflowing_add_signed(0).0;
+        self.index = self.index.overflowing_add_signed(1).0;
     }
 }
 
 #[cfg(test)]
 mod tests {
     use std::{path::PathBuf, sync::Arc};
+
+    use crate::infra::logger::Logger;
 
     use super::Plugin;
     use mlua::{Lua, LuaOptions, Table, Value};
@@ -139,6 +145,7 @@ mod tests {
         let _plugin = Plugin::new(
             Arc::new("echo".to_string()),
             PathBuf::from("plugins/echo.lua"),
+            Logger::new().0,
         );
     }
 }

@@ -151,6 +151,7 @@ impl PluginEngine {
                             plugin_name.clone(),
                             filepath,
                             &mut plugin_list,
+                            private.logger.clone(),
                         )
                         .await
                         {
@@ -275,6 +276,7 @@ impl PluginEngine {
                                     plugin_name.clone(),
                                     plugin.filepath(),
                                     &mut plugin_list,
+                                    private.logger.clone(),
                                 )
                                 .await
                                 {
@@ -370,6 +372,7 @@ impl PluginEngine {
         plugin_name: Arc<String>,
         filepath: PathBuf,
         plugin_list: &mut HashMap<Arc<String>, Plugin>,
+        logger: Logger,
     ) -> Result<(), String> {
         let filepath = match filepath.extension() {
             Some(extension) if extension.as_bytes() != b"lua" => {
@@ -383,7 +386,7 @@ impl PluginEngine {
             return Err(format!("Filepath \"{:?}\" doesn't exist!", filepath));
         }
 
-        let mut plugin = Plugin::new(plugin_name.clone(), filepath)?;
+        let mut plugin = Plugin::new(plugin_name.clone(), filepath, logger)?;
         plugin.spawn_method_call(gate, "on_load", ());
 
         plugin_list.insert(plugin_name, plugin);

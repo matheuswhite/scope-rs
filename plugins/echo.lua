@@ -6,29 +6,35 @@ local M = {
   }
 }
 
-function M.on_serial_recv(msg)
-  if M.data.level == "debug" then
+local function print_with_level(msg, level)
+  if level == "debug" then
     log.debug(msg)
-  elseif M.data.level == "info" then
+  elseif level == "info" then
     log.info(msg)
-  elseif M.data.level == "success" then
+  elseif level == "success" then
     log.success(msg)
-  elseif M.data.level == "warning" then
+  elseif level == "warning" then
     log.warning(msg)
-  elseif M.data.level == "error" then
+  elseif level == "error" then
     log.error(msg)
   end
 end
 
+function M.on_serial_recv(msg)
+  print_with_level(msg, M.data.level)
+end
+
 --- Set up the level of echo message
 --- @param lvl string The level of echo message
-function M.level(lvl)
+function M.level(args)
+  local lvl = args[1]
+  
   if not (lvl == "debug" or lvl == "info" or lvl == "success" or lvl == "warning" or lvl == "error") then
     log.error("Level invalid: " .. lvl)
     return
   end
 
-  log.debug("Level setted as " .. lvl)
+  print_with_level("Level setted as " .. lvl, lvl)
 
   M.data.level = level
 end

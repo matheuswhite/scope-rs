@@ -1,3 +1,10 @@
+#[allow(unused)]
+use crate::debug;
+use crate::{
+    error,
+    infra::logger::{LogLevel, Logger},
+};
+
 use super::{
     bridge::PluginMethodCallGate,
     messages::{PluginInternalRequest, PluginMethodMessage, PluginRequest, PluginResponse},
@@ -15,6 +22,8 @@ pub struct PluginMethodCall {
     fn_name: Arc<String>,
     id: u64,
     gate: PluginMethodCallGate,
+    #[allow(unused)]
+    logger: Logger,
 }
 
 impl PluginMethodCall {
@@ -25,6 +34,7 @@ impl PluginMethodCall {
         lua: Arc<Lua>,
         initial_args: impl for<'a> IntoLuaMulti<'a> + 'static,
         gate: PluginMethodCallGate,
+        logger: Logger,
     ) {
         let mut hasher = DefaultHasher::new();
         plugin_name.hash(&mut hasher);
@@ -41,10 +51,14 @@ impl PluginMethodCall {
             fn_name: fn_name.clone(),
             id,
             gate,
+            logger: logger.clone(),
         };
 
         tokio::task::spawn_local(async move {
-            let _ = pmc.call_fn(&lua, initial_args).await;
+            if let Err(err) = pmc.call_fn(&lua, initial_args).await {
+                error!(logger, "{}", err);
+            }
+
             let _ = sender
                 .send(PluginMethodMessage {
                     plugin_name,
@@ -62,9 +76,12 @@ impl PluginMethodCall {
     ) -> Result<(), String> {
         let plugin_table: Table = lua.globals().get("M").unwrap();
 
-        let plugin_fn: Function = plugin_table
-            .get(self.fn_name.as_str())
-            .map_err(|err| err.to_string())?;
+        let Ok(plugin_fn) = plugin_table
+            .get::<_, Function>(self.fn_name.as_str())
+            .map_err(|err| err.to_string())
+        else {
+            return Ok(());
+        };
 
         let thread = lua
             .create_thread(plugin_fn)
@@ -92,7 +109,8 @@ impl PluginMethodCall {
         let plugin_req: Table = match thread.resume(plugin_fn_args) {
             Ok(plugin_req) => plugin_req,
             Err(mlua::Error::CoroutineInactive) => return Ok(None),
-            Err(err) => return Err(err.to_string()),
+            Err(mlua::Error::FromLuaConversionError { .. }) => return Ok(None),
+            Err(err) => return Err(format!("Cannot get plugin_req: {}", err)),
         };
 
         let plugin_req: PluginRequest = plugin_req

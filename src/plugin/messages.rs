@@ -12,12 +12,13 @@ pub struct PluginMethodMessage<T: Clone> {
     pub data: T,
 }
 
+#[derive(Debug)]
 pub enum PluginRequest {
     Internal(PluginInternalRequest),
     External(PluginExternalRequest),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum PluginExternalRequest {
     Finish { fn_name: Arc<String> },
     SerialInfo,
@@ -26,6 +27,7 @@ pub enum PluginExternalRequest {
     Log { level: LogLevel, message: String },
 }
 
+#[derive(Debug)]
 pub enum PluginInternalRequest {
     SysSleep {
         time: Duration,
@@ -49,7 +51,7 @@ pub enum PluginInternalRequest {
     },
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum PluginResponse {
     Log,
     SerialInfo { port: String, baudrate: u32 },
