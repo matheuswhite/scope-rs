@@ -26,15 +26,14 @@ end
 
 --- Set up the level of echo message
 --- @param lvl string The level of echo message
-function M.level(args)
-  local lvl = args[1]
-  
+function M.level(lvl, hello)
   if not (lvl == "debug" or lvl == "info" or lvl == "success" or lvl == "warning" or lvl == "error") then
     log.error("Level invalid: " .. lvl)
     return
   end
 
   print_with_level("Level setted as " .. lvl, lvl)
+  print_with_level("hello: " .. hello, lvl)
 
   M.data.level = level
 end

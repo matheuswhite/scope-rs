@@ -76,15 +76,20 @@ impl PluginMethodCall {
     ) -> Result<(), String> {
         let plugin_table: Table = lua.globals().get("M").unwrap();
 
-        let Ok(plugin_fn) = plugin_table
+        let Ok(_plugin_fn) = plugin_table
             .get::<_, Function>(self.fn_name.as_str())
             .map_err(|err| err.to_string())
         else {
             return Ok(());
         };
 
-        let thread = lua
-            .create_thread(plugin_fn)
+        let thread: Thread = lua
+            .load(format!(
+                include_str!("thread.lua"),
+                self.fn_name, self.fn_name
+            ))
+            .eval_async()
+            .await
             .map_err(|err| err.to_string())?;
 
         let Some(mut table) = self.call_fn_inner(&lua, &thread, initial_args).await? else {
@@ -110,7 +115,7 @@ impl PluginMethodCall {
             Ok(plugin_req) => plugin_req,
             Err(mlua::Error::CoroutineInactive) => return Ok(None),
             Err(mlua::Error::FromLuaConversionError { .. }) => return Ok(None),
-            Err(err) => return Err(format!("Cannot get plugin_req: {}", err)),
+            Err(err) => return Err(err.to_string()),
         };
 
         let plugin_req: PluginRequest = plugin_req

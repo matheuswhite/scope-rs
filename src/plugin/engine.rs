@@ -12,7 +12,7 @@ use crate::{
         task::{Shared, Task},
     },
     serial::serial_if::SerialShared,
-    success,
+    success, warning,
 };
 use chrono::Local;
 use std::{
@@ -155,14 +155,13 @@ impl PluginEngine {
                         )
                         .await
                         {
-                            Ok(_) => {
-                                success!(private.logger, "Plugin \"{}\" loaded", plugin_name);
-                            }
+                            Ok(_) => success!(private.logger, "Plugin \"{}\" loaded", plugin_name),
                             Err(err) => error!(private.logger, "{}", err),
                         }
                     }
                     PluginEngineCommand::UnloadPlugin { plugin_name } => {
                         let Some(plugin) = plugin_list.get_mut(&plugin_name) else {
+                            error!(private.logger, "Plugin \"{}\" not loaded", plugin_name);
                             continue 'plugin_engine_loop;
                         };
 
@@ -269,9 +268,8 @@ impl PluginEngine {
                     }
                     messages::PluginExternalRequest::Finish { fn_name } => {
                         if fn_name.as_str() == "on_unload" {
-                            if matches!(plugin.unload_mode(), PluginUnloadMode::Reload) {
-                                success!(private.logger, "Plugin \"{}\" unloaded", plugin_name);
-                                if let Err(err) = Self::load_plugin(
+                            if let PluginUnloadMode::Reload = plugin.unload_mode() {
+                                match Self::load_plugin(
                                     engine_gate.new_method_call_gate(),
                                     plugin_name.clone(),
                                     plugin.filepath(),
@@ -280,8 +278,15 @@ impl PluginEngine {
                                 )
                                 .await
                                 {
-                                    error!(private.logger, "{}", err);
+                                    Ok(_) => success!(
+                                        private.logger,
+                                        "Plugin \"{}\" reloaded",
+                                        plugin_name
+                                    ),
+                                    Err(err) => error!(private.logger, "{}", err),
                                 }
+                            } else {
+                                warning!(private.logger, "Plugin \"{}\" unloaded", plugin_name);
                             }
                         } else {
                             plugin_list.insert(plugin_name.clone(), plugin);
@@ -389,7 +394,7 @@ impl PluginEngine {
         let mut plugin = Plugin::new(plugin_name.clone(), filepath, logger)?;
         plugin.spawn_method_call(gate, "on_load", ());
 
-        plugin_list.insert(plugin_name, plugin);
+        plugin_list.insert(plugin_name.clone(), plugin);
 
         Ok(())
     }
