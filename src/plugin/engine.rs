@@ -133,6 +133,7 @@ impl PluginEngine {
                                 engine_gate.new_method_call_gate(),
                                 "on_unload",
                                 (),
+                                false,
                             );
                             plugin.set_unload_mode(super::plugin::PluginUnloadMode::Reload);
 
@@ -169,6 +170,7 @@ impl PluginEngine {
                             engine_gate.new_method_call_gate(),
                             "on_unload",
                             (),
+                            false,
                         );
                         plugin.set_unload_mode(super::plugin::PluginUnloadMode::Unload);
                     }
@@ -186,6 +188,7 @@ impl PluginEngine {
                             engine_gate.new_method_call_gate(),
                             &command,
                             options,
+                            true,
                         );
                     }
                     PluginEngineCommand::SerialConnected { port, baudrate } => {
@@ -194,6 +197,7 @@ impl PluginEngine {
                                 engine_gate.new_method_call_gate(),
                                 "on_serial_connect",
                                 (port.clone(), baudrate),
+                                false,
                             );
                         }
                     }
@@ -203,6 +207,7 @@ impl PluginEngine {
                                 engine_gate.new_method_call_gate(),
                                 "on_serial_disconnect",
                                 (port.clone(), baudrate),
+                                false,
                             );
                         }
                     }
@@ -317,6 +322,7 @@ impl PluginEngine {
                         engine_gate.new_method_call_gate(),
                         "on_serial_send",
                         tx_msg.message.clone(),
+                        false,
                     );
                 }
             }
@@ -338,6 +344,7 @@ impl PluginEngine {
                         engine_gate.new_method_call_gate(),
                         "on_serial_recv",
                         rx_msg.message.clone(),
+                        false,
                     );
                 }
 
@@ -392,7 +399,7 @@ impl PluginEngine {
         }
 
         let mut plugin = Plugin::new(plugin_name.clone(), filepath, logger)?;
-        plugin.spawn_method_call(gate, "on_load", ());
+        plugin.spawn_method_call(gate, "on_load", (), false);
 
         plugin_list.insert(plugin_name.clone(), plugin);
 

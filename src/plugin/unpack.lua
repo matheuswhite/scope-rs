@@ -1,3 +1,3 @@
 coroutine.create(function(t)
-  return M.{}(t)
+  return M.{}(table.unpack(t))
 end)

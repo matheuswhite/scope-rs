@@ -78,6 +78,7 @@ impl Plugin {
         gate: PluginMethodCallGate,
         fn_name: &str,
         initial_args: impl for<'a> IntoLuaMulti<'a> + 'static,
+        has_unpack: bool,
     ) {
         if !matches!(self.unload_mode, PluginUnloadMode::None) {
             return;
@@ -91,6 +92,7 @@ impl Plugin {
             initial_args,
             gate,
             self.logger.clone(),
+            has_unpack,
         );
 
         self.index = self.index.overflowing_add_signed(1).0;

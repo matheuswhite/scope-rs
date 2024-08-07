@@ -35,6 +35,7 @@ impl PluginMethodCall {
         initial_args: impl for<'a> IntoLuaMulti<'a> + 'static,
         gate: PluginMethodCallGate,
         logger: Logger,
+        has_unpack: bool,
     ) {
         let mut hasher = DefaultHasher::new();
         plugin_name.hash(&mut hasher);
@@ -55,7 +56,7 @@ impl PluginMethodCall {
         };
 
         tokio::task::spawn_local(async move {
-            if let Err(err) = pmc.call_fn(&lua, initial_args).await {
+            if let Err(err) = pmc.call_fn(&lua, initial_args, has_unpack).await {
                 error!(logger, "{}", err);
             }
 
@@ -73,6 +74,7 @@ impl PluginMethodCall {
         mut self,
         lua: &'a Lua,
         initial_args: impl IntoLuaMulti<'a>,
+        has_unpack: bool,
     ) -> Result<(), String> {
         let plugin_table: Table = lua.globals().get("M").unwrap();
 
@@ -83,11 +85,13 @@ impl PluginMethodCall {
             return Ok(());
         };
 
+        let thread_code = if has_unpack {
+            format!(include_str!("unpack.lua"), self.fn_name)
+        } else {
+            format!(include_str!("thread.lua"), self.fn_name)
+        };
         let thread: Thread = lua
-            .load(format!(
-                include_str!("thread.lua"),
-                self.fn_name, self.fn_name
-            ))
+            .load(thread_code)
             .eval_async()
             .await
             .map_err(|err| err.to_string())?;
