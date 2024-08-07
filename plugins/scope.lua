@@ -8,6 +8,20 @@ local M = {
 }
 
 function M.fmt.to_str(val)
+  if type(val) == "table" then
+    local bytearr = {}
+    for _, v in ipairs(val) do
+      local utf8byte = v < 0 and (0xff + v + 1) or v
+      table.insert(bytearr, string.char(utf8byte))
+    end
+    return table.concat(bytearr)
+  elseif type(val) == "string" then
+    return val
+  elseif type(val) == "nil" then
+    return "nil"
+  else
+    return tostring(val)
+  end
 end
 
 function M.fmt.to_bytes(val)
