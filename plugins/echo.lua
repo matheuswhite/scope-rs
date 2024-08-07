@@ -1,4 +1,5 @@
 local log = require("scope").log
+local fmt = require("scope").fmt
 
 local M = {
   data = {
@@ -21,21 +22,20 @@ local function print_with_level(msg, level)
 end
 
 function M.on_serial_recv(msg)
-  print_with_level(msg, M.data.level)
+  print_with_level(fmt.to_str(msg), M.data.level)
 end
 
 --- Set up the level of echo message
 --- @param lvl string The level of echo message
-function M.level(lvl, hello)
+function M.level(lvl)
   if not (lvl == "debug" or lvl == "info" or lvl == "success" or lvl == "warning" or lvl == "error") then
     log.error("Level invalid: " .. lvl)
     return
   end
 
-  print_with_level("Level setted as " .. lvl, lvl)
-  print_with_level("hello: " .. hello, lvl)
+  M.data.level = lvl
 
-  M.data.level = level
+  print_with_level("Level setted as " .. M.data.level, lvl)
 end
 
 return M

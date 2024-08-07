@@ -488,8 +488,11 @@ impl GraphicsTask {
                     private.history.remove(0);
                 }
 
+                let message = message.split("\n").collect::<Vec<_>>();
+                let message_len = message.len();
                 let log_msg_splited = message
-                    .split('\n')
+                    .into_iter()
+                    .filter(|msg| !msg.is_empty())
                     .enumerate()
                     .map(|(i, msg)| {
                         GraphicalMessage::Log(LogMessage {
@@ -498,7 +501,10 @@ impl GraphicsTask {
                                 msg.to_owned()
                             } else {
                                 "  ".to_string() + msg
-                            },
+                            }
+                            .replace('\r', "")
+                            .replace('\t', "    ")
+                                + if i < (message_len - 1) { "\r\n" } else { "" },
                             level,
                         })
                     })
@@ -658,11 +664,24 @@ impl GraphicsTask {
             crate::infra::LogLevel::Debug => (Color::Reset, Color::DarkGray),
         };
 
+        let end_index = if message.ends_with("\r\n") {
+            message.len() - 2
+        } else {
+            message.len()
+        };
+
         if scroll_x < message.chars().count() {
             spans.push(Span::styled(
-                &message[scroll_x..],
+                &message[scroll_x..end_index],
                 Style::default().fg(fg).bg(bg),
             ));
+
+            if message.ends_with("\r\n") {
+                spans.push(Span::styled(
+                    "\\r\\n",
+                    Style::default().fg(Color::Magenta).bg(bg),
+                ));
+            }
         }
 
         Line::from(spans)
