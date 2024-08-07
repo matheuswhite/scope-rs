@@ -25,6 +25,13 @@ function M.fmt.to_str(val)
 end
 
 function M.fmt.to_bytes(val)
+  if type(val) == "string" then
+    return { string.byte(val, 1, -1) }
+  elseif type(val) == "table" then
+    return val
+  else
+    return {}
+  end
 end
 
 function M.log.debug(msg)
@@ -48,7 +55,7 @@ function M.log.error(msg)
 end
 
 function M.serial.info()
-  local port, baud_rate = coroutine.yield({":serial.info"})
+  local port, baud_rate = table.unpack(coroutine.yield({":serial.info"}))
   return port, baud_rate
 end
 
@@ -57,7 +64,7 @@ function M.serial.send(msg)
 end
 
 function M.serial.recv(opts)
-  local err, msg = coroutine.yield({":serial.recv", opts})
+  local err, msg = table.unpack(coroutine.yield({":serial.recv", opts}))
   return err, msg
 end
 
