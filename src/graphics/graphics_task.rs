@@ -331,9 +331,12 @@ impl GraphicsTask {
         let patterns = [
             ("\x1b[0m", Color::Reset),
             ("\x1b[30m", Color::Black),
-            ("\x1b[31m", Color::Red),
             ("\x1b[32m", Color::Green),
+            ("\x1b[1;32m", Color::Green),
+            ("\x1b[31m", Color::Red),
+            ("\x1b[1;31m", Color::Red),
             ("\x1b[33m", Color::Yellow),
+            ("\x1b[1;33m", Color::Yellow),
             ("\x1b[34m", Color::Blue),
             ("\x1b[35m", Color::Magenta),
             ("\x1b[36m", Color::Cyan),
