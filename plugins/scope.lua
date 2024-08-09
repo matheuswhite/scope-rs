@@ -92,10 +92,8 @@ function M.re.matches(str, pattern_table)
   end
 end
 
-function M.re.match(str, pattern, code)
-  if coroutine.yield({":re.match", str, pattern}) then
-    code(str)
-  end
+function M.re.match(str, pattern)
+  return coroutine.yield({":re.match", str, pattern})
 end
 
 return M
