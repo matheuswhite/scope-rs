@@ -273,11 +273,20 @@ impl InputsTask {
                     Self::handle_user_command(command_line_split, &private);
                 } else {
                     let command_line = Self::replace_hex_sequence(command_line);
-                    let command_line = Self::replace_tag_sequence(command_line, &private.tag_file);
+                    let mut command_line =
+                        Self::replace_tag_sequence(command_line, &private.tag_file);
+
+                    let end_bytes = if let KeyModifiers::SHIFT = key.modifiers {
+                        b"\r\n".as_slice()
+                    } else {
+                        b"".as_slice()
+                    };
+
+                    command_line.extend_from_slice(end_bytes);
 
                     private.tx.produce(Arc::new(TimedBytes {
                         timestamp: Local::now(),
-                        message: (command_line + "\r\n").as_bytes().to_vec(),
+                        message: command_line,
                     }));
                 }
             }
@@ -532,8 +541,8 @@ impl InputsTask {
         *current_hint = Some(hints.choose(&mut rand::thread_rng()).unwrap().to_string());
     }
 
-    fn replace_hex_sequence(command_line: String) -> String {
-        let mut output = String::new();
+    fn replace_hex_sequence(command_line: String) -> Vec<u8> {
+        let mut output = vec![];
         let mut in_hex_seq = false;
         let valid = "0123456789abcdefABCDEF,_-.";
         let mut hex_shift = 0;
@@ -548,11 +557,11 @@ impl InputsTask {
                     continue;
                 }
 
-                output.push(c);
+                output.push(c as u8);
             } else {
                 if !valid.contains(c) {
                     in_hex_seq = false;
-                    output.push(c);
+                    output.push(c as u8);
                     continue;
                 }
 
@@ -563,15 +572,15 @@ impl InputsTask {
                     }
                     'a'..='f' => {
                         *hex_val.get_or_insert(0) <<= hex_shift;
-                        *hex_val.get_or_insert(0) |= c as u8 - 'a' as u8;
+                        *hex_val.get_or_insert(0) |= c as u8 - 'a' as u8 + 0x0a;
                     }
                     'A'..='F' => {
                         *hex_val.get_or_insert(0) <<= hex_shift;
-                        *hex_val.get_or_insert(0) |= c as u8 - 'A' as u8;
+                        *hex_val.get_or_insert(0) |= c as u8 - 'A' as u8 + 0x0A;
                     }
                     _ => {
                         if let Some(hex) = hex_val.take() {
-                            output.push(hex as char);
+                            output.push(hex);
                         }
                         hex_shift = 0;
                         continue;
@@ -582,7 +591,7 @@ impl InputsTask {
                     hex_shift = 4;
                 } else {
                     if let Some(hex) = hex_val.take() {
-                        output.push(hex as char);
+                        output.push(hex);
                     }
                     hex_shift = 0;
                 }
@@ -592,7 +601,7 @@ impl InputsTask {
         output
     }
 
-    fn replace_tag_sequence(command_line: String, _tag_file: &PathBuf) -> String {
+    fn replace_tag_sequence(command_line: Vec<u8>, _tag_file: &PathBuf) -> Vec<u8> {
         // TODO
         command_line
     }
@@ -642,20 +651,46 @@ mod tests {
     fn test_rhs_one() {
         let res = InputsTask::replace_hex_sequence("$61".to_string());
 
-        assert_eq!(&res, "a");
+        assert_eq!(&res, b"a");
     }
 
     #[test]
     fn test_rhs_two_no_sep() {
         let res = InputsTask::replace_hex_sequence("$6161".to_string());
 
-        assert_eq!(&res, "aa");
+        assert_eq!(&res, b"aa");
     }
 
     #[test]
     fn test_rhs_two_comma() {
         let res = InputsTask::replace_hex_sequence("$61,61".to_string());
 
-        assert_eq!(&res, "aa");
+        assert_eq!(&res, b"aa");
+    }
+
+    #[test]
+    fn test_all_bytes() {
+        let mut command_line = "$".to_string();
+        let mut expected = vec![];
+        for b in 0u8..=0xff {
+            command_line.push_str(&format!("{:02x},", b));
+            expected.push(b);
+        }
+        for b in 0u8..=0xff {
+            command_line.push_str(&format!("{:02X},", b));
+            expected.push(b);
+        }
+
+        let res = InputsTask::replace_hex_sequence(command_line.clone());
+        let mut it = res.iter().enumerate();
+
+        for (i, b) in &mut it {
+            assert_eq!(*b, i as u8);
+        }
+        for (i, b) in it {
+            assert_eq!(*b, i as u8);
+        }
+
+        assert_eq!(&res, &expected);
     }
 }
