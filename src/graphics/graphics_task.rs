@@ -1,3 +1,5 @@
+use super::bytes::SliceExt;
+use super::Serialize;
 use crate::{error, info, success};
 use crate::{
     infra::{
@@ -39,8 +41,6 @@ use std::{
         Arc, RwLock,
     },
 };
-
-use super::Serialize;
 
 pub type GraphicsTask = Task<(), GraphicsCommand>;
 
@@ -329,18 +329,18 @@ impl GraphicsTask {
         let mut blink = Blink::new(Duration::from_millis(200), 2, Color::Reset, Color::Black);
         let mut new_messages = vec![];
         let patterns = [
-            ("\x1b[0m", Color::Reset),
-            ("\x1b[30m", Color::Black),
-            ("\x1b[32m", Color::Green),
-            ("\x1b[1;32m", Color::Green),
-            ("\x1b[31m", Color::Red),
-            ("\x1b[1;31m", Color::Red),
-            ("\x1b[33m", Color::Yellow),
-            ("\x1b[1;33m", Color::Yellow),
-            ("\x1b[34m", Color::Blue),
-            ("\x1b[35m", Color::Magenta),
-            ("\x1b[36m", Color::Cyan),
-            ("\x1b[37m", Color::White),
+            (b"\x1b[0m".as_slice(), Color::Reset),
+            (b"\x1b[30m", Color::Black),
+            (b"\x1b[32m", Color::Green),
+            (b"\x1b[1;32m", Color::Green),
+            (b"\x1b[31m", Color::Red),
+            (b"\x1b[1;31m", Color::Red),
+            (b"\x1b[33m", Color::Yellow),
+            (b"\x1b[1;33m", Color::Yellow),
+            (b"\x1b[34m", Color::Blue),
+            (b"\x1b[35m", Color::Magenta),
+            (b"\x1b[36m", Color::Cyan),
+            (b"\x1b[37m", Color::White),
         ];
 
         'draw_loop: loop {
@@ -566,13 +566,13 @@ impl GraphicsTask {
         terminal.show_cursor().expect("Cannot show mouse cursor");
     }
 
-    fn ansi_colors(patterns: &[(&'static str, Color)], msg: &[u8]) -> Vec<(String, Color)> {
+    fn ansi_colors(patterns: &[(&[u8], Color)], msg: &[u8]) -> Vec<(String, Color)> {
         let mut output = vec![];
-        let mut buffer = "".to_string();
+        let mut buffer = vec![];
         let mut color = Color::Reset;
 
         for byte in msg {
-            buffer.push(*byte as char);
+            buffer.push(*byte);
 
             if (*byte as char) != 'm' {
                 continue;
@@ -580,7 +580,7 @@ impl GraphicsTask {
 
             'pattern_loop: for (pattern, new_color) in patterns {
                 if buffer.contains(pattern) {
-                    output.push((buffer.replace(pattern, ""), color));
+                    output.push((buffer.replace(pattern, b""), color));
 
                     buffer.clear();
                     color = *new_color;
@@ -596,7 +596,7 @@ impl GraphicsTask {
 
         output
             .into_iter()
-            .flat_map(|(msg, color)| Self::bytes_to_string(msg.as_bytes(), color))
+            .flat_map(|(msg, color)| Self::bytes_to_string(&msg, color))
             .collect()
     }
 
