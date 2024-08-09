@@ -238,7 +238,7 @@ impl InputsTask {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
                 if sw.command_line.is_empty() {
-                    if let KeyModifiers::SHIFT = key.modifiers {
+                    if let KeyModifiers::ALT = key.modifiers {
                         private.tx.produce(Arc::new(TimedBytes {
                             timestamp: Local::now(),
                             message: b"\r\n".to_vec(),
@@ -276,10 +276,10 @@ impl InputsTask {
                     let mut command_line =
                         Self::replace_tag_sequence(command_line, &private.tag_file);
 
-                    let end_bytes = if let KeyModifiers::SHIFT = key.modifiers {
-                        b"\r\n".as_slice()
-                    } else {
+                    let end_bytes = if let KeyModifiers::ALT = key.modifiers {
                         b"".as_slice()
+                    } else {
+                        b"\r\n".as_slice()
                     };
 
                     command_line.extend_from_slice(end_bytes);
