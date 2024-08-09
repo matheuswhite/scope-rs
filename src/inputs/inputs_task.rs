@@ -238,6 +238,13 @@ impl InputsTask {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
                 if sw.command_line.is_empty() {
+                    if let KeyModifiers::SHIFT = key.modifiers {
+                        private.tx.produce(Arc::new(TimedBytes {
+                            timestamp: Local::now(),
+                            message: b"\r\n".to_vec(),
+                        }));
+                    }
+
                     return LoopStatus::Continue;
                 }
 
