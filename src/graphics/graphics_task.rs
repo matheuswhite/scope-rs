@@ -59,6 +59,7 @@ pub struct GraphicsConnections {
     auto_scroll: bool,
     scroll: (u16, u16),
     last_frame_height: u16,
+    is_true_color: bool,
 }
 
 pub enum GraphicsCommand {
@@ -162,9 +163,16 @@ impl GraphicsTask {
         let text = coll
             .map(|msg| match msg {
                 GraphicalMessage::Log(log_msg) => Self::line_from_log_message(log_msg, scroll),
-                GraphicalMessage::Tx { timestamp, message } => {
-                    Self::line_from_message(timestamp, message, Color::LightCyan, scroll)
-                }
+                GraphicalMessage::Tx { timestamp, message } => Self::line_from_message(
+                    timestamp,
+                    message,
+                    if private.is_true_color {
+                        Color::Rgb(12, 129, 123)
+                    } else {
+                        Color::Blue
+                    },
+                    scroll,
+                ),
                 GraphicalMessage::Rx { timestamp, message } => {
                     Self::line_from_message(timestamp, message, Color::Reset, scroll)
                 }
@@ -477,7 +485,7 @@ impl GraphicsTask {
 
                 new_messages.push(GraphicalMessage::Tx {
                     timestamp: tx_msg.timestamp,
-                    message: Self::bytes_to_string(&tx_msg.message, Color::Black),
+                    message: Self::bytes_to_string(&tx_msg.message, Color::White),
                 });
             }
 
@@ -604,10 +612,10 @@ impl GraphicsTask {
         let mut output = vec![];
         let mut buffer = "".to_string();
         let mut in_plain_text = true;
-        let accent_color = if color == Color::Magenta {
+        let accent_color = if color == Color::Yellow {
             Color::DarkGray
         } else {
-            Color::Magenta
+            Color::Yellow
         };
 
         for byte in msg {
@@ -682,7 +690,7 @@ impl GraphicsTask {
             if message.ends_with("\r\n") {
                 spans.push(Span::styled(
                     "\\r\\n",
-                    Style::default().fg(Color::Magenta).bg(bg),
+                    Style::default().fg(Color::Yellow).bg(bg),
                 ));
             }
         }
@@ -758,6 +766,7 @@ impl GraphicsConnections {
         serial_shared: Shared<SerialShared>,
         storage_base_filename: String,
         capacity: usize,
+        is_true_color: bool,
     ) -> Self {
         Self {
             logger,
@@ -774,6 +783,7 @@ impl GraphicsConnections {
             scroll: (0, 0),
             last_frame_height: u16::MAX,
             system_log_level: LogLevel::Debug,
+            is_true_color,
         }
     }
 }

@@ -32,6 +32,8 @@ struct Cli {
     capacity: Option<usize>,
     #[clap(short, long)]
     tag_file: Option<PathBuf>,
+    #[clap(short, long)]
+    non_colorful: bool,
 }
 
 #[derive(Subcommand)]
@@ -51,6 +53,7 @@ fn app(
     tag_file: PathBuf,
     port: Option<String>,
     baudrate: Option<u32>,
+    is_true_color: bool,
 ) -> Result<(), String> {
     let (logger, logger_receiver) = Logger::new();
     let mut tx_channel = Channel::default();
@@ -125,6 +128,7 @@ fn app(
         serial_shared,
         storage_base_filename,
         capacity,
+        is_true_color,
     );
     let text_view = GraphicsTask::spawn_graphics_task(
         graphics_connections,
@@ -168,7 +172,7 @@ fn main() -> Result<(), String> {
     let capacity = cli.capacity.unwrap_or(DEFAULT_CAPACITY);
     let tag_file = cli.tag_file.unwrap_or(PathBuf::from(DEFAULT_TAG_FILE));
 
-    if let Err(err) = app(capacity, tag_file, port, baudrate) {
+    if let Err(err) = app(capacity, tag_file, port, baudrate, !cli.non_colorful) {
         return Err(format!("[\x1b[31mERR\x1b[0m] {}", err));
     }
 
