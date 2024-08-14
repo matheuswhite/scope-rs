@@ -22,7 +22,7 @@ use std::{
 
 pub type SerialInterface = Task<SerialShared, SerialCommand>;
 
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 type SerialPort = TTYPort;
 #[cfg(target_os = "windows")]
 type SerialPort = COMPort;
