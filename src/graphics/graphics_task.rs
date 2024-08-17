@@ -575,14 +575,19 @@ impl GraphicsTask {
     }
 
     fn ansi_colors(patterns: &[(&[u8], Color)], msg: &[u8]) -> Vec<(String, Color)> {
+        let msg = msg
+            .to_vec()
+            .replace(b"\x1b[m", b"")
+            .replace(b"\x1b[8D", b"")
+            .replace(b"\x1b[J", b"");
         let mut output = vec![];
         let mut buffer = vec![];
         let mut color = Color::Reset;
 
         for byte in msg {
-            buffer.push(*byte);
+            buffer.push(byte);
 
-            if (*byte as char) != 'm' {
+            if (byte as char) != 'm' {
                 continue;
             }
 
