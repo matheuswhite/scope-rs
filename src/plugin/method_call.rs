@@ -122,9 +122,12 @@ impl PluginMethodCall {
             Err(err) => return Err(err.to_string()),
         };
 
-        let plugin_req: PluginRequest = plugin_req
-            .try_into()
-            .map_err(|err: String| err.to_string())?;
+        let plugin_req: PluginRequest = PluginRequest::from_table(
+            plugin_req,
+            (*self.plugin_name).clone(),
+            (*self.fn_name).clone(),
+        )
+        .map_err(|err: String| err.to_string())?;
 
         let rsp = match plugin_req {
             PluginRequest::Internal(internal_req) => {

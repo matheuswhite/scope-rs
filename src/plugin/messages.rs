@@ -20,11 +20,22 @@ pub enum PluginRequest {
 
 #[derive(Clone, Debug)]
 pub enum PluginExternalRequest {
-    Finish { fn_name: Arc<String> },
+    Finish {
+        fn_name: Arc<String>,
+    },
     SerialInfo,
-    SerialSend { message: Vec<u8> },
-    SerialRecv { timeout: Instant },
-    Log { level: LogLevel, message: String },
+    SerialSend {
+        message: Vec<u8>,
+    },
+    SerialRecv {
+        timeout: Instant,
+    },
+    Log {
+        level: LogLevel,
+        message: String,
+        plugin_name: String,
+        id: String,
+    },
 }
 
 #[derive(Debug)]
@@ -65,10 +76,12 @@ pub enum PluginResponse {
     ShellExist { exist: bool },
 }
 
-impl<'lua> TryFrom<Table<'lua>> for PluginRequest {
-    type Error = String;
-
-    fn try_from(value: Table<'lua>) -> Result<Self, Self::Error> {
+impl PluginRequest {
+    pub fn from_table<'lua>(
+        value: Table<'lua>,
+        plugin_name: String,
+        id: String,
+    ) -> Result<Self, String> {
         let req_id: String = value
             .get(1)
             .map_err(|_| "Cannot get first table entry as String".to_string())?;
@@ -82,6 +95,8 @@ impl<'lua> TryFrom<Table<'lua>> for PluginRequest {
                 PluginRequest::External(PluginExternalRequest::Log {
                     level: LogLevel::Debug,
                     message,
+                    plugin_name,
+                    id,
                 })
             }
             ":log.info" => {
@@ -92,6 +107,8 @@ impl<'lua> TryFrom<Table<'lua>> for PluginRequest {
                 PluginRequest::External(PluginExternalRequest::Log {
                     level: LogLevel::Info,
                     message,
+                    plugin_name,
+                    id,
                 })
             }
             ":log.success" => {
@@ -102,6 +119,8 @@ impl<'lua> TryFrom<Table<'lua>> for PluginRequest {
                 PluginRequest::External(PluginExternalRequest::Log {
                     level: LogLevel::Success,
                     message,
+                    plugin_name,
+                    id,
                 })
             }
             ":log.warning" => {
@@ -112,6 +131,8 @@ impl<'lua> TryFrom<Table<'lua>> for PluginRequest {
                 PluginRequest::External(PluginExternalRequest::Log {
                     level: LogLevel::Warning,
                     message,
+                    plugin_name,
+                    id,
                 })
             }
             ":log.error" => {
@@ -122,6 +143,8 @@ impl<'lua> TryFrom<Table<'lua>> for PluginRequest {
                 PluginRequest::External(PluginExternalRequest::Log {
                     level: LogLevel::Error,
                     message,
+                    plugin_name,
+                    id,
                 })
             }
             ":serial.info" => PluginRequest::External(PluginExternalRequest::SerialInfo),

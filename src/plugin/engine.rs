@@ -264,9 +264,19 @@ impl PluginEngine {
                             None
                         }
                     }
-                    super::messages::PluginExternalRequest::Log { level, message } => {
+                    super::messages::PluginExternalRequest::Log {
+                        level,
+                        message,
+                        plugin_name,
+                        id,
+                    } => {
                         if level as u32 <= plugin.log_level() as u32 {
-                            let _ = private.logger.write(message, level);
+                            let _ = private.logger.write_with_source_id(
+                                message,
+                                level,
+                                plugin_name,
+                                id,
+                            );
                         }
 
                         Some(PluginResponse::Log)
@@ -398,7 +408,11 @@ impl PluginEngine {
             return Err(format!("Filepath \"{:?}\" doesn't exist!", filepath));
         }
 
-        let mut plugin = Plugin::new(plugin_name.clone(), filepath, logger)?;
+        let mut plugin = Plugin::new(
+            plugin_name.clone(),
+            filepath,
+            logger.with_source((*plugin_name).clone()),
+        )?;
         plugin.spawn_method_call(gate, "on_load", (), false);
 
         plugin_list.insert(plugin_name.clone(), plugin);

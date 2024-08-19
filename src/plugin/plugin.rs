@@ -91,7 +91,7 @@ impl Plugin {
             self.lua.clone(),
             initial_args,
             gate,
-            self.logger.clone(),
+            self.logger.clone().with_id(fn_name.to_string()),
             has_unpack,
         );
 
@@ -147,7 +147,7 @@ mod tests {
         let _plugin = Plugin::new(
             Arc::new("echo".to_string()),
             PathBuf::from("plugins/echo.lua"),
-            Logger::new().0,
+            Logger::new("test".to_string()).0,
         );
     }
 }

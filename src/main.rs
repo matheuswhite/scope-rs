@@ -55,7 +55,7 @@ fn app(
     baudrate: Option<u32>,
     is_true_color: bool,
 ) -> Result<(), String> {
-    let (logger, logger_receiver) = Logger::new();
+    let (logger, logger_receiver) = Logger::new("main".to_string());
     let mut tx_channel = Channel::default();
     let mut rx_channel = Channel::default();
 
@@ -81,13 +81,13 @@ fn app(
     }));
 
     let serial_connections = SerialConnections::new(
-        logger.clone(),
+        logger.clone().with_source("serial".to_string()),
         tx_channel_consumers.pop().unwrap(),
         rx_channel.clone().new_producer(),
         plugin_engine_cmd_sender.clone(),
     );
     let inputs_connections = InputsConnections::new(
-        logger.clone(),
+        logger.clone().with_source("inputs".to_string()),
         tx_channel.clone().new_producer(),
         graphics_cmd_sender.clone(),
         serial_if_cmd_sender.clone(),
@@ -104,7 +104,7 @@ fn app(
     let serial_shared = serial_if.shared_ref();
 
     let plugin_engine_connections = PluginEngineConnections::new(
-        logger.clone(),
+        logger.clone().with_source("plugin".to_string()),
         tx_channel.new_producer(),
         tx_channel_consumers.pop().unwrap(),
         rx_channel_consumers.pop().unwrap(),
@@ -120,7 +120,7 @@ fn app(
     let now_str = Local::now().format("%Y%m%d_%H%M%S");
     let storage_base_filename = format!("{}.txt", now_str);
     let graphics_connections = GraphicsConnections::new(
-        logger.clone(),
+        logger.clone().with_source("graphics".to_string()),
         logger_receiver,
         tx_channel_consumers.pop().unwrap(),
         rx_channel_consumers.pop().unwrap(),

@@ -5,6 +5,8 @@ use chrono::{DateTime, Local};
 #[derive(Clone)]
 pub struct Logger {
     sender: Sender<LogMessage>,
+    source: String,
+    id: Option<String>,
 }
 
 pub struct LogMessage {
@@ -23,10 +25,27 @@ pub enum LogLevel {
 }
 
 impl Logger {
-    pub fn new() -> (Self, Receiver<LogMessage>) {
+    pub fn new(source: String) -> (Self, Receiver<LogMessage>) {
         let (sender, receiver) = channel();
 
-        (Self { sender }, receiver)
+        (
+            Self {
+                sender,
+                source,
+                id: None,
+            },
+            receiver,
+        )
+    }
+
+    pub fn with_source(mut self, source: String) -> Self {
+        self.source = source;
+        self
+    }
+
+    pub fn with_id(mut self, id: String) -> Self {
+        self.id = Some(id);
+        self
     }
 
     pub fn write(
@@ -36,7 +55,29 @@ impl Logger {
     ) -> Result<(), std::sync::mpsc::SendError<LogMessage>> {
         self.sender.send(LogMessage {
             timestamp: Local::now(),
-            message,
+            message: format!(
+                "[{}{}] {}",
+                self.source,
+                self.id
+                    .as_ref()
+                    .map(|id| ":".to_string() + id)
+                    .unwrap_or("".to_string()),
+                message
+            ),
+            level,
+        })
+    }
+
+    pub fn write_with_source_id(
+        &self,
+        message: String,
+        level: LogLevel,
+        source: String,
+        id: String,
+    ) -> Result<(), std::sync::mpsc::SendError<LogMessage>> {
+        self.sender.send(LogMessage {
+            timestamp: Local::now(),
+            message: format!("[{}:{}] {}", source, id, message),
             level,
         })
     }
