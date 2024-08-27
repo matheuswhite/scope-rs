@@ -184,6 +184,11 @@ impl PluginEngine {
                             continue 'plugin_engine_loop;
                         };
 
+                        if !plugin.is_user_command_valid(&command) {
+                            error!(private.logger, "Plugin \"{}\" doesn't have \"{}\" command", plugin_name, command);
+                            continue 'plugin_engine_loop;
+                        }
+
                         plugin.spawn_method_call(
                             engine_gate.new_method_call_gate(),
                             &command,

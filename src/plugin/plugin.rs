@@ -1,12 +1,10 @@
-use mlua::{IntoLuaMulti, Lua, LuaOptions, Table};
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-
-use crate::infra::logger::Logger;
-use crate::infra::LogLevel;
-
 use super::bridge::PluginMethodCallGate;
 use super::method_call::PluginMethodCall;
+use crate::infra::logger::Logger;
+use crate::infra::LogLevel;
+use mlua::{Function, IntoLuaMulti, Lua, LuaOptions, Table};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 pub struct Plugin {
     name: Arc<String>,
@@ -51,6 +49,12 @@ impl Plugin {
             unload_mode: PluginUnloadMode::None,
             logger,
         })
+    }
+
+    pub fn is_user_command_valid(&self, user_command: &str) -> bool {
+        let table: Table = self.lua.globals().get("M").unwrap();
+
+        table.get::<_, Function>(user_command).is_ok()
     }
 
     pub fn log_level(&self) -> LogLevel {
