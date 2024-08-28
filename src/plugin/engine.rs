@@ -185,7 +185,10 @@ impl PluginEngine {
                         };
 
                         if !plugin.is_user_command_valid(&command) {
-                            error!(private.logger, "Plugin \"{}\" doesn't have \"{}\" command", plugin_name, command);
+                            error!(
+                                private.logger,
+                                "Plugin \"{}\" doesn't have \"{}\" command", plugin_name, command
+                            );
                             continue 'plugin_engine_loop;
                         }
 
@@ -201,8 +204,8 @@ impl PluginEngine {
                             plugin.spawn_method_call(
                                 engine_gate.new_method_call_gate(),
                                 "on_serial_connect",
-                                (port.clone(), baudrate),
-                                false,
+                                [port.clone(), baudrate.to_string()],
+                                true,
                             );
                         }
                     }
@@ -211,8 +214,8 @@ impl PluginEngine {
                             plugin.spawn_method_call(
                                 engine_gate.new_method_call_gate(),
                                 "on_serial_disconnect",
-                                (port.clone(), baudrate),
-                                false,
+                                [port.clone(), baudrate.to_string()],
+                                true,
                             );
                         }
                     }
