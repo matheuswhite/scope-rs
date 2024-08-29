@@ -296,6 +296,79 @@ impl InputsTask {
         LoopStatus::Continue
     }
 
+    fn handle_connect_command(command_line_split: Vec<String>, private: &InputsConnections) {
+        fn mount_setup(option: &str, setup: Option<SerialSetup>) -> SerialSetup {
+            if option.chars().all(|x| x.is_digit(10)) {
+                SerialSetup {
+                    baudrate: Some(u32::from_str_radix(option, 10).unwrap()),
+                    ..setup.unwrap_or(SerialSetup::default())
+                }
+            } else {
+                SerialSetup {
+                    port: Some(option.to_string()),
+                    ..setup.unwrap_or(SerialSetup::default())
+                }
+            }
+        }
+
+        match command_line_split.len() {
+            x if x < 2 => {
+                let _ = private.serial_if_cmd_sender.send(SerialCommand::Connect);
+            }
+            2 => {
+                let setup = SerialCommand::Setup(mount_setup(&command_line_split[1], None));
+                let _ = private.serial_if_cmd_sender.send(setup);
+            }
+            _ => {
+                let setup = mount_setup(&command_line_split[1], None);
+                let setup = mount_setup(&command_line_split[2], Some(setup));
+
+                let _ = private
+                    .serial_if_cmd_sender
+                    .send(SerialCommand::Setup(setup));
+            }
+        }
+    }
+
+    fn handle_flow_command(command_line_split: Vec<String>, private: &InputsConnections) {
+        if command_line_split.len() < 2 {
+            error!(
+                private.logger,
+                "Insufficient arguments for \"!flow\" command"
+            );
+            return;
+        }
+
+        let flow_control = match command_line_split[1].as_str() {
+            "none" => FlowControl::None,
+            "sw" => FlowControl::Software,
+            "hw" => FlowControl::Hardware,
+            _ => {
+                error!(
+                    private.logger,
+                    "Invalid flow control. Please, chose one of these options: none, sw, hw"
+                );
+                return;
+            }
+        };
+
+        let res = private
+            .serial_if_cmd_sender
+            .send(SerialCommand::Setup(SerialSetup {
+                flow_control: Some(flow_control),
+                ..SerialSetup::default()
+            }));
+
+        match res {
+            Ok(_) => success!(
+                private.logger,
+                "Flow control setted to \"{}\"",
+                command_line_split[1]
+            ),
+            Err(err) => error!(private.logger, "Cannot set flow control: {}", err),
+        }
+    }
+
     fn handle_user_command(command_line_split: Vec<String>, private: &InputsConnections) {
         let Some(cmd_name) = command_line_split.get(0) else {
             private.tx.produce(Arc::new(TimedBytes {
@@ -306,79 +379,38 @@ impl InputsTask {
         };
 
         match cmd_name.as_str() {
-            "connect" => {
-                fn mount_setup(option: &str, setup: Option<SerialSetup>) -> SerialSetup {
-                    if option.chars().all(|x| x.is_digit(10)) {
-                        SerialSetup {
-                            baudrate: Some(u32::from_str_radix(option, 10).unwrap()),
-                            ..setup.unwrap_or(SerialSetup::default())
-                        }
-                    } else {
-                        SerialSetup {
-                            port: Some(option.to_string()),
-                            ..setup.unwrap_or(SerialSetup::default())
-                        }
-                    }
+            "serial" => {
+                if command_line_split.len() < 2 {
+                    error!(
+                        private.logger,
+                        "Please, use \"connect\" or \"disconnect\" subcommands"
+                    );
+                    return;
                 }
 
-                match command_line_split.len() {
-                    x if x < 2 => {
-                        let _ = private.serial_if_cmd_sender.send(SerialCommand::Connect);
+                match command_line_split.get(1).unwrap().as_str() {
+                    "connect" => {
+                        Self::handle_connect_command(command_line_split[1..].to_vec(), private);
                     }
-                    2 => {
-                        let setup = SerialCommand::Setup(mount_setup(&command_line_split[1], None));
-                        let _ = private.serial_if_cmd_sender.send(setup);
+                    "disconnect" => {
+                        let _ = private.serial_if_cmd_sender.send(SerialCommand::Disconnect);
+                    }
+                    "flow" => {
+                        Self::handle_flow_command(command_line_split[1..].to_vec(), private);
                     }
                     _ => {
-                        let setup = mount_setup(&command_line_split[1], None);
-                        let setup = mount_setup(&command_line_split[2], Some(setup));
-
-                        let _ = private
-                            .serial_if_cmd_sender
-                            .send(SerialCommand::Setup(setup));
+                        error!(private.logger, "Invalid subcommand for serial");
                     }
                 }
+            }
+            "connect" => {
+                Self::handle_connect_command(command_line_split, private);
             }
             "disconnect" => {
                 let _ = private.serial_if_cmd_sender.send(SerialCommand::Disconnect);
             }
             "flow" => {
-                if command_line_split.len() < 2 {
-                    error!(
-                        private.logger,
-                        "Insufficient arguments for \"!flow\" command"
-                    );
-                    return;
-                }
-
-                let flow_control = match command_line_split[1].as_str() {
-                    "none" => FlowControl::None,
-                    "sw" => FlowControl::Software,
-                    "hw" => FlowControl::Hardware,
-                    _ => {
-                        error!(
-                            private.logger,
-                            "Invalid flow control. Please, chose one of these options: none, sw, hw"
-                        );
-                        return;
-                    }
-                };
-
-                let res = private
-                    .serial_if_cmd_sender
-                    .send(SerialCommand::Setup(SerialSetup {
-                        flow_control: Some(flow_control),
-                        ..SerialSetup::default()
-                    }));
-
-                match res {
-                    Ok(_) => success!(
-                        private.logger,
-                        "Flow control setted to \"{}\"",
-                        command_line_split[1]
-                    ),
-                    Err(err) => error!(private.logger, "Cannot set flow control: {}", err),
-                }
+                Self::handle_flow_command(command_line_split, private);
             }
             "log" => {
                 if command_line_split.len() < 3 {
