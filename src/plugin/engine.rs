@@ -15,6 +15,7 @@ use crate::{
     success, warning,
 };
 use chrono::Local;
+use regex::Regex;
 use std::{
     collections::HashMap,
     os::unix::ffi::OsStrExt,
@@ -100,6 +101,7 @@ impl PluginEngine {
         let mut plugin_list: HashMap<Arc<String>, Plugin> = HashMap::new();
         let mut engine_gate = PluginEngineGate::new(32);
         let mut serial_recv_reqs = vec![];
+        let err_regex = Regex::new(r#".*: \[string ".*"]:"#).unwrap();
 
         'plugin_engine_loop: loop {
             if let Ok(cmd) = cmd_receiver.try_recv() {
@@ -157,7 +159,7 @@ impl PluginEngine {
                         .await
                         {
                             Ok(_) => success!(private.logger, "Plugin \"{}\" loaded", plugin_name),
-                            Err(err) => error!(private.logger, "{}", err),
+                            Err(err) => error!(private.logger, "{}", err_regex.replace(&err, "")),
                         }
                     }
                     PluginEngineCommand::UnloadPlugin { plugin_name } => {
@@ -306,7 +308,9 @@ impl PluginEngine {
                                         "Plugin \"{}\" reloaded",
                                         plugin_name
                                     ),
-                                    Err(err) => error!(private.logger, "{}", err),
+                                    Err(err) => {
+                                        error!(private.logger, "{}", err_regex.replace(&err, ""));
+                                    }
                                 }
                             } else {
                                 warning!(private.logger, "Plugin \"{}\" unloaded", plugin_name);
