@@ -13,45 +13,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: nightly
-          components: clippy
-          override: true
-
       - name: Install libudev-sys
         run: |
           sudo apt-get install -y libudev-dev
-
       - name: Build
         run: |
-          cargo +nightly build --release --verbose
+          cargo build --release --verbose
 
   build-windows:
     name: Check on Windows
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: nightly
-          components: clippy
-          override: true
       - name: Build
         run: |
-          cargo +nightly build --release --verbose
+          cargo build --release --verbose
 
   build-macos:
     name: Check on MacOS
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v3
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: nightly
-          components: clippy
-          override: true
-
       - name: Build
         run: |
-          cargo +nightly build --release --verbose
+          cargo build --release --verbose
