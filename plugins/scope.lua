@@ -129,11 +129,21 @@ function M.sys.parse_args(args)
 end
 
 function M.re.literal(str)
-    return coroutine.yield({ ":re.literal", str })
+    return table.unpack(coroutine.yield({ ":re.literal", str }))
 end
 
-function M.re.matches(str, pattern_table)
-    local fn_name = coroutine.yield({ ":re.matches", str, pattern_table })
+function M.re.matches(str, ...)
+    local args = table.pack(...)
+    assert(args.n % 2 == 0, "Each function need to have a name")
+
+    local pattern_list = {}
+    local pattern_table = {}
+    for i = 1, args.n, 2 do
+        table.insert(pattern_list, { args[i], args[i + 1] })
+        pattern_table[args[i]] = args[i + 1]
+    end
+
+    local fn_name = table.unpack(coroutine.yield({ ":re.matches", str, pattern_list }))
     if fn_name ~= nil then
         local fn = pattern_table[fn_name]
         fn(str)
@@ -141,7 +151,7 @@ function M.re.matches(str, pattern_table)
 end
 
 function M.re.match(str, pattern)
-    return coroutine.yield({ ":re.match", str, pattern })
+    return table.unpack(coroutine.yield({ ":re.match", str, pattern }))
 end
 
 return M

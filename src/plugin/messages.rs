@@ -1,6 +1,6 @@
 use std::{sync::Arc, time::Instant};
 
-use mlua::{Table, Value};
+use mlua::Table;
 use std::time::Duration;
 
 use crate::infra::LogLevel;
@@ -204,10 +204,9 @@ impl PluginRequest {
                     .get(3)
                     .map_err(|_| "Cannot get third table entry as String".to_string())?;
                 let pattern_table = pattern_table
-                    .pairs()
-                    .into_iter()
+                    .sequence_values::<Table<'_>>()
                     .filter_map(|res| res.ok())
-                    .map(|(k, _v): (String, Value<'_>)| k)
+                    .filter_map(|t| t.get::<_, String>(1).ok())
                     .collect();
 
                 PluginRequest::Internal(PluginInternalRequest::ReMatches {
@@ -215,7 +214,7 @@ impl PluginRequest {
                     pattern_table,
                 })
             }
-            "re.match" => {
+            ":re.match" => {
                 let string: String = value
                     .get(2)
                     .map_err(|_| "Cannot get second table entry as String".to_string())?;

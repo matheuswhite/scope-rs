@@ -2,6 +2,7 @@ local log = require("scope").log
 local fmt = require("scope").fmt
 local serial = require("scope").serial
 local sys = require("scope").sys
+local re = require("scope").re
 
 local M = {
     is_loaded = false
@@ -56,6 +57,33 @@ function M.hello(name, age)
     })
 
     log.info("Hello, " .. name .. ". Do you have " .. tostring(age) .. " years?")
+end
+
+function M.regex(str, pattern)
+    if re.match(str, pattern) then
+        log.success(str .. " matches with " .. pattern)
+    else
+        log.error(str .. " doesn't match with " .. pattern)
+    end
+end
+
+function M.cases(arg)
+    assert(arg, "cases must have at least one argument")
+
+    re.matches(arg,
+            re.literal(".0"), function(msg)
+                log.info("Got a fake decimal: " .. msg)
+            end,
+            "\\d+", function(msg)
+                log.info(msg .. " is a number")
+            end,
+            "\\w+", function(msg)
+                log.info(msg .. " is a word")
+            end,
+            ".*", function(msg)
+                log.warning(msg .. " is unknown for me")
+            end
+    )
 end
 
 function M.logs()
