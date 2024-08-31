@@ -125,6 +125,8 @@ impl SerialInterface {
         let mut buffer = [0u8];
         let mut serial = None;
         let mut now = Instant::now();
+        #[cfg(target_os = "windows")]
+        let mut port_name = String::new();
 
         'task_loop: loop {
             if let Ok(cmd) = cmd_receiver.try_recv() {
@@ -148,6 +150,8 @@ impl SerialInterface {
                         &mut serial,
                         &logger,
                         &plugin_engine_cmd_sender,
+                        #[cfg(target_os = "windows")]
+                        &mut port_name,
                     ),
                 };
                 Self::set_mode(shared.clone(), new_mode);
@@ -185,6 +189,21 @@ impl SerialInterface {
             if let Ok(data_to_sent) = tx.try_recv() {
                 if ser.write_all(data_to_sent.message.as_slice()).is_err() {
                     error!(logger, "Cannot sent: {:?}", data_to_sent.message);
+                }
+            }
+
+            #[cfg(target_os = "windows")]
+            if let Ok(ports) = serialport::available_ports() {
+                if !ports.into_iter().any(|info| info.port_name == port_name) {
+                    let _ = Self::disconnect(
+                        shared.clone(),
+                        &mut Some(ser),
+                        &logger,
+                        &plugin_engine_cmd_sender,
+                    );
+                    Self::set_mode(shared.clone(), Some(SerialMode::Reconnecting));
+                    std::thread::yield_now();
+                    continue 'task_loop;
                 }
             }
 
@@ -315,6 +334,7 @@ impl SerialInterface {
         serial: &mut Option<SerialPort>,
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
+        #[cfg(target_os = "windows")] port_name: &mut String,
     ) -> Option<SerialMode> {
         let mut has_changes = false;
         let mut sw = shared
@@ -322,7 +342,15 @@ impl SerialInterface {
             .expect("Cannot get serial shared lock for write");
 
         if let Some(port) = setup.port {
-            sw.port = port;
+            #[cfg(not(target_os = "windows"))]
+            {
+                sw.port = port;
+            }
+            #[cfg(target_os = "windows")]
+            {
+                sw.port = port.clone();
+                *port_name = port;
+            }
             has_changes = true;
         }
 
