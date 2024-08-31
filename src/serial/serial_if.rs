@@ -10,7 +10,7 @@ use crate::{
     success, warning,
 };
 use chrono::Local;
-use serialport::{DataBits, FlowControl, Parity, StopBits, TTYPort};
+use serialport::{DataBits, FlowControl, Parity, StopBits};
 use std::{
     io::{self, Read, Write},
     sync::{
@@ -23,9 +23,9 @@ use std::{
 pub type SerialInterface = Task<SerialShared, SerialCommand>;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
-type SerialPort = TTYPort;
+type SerialPort = serialport::TTYPort;
 #[cfg(target_os = "windows")]
-type SerialPort = COMPort;
+type SerialPort =serialport::COMPort;
 
 pub struct SerialShared {
     pub port: String,

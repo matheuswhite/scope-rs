@@ -18,7 +18,6 @@ use chrono::Local;
 use regex::Regex;
 use std::{
     collections::HashMap,
-    os::unix::ffi::OsStrExt,
     path::PathBuf,
     str::FromStr,
     sync::{Arc, RwLock},
@@ -409,7 +408,7 @@ impl PluginEngine {
         logger: Logger,
     ) -> Result<(), String> {
         let filepath = match filepath.extension() {
-            Some(extension) if extension.as_bytes() != b"lua" => {
+            Some(extension) if extension.as_encoded_bytes() != b"lua" => {
                 return Err(format!("Invalid plugin extension: {:?}", extension));
             }
             Some(_extension) => filepath,
