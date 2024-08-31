@@ -334,8 +334,7 @@ impl SerialInterface {
         serial: &mut Option<SerialPort>,
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
-        #[cfg(target_os = "windows")]
-        port_name: &mut String,
+        #[cfg(target_os = "windows")] port_name: &mut String,
     ) -> Option<SerialMode> {
         let mut has_changes = false;
         let mut sw = shared
