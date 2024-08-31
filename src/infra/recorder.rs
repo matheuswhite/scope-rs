@@ -1,7 +1,6 @@
-use crate::text::into_byte_format;
-use std::path::PathBuf;
-use tokio::fs::File;
-use tokio::io::AsyncWriteExt;
+use std::{fs::File, io::Write, path::PathBuf};
+
+use super::into_byte_format;
 
 pub struct Recorder {
     base_filename: String,
@@ -40,10 +39,8 @@ impl Recorder {
         self.file_handler.is_some()
     }
 
-    pub async fn start_record(&mut self) -> Result<(), String> {
-        let file = File::create(self.get_filename())
-            .await
-            .map_err(|err| err.to_string())?;
+    pub fn start_record(&mut self) -> Result<(), String> {
+        let file = File::create(self.get_filename()).map_err(|err| err.to_string())?;
         self.file_handler = Some(file);
 
         Ok(())
@@ -58,22 +55,22 @@ impl Recorder {
         self.file_size = 0;
     }
 
-    pub async fn add_content(&mut self, content: String) -> Result<(), String> {
+    pub fn add_bulk_content(&mut self, contents: Vec<String>) -> Result<(), String> {
         let Some(file) = self.file_handler.as_mut() else {
             return Err("No file recording now".to_string());
         };
 
-        let content = if !content.ends_with('\n') {
-            content + "\r\n"
-        } else {
-            content
-        };
+        for content in contents {
+            let content = if !content.ends_with('\n') {
+                content.to_string() + "\r\n"
+            } else {
+                content.to_string()
+            };
 
-        file.write_all(content.as_bytes())
-            .await
-            .map_err(|err| err.to_string())?;
-        self.file_size += content.len() as u128;
-
+            file.write_all(content.as_bytes())
+                .map_err(|err| err.to_string())?;
+            self.file_size += content.len() as u128;
+        }
         Ok(())
     }
 }

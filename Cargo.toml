@@ -31,7 +31,7 @@ name = "scope"
 path = "src/main.rs"
 
 [dependencies]
-tokio-serial = "5.4.1"
+serialport = "4.4.0"
 ratatui = "0.26.1"
 crossterm = { version = "0.27.0", features = ["default", "event-stream"] }
 futures = "0.3.30"
@@ -43,8 +43,8 @@ clap = { version = "4.1.9", features = ["derive"] }
 mlua = { version = "0.9.6", features = ["lua54", "vendored", "async", "send"] }
 anyhow = "1.0.79"
 homedir = "0.2.1"
-regex = { version = "1.10.3", features = [] }
 tokio = { version = "1.36.0", features = ["full"] }
+regex = "1.10.5"
 
 [target.'cfg(windows)'.dependencies]
 ctrlc = "3.4.3"
