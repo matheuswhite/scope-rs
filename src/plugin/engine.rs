@@ -16,6 +16,7 @@ use crate::{
 };
 use chrono::Local;
 use regex::Regex;
+use std::time::Duration;
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -24,10 +25,12 @@ use std::{
     time::Instant,
 };
 use std::{path::Path, sync::mpsc::Receiver};
+use tokio::time::sleep;
 use tokio::{
     runtime::Runtime,
-    task::{self, yield_now},
+    task::{self},
 };
+
 pub type PluginEngine = Task<(), PluginEngineCommand>;
 
 pub enum PluginEngineCommand {
@@ -387,7 +390,7 @@ impl PluginEngine {
                 }
             }
 
-            yield_now().await;
+            sleep(Duration::from_millis(1)).await;
         }
     }
 
