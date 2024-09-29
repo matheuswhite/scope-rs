@@ -11,6 +11,7 @@ use crate::{
 };
 use chrono::Local;
 use serialport::{DataBits, FlowControl, Parity, StopBits};
+use std::thread::sleep;
 use std::{
     io::{self, Read, Write},
     sync::{
@@ -165,7 +166,7 @@ impl SerialInterface {
 
                 match mode {
                     SerialMode::DoNotConnect => {
-                        std::thread::yield_now();
+                        sleep(Duration::from_millis(16));
                         continue 'task_loop;
                     }
                     SerialMode::Reconnecting => {
@@ -182,7 +183,7 @@ impl SerialInterface {
             }
 
             let Some(mut ser) = serial.take() else {
-                std::thread::yield_now();
+                sleep(Duration::from_millis(16));
                 continue 'task_loop;
             };
 
@@ -202,7 +203,7 @@ impl SerialInterface {
                         &plugin_engine_cmd_sender,
                     );
                     Self::set_mode(shared.clone(), Some(SerialMode::Reconnecting));
-                    std::thread::yield_now();
+                    sleep(Duration::from_millis(16));
                     continue 'task_loop;
                 }
             }
@@ -231,7 +232,7 @@ impl SerialInterface {
                         &plugin_engine_cmd_sender,
                     );
                     Self::set_mode(shared.clone(), Some(SerialMode::Reconnecting));
-                    std::thread::yield_now();
+                    sleep(Duration::from_millis(16));
                     continue 'task_loop;
                 }
                 Err(_) => {}
@@ -250,7 +251,7 @@ impl SerialInterface {
 
             serial = Some(ser);
 
-            std::thread::yield_now();
+            sleep(Duration::from_millis(1));
         }
     }
 

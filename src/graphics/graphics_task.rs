@@ -30,6 +30,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::collections::VecDeque;
+use std::thread::sleep;
 use std::{
     cmp::{max, min},
     time::Duration,
@@ -560,7 +561,7 @@ impl GraphicsTask {
                 })
                 .expect("Error to draw");
 
-            std::thread::yield_now();
+            sleep(Duration::from_millis(1));
         }
 
         disable_raw_mode().expect("Cannot disable terminal raw mode");
