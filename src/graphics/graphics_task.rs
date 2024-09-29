@@ -108,11 +108,10 @@ impl GraphicsTask {
         blink_color: Color,
     ) {
         private.last_frame_height = frame.size().height;
-        let scroll = if private.auto_scroll {
-            (Self::max_main_axis(&private), private.scroll.1)
-        } else {
-            private.scroll
-        };
+        if private.auto_scroll {
+            private.scroll.0 = Self::max_main_axis(&private);
+        }
+        let scroll = private.scroll;
 
         let (coll, coll_size) = (
             private.history.range(scroll.0 as usize..).filter(|msg| {
