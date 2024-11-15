@@ -141,10 +141,7 @@ impl PluginEngine {
                             continue 'plugin_engine_loop;
                         }
 
-                        let Ok(filepath) = PathBuf::from_str(&filepath) else {
-                            error!(private.logger, "Invalid filepath {}", filepath);
-                            continue 'plugin_engine_loop;
-                        };
+                        let Ok(filepath) = PathBuf::from_str(&filepath);
 
                         let plugin_name = Arc::new(plugin_name);
 
