@@ -188,6 +188,7 @@ impl GraphicsTask {
         serial_shared: &Shared<SerialShared>,
         frame: &mut Frame,
         rect: Rect,
+        latency: u64,
     ) {
         let (port, baudrate, flow_control, is_connected) = {
             let serial_shared = serial_shared
@@ -224,10 +225,19 @@ impl GraphicsTask {
             Color::Red
         };
 
+        let latency = if latency >= 1_000 {
+            format!("{}ms", latency / 1_000)
+        } else if latency > 0 {
+            format!("{}us", latency)
+        } else {
+            "---".to_string()
+        };
+
         let block = Block::default()
             .title(format!(
-                "[{:03}] Serial {}:{:04}bps{}",
+                "[{:03}][{}] Serial {}:{:04}bps{}",
                 history_len,
+                latency,
                 port,
                 baudrate,
                 match flow_control {
@@ -557,6 +567,7 @@ impl GraphicsTask {
                         &private.serial_shared,
                         f,
                         chunks[1],
+                        private.latency,
                     );
                     Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
                 })
