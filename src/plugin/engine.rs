@@ -21,12 +21,13 @@ use std::{
     path::PathBuf,
     str::FromStr,
     sync::{Arc, RwLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 use std::{path::Path, sync::mpsc::Receiver};
 use tokio::{
     runtime::Runtime,
     task::{self, yield_now},
+    time::sleep,
 };
 pub type PluginEngine = Task<(), PluginEngineCommand>;
 
@@ -63,6 +64,7 @@ pub struct PluginEngineConnections {
     tx_consumer: Consumer<Arc<TimedBytes>>,
     rx: Consumer<Arc<TimedBytes>>,
     serial_shared: Shared<SerialShared>,
+    latency: u64,
 }
 
 impl PluginEngine {
@@ -384,7 +386,11 @@ impl PluginEngine {
                 }
             }
 
-            yield_now().await;
+            if private.latency > 0 {
+                sleep(Duration::from_micros(private.latency)).await;
+            } else {
+                yield_now().await;
+            }
         }
     }
 
@@ -436,6 +442,7 @@ impl PluginEngineConnections {
         tx_consumer: Consumer<Arc<TimedBytes>>,
         rx: Consumer<Arc<TimedBytes>>,
         serial_shared: Shared<SerialShared>,
+        latency: u64,
     ) -> Self {
         Self {
             logger,
@@ -443,6 +450,7 @@ impl PluginEngineConnections {
             tx_consumer,
             rx,
             serial_shared,
+            latency,
         }
     }
 }

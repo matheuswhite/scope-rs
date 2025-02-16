@@ -564,8 +564,6 @@ impl InputsTask {
                 event::Event::Resize(_, _) => {}
                 _ => {}
             }
-
-            std::thread::yield_now();
         }
     }
 

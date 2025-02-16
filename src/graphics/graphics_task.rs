@@ -30,6 +30,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::collections::VecDeque;
+use std::thread::{sleep, yield_now};
 use std::{
     cmp::{max, min},
     time::Duration,
@@ -60,6 +61,7 @@ pub struct GraphicsConnections {
     scroll: (u16, u16),
     last_frame_height: u16,
     is_true_color: bool,
+    latency: u64,
 }
 
 pub enum GraphicsCommand {
@@ -560,7 +562,11 @@ impl GraphicsTask {
                 })
                 .expect("Error to draw");
 
-            std::thread::yield_now();
+            if private.latency > 0 {
+                sleep(Duration::from_micros(private.latency));
+            } else {
+                yield_now();
+            }
         }
 
         disable_raw_mode().expect("Cannot disable terminal raw mode");
@@ -771,6 +777,7 @@ impl GraphicsConnections {
         storage_base_filename: String,
         capacity: usize,
         is_true_color: bool,
+        latency: u64,
     ) -> Self {
         Self {
             logger,
@@ -788,6 +795,7 @@ impl GraphicsConnections {
             last_frame_height: u16::MAX,
             system_log_level: LogLevel::Debug,
             is_true_color,
+            latency,
         }
     }
 }
