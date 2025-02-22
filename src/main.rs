@@ -184,7 +184,7 @@ fn main() -> Result<(), String> {
         port,
         baudrate,
         !cli.non_colorful,
-        cli.latency.unwrap_or(1_000).clamp(0, 100_000),
+        cli.latency.unwrap_or(500).clamp(0, 100_000),
     ) {
         return Err(format!("[\x1b[31mERR\x1b[0m] {}", err));
     }
