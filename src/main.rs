@@ -34,6 +34,8 @@ struct Cli {
     tag_file: Option<PathBuf>,
     #[clap(short, long)]
     non_colorful: bool,
+    #[clap(short, long)]
+    latency: Option<u64>,
 }
 
 #[derive(Subcommand)]
@@ -54,6 +56,7 @@ fn app(
     port: Option<String>,
     baudrate: Option<u32>,
     is_true_color: bool,
+    latency: u64,
 ) -> Result<(), String> {
     let (logger, logger_receiver) = Logger::new("main".to_string());
     let mut tx_channel = Channel::default();
@@ -85,6 +88,7 @@ fn app(
         tx_channel_consumers.pop().unwrap(),
         rx_channel.clone().new_producer(),
         plugin_engine_cmd_sender.clone(),
+        latency,
     );
     let inputs_connections = InputsConnections::new(
         logger.clone().with_source("inputs".to_string()),
@@ -109,6 +113,7 @@ fn app(
         tx_channel_consumers.pop().unwrap(),
         rx_channel_consumers.pop().unwrap(),
         serial_shared,
+        latency,
     );
 
     let inputs_task =
@@ -129,6 +134,7 @@ fn app(
         storage_base_filename,
         capacity,
         is_true_color,
+        latency,
     );
     let text_view = GraphicsTask::spawn_graphics_task(
         graphics_connections,
@@ -172,7 +178,14 @@ fn main() -> Result<(), String> {
     let capacity = cli.capacity.unwrap_or(DEFAULT_CAPACITY);
     let tag_file = cli.tag_file.unwrap_or(PathBuf::from(DEFAULT_TAG_FILE));
 
-    if let Err(err) = app(capacity, tag_file, port, baudrate, !cli.non_colorful) {
+    if let Err(err) = app(
+        capacity,
+        tag_file,
+        port,
+        baudrate,
+        !cli.non_colorful,
+        cli.latency.unwrap_or(500).clamp(0, 100_000),
+    ) {
         return Err(format!("[\x1b[31mERR\x1b[0m] {}", err));
     }
 

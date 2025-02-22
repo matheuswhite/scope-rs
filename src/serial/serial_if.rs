@@ -17,6 +17,7 @@ use std::{
         mpsc::{Receiver, Sender},
         Arc, RwLock,
     },
+    thread::{sleep, yield_now},
     time::{Duration, Instant},
 };
 
@@ -52,6 +53,7 @@ pub struct SerialConnections {
     tx: Consumer<Arc<TimedBytes>>,
     rx: Producer<Arc<TimedBytes>>,
     plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
+    latency: u64,
 }
 
 pub enum SerialCommand {
@@ -110,6 +112,14 @@ impl SerialInterface {
         sw.mode = mode;
     }
 
+    fn wait(latency: u64) {
+        if latency > 0 {
+            sleep(Duration::from_micros(latency));
+        } else {
+            yield_now();
+        }
+    }
+
     fn task(
         shared: Arc<RwLock<SerialShared>>,
         connections: SerialConnections,
@@ -120,6 +130,7 @@ impl SerialInterface {
             tx,
             rx,
             plugin_engine_cmd_sender,
+            latency,
         } = connections;
         let mut line = vec![];
         let mut buffer = [0u8];
@@ -161,7 +172,7 @@ impl SerialInterface {
 
                 match mode {
                     SerialMode::DoNotConnect => {
-                        std::thread::yield_now();
+                        Self::wait(latency);
                         continue 'task_loop;
                     }
                     SerialMode::Reconnecting => {
@@ -178,7 +189,7 @@ impl SerialInterface {
             }
 
             let Some(mut ser) = serial.take() else {
-                std::thread::yield_now();
+                Self::wait(latency);
                 continue 'task_loop;
             };
 
@@ -212,7 +223,7 @@ impl SerialInterface {
                         &plugin_engine_cmd_sender,
                     );
                     Self::set_mode(shared.clone(), Some(SerialMode::Reconnecting));
-                    std::thread::yield_now();
+                    Self::wait(latency);
                     continue 'task_loop;
                 }
                 Err(_) => {}
@@ -231,7 +242,7 @@ impl SerialInterface {
 
             serial = Some(ser);
 
-            std::thread::yield_now();
+            Self::wait(latency);
         }
     }
 
@@ -372,12 +383,14 @@ impl SerialConnections {
         tx: Consumer<Arc<TimedBytes>>,
         rx: Producer<Arc<TimedBytes>>,
         plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
+        latency: u64,
     ) -> Self {
         Self {
             logger,
             tx,
             rx,
             plugin_engine_cmd_sender,
+            latency,
         }
     }
 }

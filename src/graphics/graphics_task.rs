@@ -30,6 +30,7 @@ use ratatui::{
     Frame, Terminal,
 };
 use std::collections::VecDeque;
+use std::thread::{sleep, yield_now};
 use std::{
     cmp::{max, min},
     time::Duration,
@@ -60,6 +61,7 @@ pub struct GraphicsConnections {
     scroll: (u16, u16),
     last_frame_height: u16,
     is_true_color: bool,
+    latency: u64,
 }
 
 pub enum GraphicsCommand {
@@ -186,6 +188,7 @@ impl GraphicsTask {
         serial_shared: &Shared<SerialShared>,
         frame: &mut Frame,
         rect: Rect,
+        latency: u64,
     ) {
         let (port, baudrate, flow_control, is_connected) = {
             let serial_shared = serial_shared
@@ -222,10 +225,19 @@ impl GraphicsTask {
             Color::Red
         };
 
+        let latency = if latency >= 1_000 {
+            format!("{}ms", latency / 1_000)
+        } else if latency > 0 {
+            format!("{}us", latency)
+        } else {
+            "---".to_string()
+        };
+
         let block = Block::default()
             .title(format!(
-                "[{:03}] Serial {}:{:04}bps{}",
+                "[{:03}][{}] Serial {}:{:04}bps{}",
                 history_len,
+                latency,
                 port,
                 baudrate,
                 match flow_control {
@@ -555,12 +567,17 @@ impl GraphicsTask {
                         &private.serial_shared,
                         f,
                         chunks[1],
+                        private.latency,
                     );
                     Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
                 })
                 .expect("Error to draw");
 
-            std::thread::yield_now();
+            if private.latency > 0 {
+                sleep(Duration::from_micros(private.latency));
+            } else {
+                yield_now();
+            }
         }
 
         disable_raw_mode().expect("Cannot disable terminal raw mode");
@@ -771,6 +788,7 @@ impl GraphicsConnections {
         storage_base_filename: String,
         capacity: usize,
         is_true_color: bool,
+        latency: u64,
     ) -> Self {
         Self {
             logger,
@@ -788,6 +806,7 @@ impl GraphicsConnections {
             last_frame_height: u16::MAX,
             system_log_level: LogLevel::Debug,
             is_true_color,
+            latency,
         }
     }
 }
