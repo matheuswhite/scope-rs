@@ -116,42 +116,31 @@ You can navigate through the message history using the mouse wheel or hitting `P
 
 ### Plugins
 
-You can extend the basic functions of `Scope` using plugins! Plugins are scripts written in `lua` language. To create a
-plugin for `Scope` you'll need to write a lua script with these 2 functions: `serial_rx` and `user_command`.
-The `serial_rx` function is called when a new data is captured on serial port. The `user_command` function is called
-when you call your plugin from command bar, passing arguments to this command. The code bellow is a plugin to
-reply `OK\r\n` when receive the `AT\r\n` message and to send `Hello, World\r\n` when the user type `!echo hello` on the
-command bar.
+You can extend the basic functions of `Scope` using plugins! Plugins are scripts written in `lua` language. The
+code bellow shows a plugin that reply a `OK\r\n` when it receives an `AT\r\n`. It also send `Hello, World\r\n` via
+serial and the user type `!echo hello` (if the plugin name is `echo.lua`) on the command bar. 
 
 ```lua
-require "scope"
+local serial = require("scope").serial
 
-function serial_rx(msg)
-    msg_str = bytes2str(msg)
+local M = {}
 
-    if msg_str ~= "AT\r\n" then
-        return
-    end
-
-    scope.println("Sending msg \"OK\" via serial tx...")
-    scope.serial_tx(str2bytes("OK\r\n"))
-    scope.println("Message sent!")
+function M.on_serial_recv(msg)
+    serial.send("AT\r\n")
 end
 
-function user_command(arg_list)
-    if arg_list[1] ~= "hello" then
-        return
-    end
-
-    scope.println("Hello, World!\r\n")
+function M.hello()
+    serial.send("Hello, World\r\n")
 end
+
+return M
 ```
 
 To call your plugin you need to type `!` followed by your plugin name and a list of arguments. Inside your plugin, is
 possible to do many action to interact with `Scope` and serial port, such as: connect to a serial port, disconnect from
 the serial port, send data to serial port, print some message in `Scope` text view and so on. For more information about
 the development of plugins for `Scope` you can read
-the [Plugins Developer Guide](https://github.com/matheuswhite/scope-rs/wiki/Plugin-Developer-Guide).
+the [Plugins Developer Guide](plugins/plugin_dev_guide.md).
 
 ![Plugin usage](videos/011_plugin/video.gif)
 
