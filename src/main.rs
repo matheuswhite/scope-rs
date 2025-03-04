@@ -44,6 +44,7 @@ pub enum Commands {
         port: Option<String>,
         baudrate: Option<u32>,
     },
+    List,
     Ble {
         name_device: String,
         mtu: u32,
@@ -172,6 +173,27 @@ fn main() -> Result<(), String> {
             return Err(
                 "Sorry! We're developing BLE interface and it's not available yet".to_string(),
             );
+        }
+        Commands::List => {
+            let Ok(ports) = serialport::available_ports() else {
+                return Err("No serial ports found".to_string());
+            };
+
+            for port in ports {
+                match port.port_type {
+                    serialport::SerialPortType::UsbPort(usb_port_info) => {
+                        println!(
+                            "{} - [{}] {}",
+                            port.port_name,
+                            usb_port_info.serial_number.unwrap_or("???".to_string()),
+                            usb_port_info.manufacturer.unwrap_or("???".to_string())
+                        )
+                    }
+                    _ => {}
+                }
+            }
+
+            return Ok(());
         }
     };
 
