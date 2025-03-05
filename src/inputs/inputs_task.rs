@@ -28,12 +28,22 @@ pub type InputsTask = Task<InputsShared, ()>;
 
 #[derive(Default)]
 pub struct InputsShared {
+    pub search_cursor: usize,
+    pub search_buffer: String,
     pub command_line: String,
     pub cursor: usize,
     pub history_len: usize,
     pub current_hint: Option<String>,
     pub autocomplete_list: Vec<Arc<String>>,
     pub pattern: String,
+    pub mode: InputMode,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub enum InputMode {
+    #[default]
+    Normal,
+    Search,
 }
 
 pub struct InputsConnections {
@@ -76,7 +86,15 @@ impl InputsTask {
     ) -> LoopStatus {
         match key.code {
             KeyCode::Esc => {
-                return LoopStatus::Break;
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                match sw.mode {
+                    InputMode::Normal => return LoopStatus::Break,
+                    InputMode::Search => {
+                        sw.mode = InputMode::Normal;
+                        return LoopStatus::Continue;
+                    }
+                }
             }
             KeyCode::Char('l') | KeyCode::Char('L') if key.modifiers == KeyModifiers::CONTROL => {
                 let _ = private.graphics_cmd_sender.send(GraphicsCommand::Clear);
@@ -89,30 +107,70 @@ impl InputsTask {
                     .graphics_cmd_sender
                     .send(GraphicsCommand::RecordData);
             }
+            KeyCode::Char('f') | KeyCode::Char('F') if key.modifiers == KeyModifiers::CONTROL => {
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                match sw.mode {
+                    InputMode::Normal => {
+                        sw.mode = InputMode::Search;
+                    }
+                    InputMode::Search => {
+                        sw.mode = InputMode::Normal;
+                    }
+                }
+            }
             KeyCode::Char(c) => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
-                sw.current_hint = None;
+                match sw.mode {
+                    InputMode::Normal => {
+                        sw.current_hint = None;
 
-                if sw.cursor >= sw.command_line.chars().count() {
-                    sw.command_line.push(c);
-                } else {
-                    sw.command_line = sw.command_line.chars().enumerate().fold(
-                        "".to_string(),
-                        |mut acc, (i, x)| {
-                            if i == sw.cursor {
-                                acc.push(c);
-                            }
+                        if sw.cursor >= sw.command_line.chars().count() {
+                            sw.command_line.push(c);
+                        } else {
+                            sw.command_line = sw.command_line.chars().enumerate().fold(
+                                "".to_string(),
+                                |mut acc, (i, x)| {
+                                    if i == sw.cursor {
+                                        acc.push(c);
+                                    }
 
-                            acc.push(x);
-                            acc
-                        },
-                    );
+                                    acc.push(x);
+                                    acc
+                                },
+                            );
+                        }
+
+                        sw.cursor += 1;
+                        Self::update_tag_list();
+                        private.history_index = None;
+                    }
+                    InputMode::Search => {
+                        if sw.search_cursor >= sw.search_buffer.chars().count() {
+                            sw.search_buffer.push(c);
+                        } else {
+                            sw.search_buffer = sw.search_buffer.chars().enumerate().fold(
+                                "".to_string(),
+                                |mut acc, (i, x)| {
+                                    if i == sw.search_cursor {
+                                        acc.push(c);
+                                    }
+
+                                    acc.push(x);
+                                    acc
+                                },
+                            );
+                        }
+
+                        sw.search_cursor += 1;
+                        Self::update_tag_list();
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::SearchChange);
+                    }
                 }
-
-                sw.cursor += 1;
-                Self::update_tag_list();
-                private.history_index = None;
             }
             KeyCode::PageUp if key.modifiers == KeyModifiers::CONTROL => {
                 let _ = private
@@ -131,27 +189,60 @@ impl InputsTask {
             KeyCode::Backspace => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
-                if sw.command_line.chars().count() == 1 {
-                    Self::set_hint(&mut sw.current_hint, &private.hints);
-                }
+                match sw.mode {
+                    InputMode::Normal => {
+                        if sw.command_line.chars().count() == 1 {
+                            Self::set_hint(&mut sw.current_hint, &private.hints);
+                        }
 
-                if sw.cursor > 0 {
-                    sw.cursor -= 1;
-                    sw.command_line = sw
-                        .command_line
-                        .chars()
-                        .enumerate()
-                        .filter_map(|(i, c)| if i != sw.cursor { Some(c) } else { None })
-                        .collect();
-                    Self::update_tag_list();
-                }
+                        if sw.cursor > 0 {
+                            sw.cursor -= 1;
+                            sw.command_line = sw
+                                .command_line
+                                .chars()
+                                .enumerate()
+                                .filter_map(|(i, c)| if i != sw.cursor { Some(c) } else { None })
+                                .collect();
+                            Self::update_tag_list();
+                        }
 
-                if sw.command_line.chars().count() > 0
-                    && sw.command_line.chars().all(|x| x.is_whitespace())
-                {
-                    sw.command_line.clear();
-                    sw.cursor = 0;
-                    Self::set_hint(&mut sw.current_hint, &private.hints);
+                        if sw.command_line.chars().count() > 0
+                            && sw.command_line.chars().all(|x| x.is_whitespace())
+                        {
+                            sw.command_line.clear();
+                            sw.cursor = 0;
+                            Self::set_hint(&mut sw.current_hint, &private.hints);
+                        }
+                    }
+                    InputMode::Search => {
+                        if sw.search_cursor > 0 {
+                            sw.search_cursor -= 1;
+                            sw.search_buffer = sw
+                                .search_buffer
+                                .chars()
+                                .enumerate()
+                                .filter_map(
+                                    |(i, c)| if i != sw.search_cursor { Some(c) } else { None },
+                                )
+                                .collect();
+                            Self::update_tag_list();
+
+                            let _ = private
+                                .graphics_cmd_sender
+                                .send(GraphicsCommand::SearchChange);
+                        }
+
+                        if sw.search_buffer.chars().count() > 0
+                            && sw.search_buffer.chars().all(|x| x.is_whitespace())
+                        {
+                            sw.search_buffer.clear();
+                            sw.search_cursor = 0;
+
+                            let _ = private
+                                .graphics_cmd_sender
+                                .send(GraphicsCommand::SearchChange);
+                        }
+                    }
                 }
             }
             KeyCode::Delete => {
@@ -188,106 +279,142 @@ impl InputsTask {
                 }
             }
             KeyCode::Up => {
-                if private.history.is_empty() {
-                    return LoopStatus::Continue;
-                }
-
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
-                match &mut private.history_index {
-                    None => {
-                        private.history_index = Some(private.history.len() - 1);
-                        private.backup_command_line.clone_from(&sw.command_line);
-                    }
-                    Some(0) => {}
-                    Some(idx) => *idx -= 1,
-                }
+                match sw.mode {
+                    InputMode::Normal => {
+                        if private.history.is_empty() {
+                            return LoopStatus::Continue;
+                        }
 
-                sw.current_hint = None;
-                sw.command_line
-                    .clone_from(&private.history[private.history_index.unwrap()]);
-                sw.cursor = sw.command_line.chars().count();
-                Self::update_tag_list();
+                        match &mut private.history_index {
+                            None => {
+                                private.history_index = Some(private.history.len() - 1);
+                                private.backup_command_line.clone_from(&sw.command_line);
+                            }
+                            Some(0) => {}
+                            Some(idx) => *idx -= 1,
+                        }
+
+                        sw.current_hint = None;
+                        sw.command_line
+                            .clone_from(&private.history[private.history_index.unwrap()]);
+                        sw.cursor = sw.command_line.chars().count();
+                        Self::update_tag_list();
+                    }
+                    InputMode::Search => {
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::PrevSearch);
+                    }
+                }
             }
             KeyCode::Down => {
-                if private.history.is_empty() {
-                    return LoopStatus::Continue;
-                }
-
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
-                match &mut private.history_index {
-                    None => {}
-                    Some(idx) if *idx == (private.history.len() - 1) => {
-                        private.history_index = None;
-                        sw.command_line.clone_from(&private.backup_command_line);
-                        if sw.command_line.is_empty() {
-                            Self::set_hint(&mut sw.current_hint, &private.hints);
+                match sw.mode {
+                    InputMode::Normal => {
+                        if private.history.is_empty() {
+                            return LoopStatus::Continue;
                         }
+
+                        match &mut private.history_index {
+                            None => {}
+                            Some(idx) if *idx == (private.history.len() - 1) => {
+                                private.history_index = None;
+                                sw.command_line.clone_from(&private.backup_command_line);
+                                if sw.command_line.is_empty() {
+                                    Self::set_hint(&mut sw.current_hint, &private.hints);
+                                }
+                            }
+                            Some(idx) => {
+                                *idx += 1;
+                                sw.command_line.clone_from(&private.history[*idx]);
+                            }
+                        }
+
+                        sw.cursor = sw.command_line.chars().count();
+                        Self::update_tag_list();
                     }
-                    Some(idx) => {
-                        *idx += 1;
-                        sw.command_line.clone_from(&private.history[*idx]);
+                    InputMode::Search => {
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::NextSearch);
                     }
                 }
+            }
+            KeyCode::Enter if key.modifiers == KeyModifiers::SHIFT => {
+                let sr = shared.read().expect("Cannot get input lock for read");
 
-                sw.cursor = sw.command_line.chars().count();
-                Self::update_tag_list();
+                if let InputMode::Search = sr.mode {
+                    let _ = private
+                        .graphics_cmd_sender
+                        .send(GraphicsCommand::PrevSearch);
+                }
             }
             KeyCode::Enter => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
-                if sw.command_line.is_empty() {
-                    if let KeyModifiers::ALT = key.modifiers {
-                        private.tx.produce(Arc::new(TimedBytes {
-                            timestamp: Local::now(),
-                            message: b"\r\n".to_vec(),
-                        }));
+                match sw.mode {
+                    InputMode::Normal => {
+                        if sw.command_line.is_empty() {
+                            if let KeyModifiers::SHIFT = key.modifiers {
+                                private.tx.produce(Arc::new(TimedBytes {
+                                    timestamp: Local::now(),
+                                    message: b"\r\n".to_vec(),
+                                }));
+                            }
+
+                            return LoopStatus::Continue;
+                        }
+
+                        let command_line = sw.command_line.drain(..).collect::<String>();
+                        Self::set_hint(&mut sw.current_hint, &private.hints);
+
+                        let empty_string = "".to_string();
+                        let last_command = private.history.last().unwrap_or(&empty_string);
+                        if last_command != &command_line {
+                            private.history.push(command_line.clone());
+                        }
+
+                        Self::clear_tag_list();
+                        private.history_index = None;
+                        sw.cursor = 0;
+                        drop(sw);
+
+                        if command_line.starts_with("!") {
+                            let command_line_split = command_line
+                                .strip_prefix('!')
+                                .unwrap()
+                                .split_whitespace()
+                                .map(|arg| arg.to_string())
+                                .collect();
+
+                            Self::handle_user_command(command_line_split, &private);
+                        } else {
+                            let command_line = Self::replace_hex_sequence(command_line);
+                            let mut command_line =
+                                Self::replace_tag_sequence(command_line, &private.tag_file);
+
+                            let end_bytes = if let KeyModifiers::SHIFT = key.modifiers {
+                                b"".as_slice()
+                            } else {
+                                b"\r\n".as_slice()
+                            };
+
+                            command_line.extend_from_slice(end_bytes);
+
+                            private.tx.produce(Arc::new(TimedBytes {
+                                timestamp: Local::now(),
+                                message: command_line,
+                            }));
+                        }
                     }
-
-                    return LoopStatus::Continue;
-                }
-
-                let command_line = sw.command_line.drain(..).collect::<String>();
-                Self::set_hint(&mut sw.current_hint, &private.hints);
-
-                let empty_string = "".to_string();
-                let last_command = private.history.last().unwrap_or(&empty_string);
-                if last_command != &command_line {
-                    private.history.push(command_line.clone());
-                }
-
-                Self::clear_tag_list();
-                private.history_index = None;
-                sw.cursor = 0;
-                drop(sw);
-
-                if command_line.starts_with("!") {
-                    let command_line_split = command_line
-                        .strip_prefix('!')
-                        .unwrap()
-                        .split_whitespace()
-                        .map(|arg| arg.to_string())
-                        .collect();
-
-                    Self::handle_user_command(command_line_split, &private);
-                } else {
-                    let command_line = Self::replace_hex_sequence(command_line);
-                    let mut command_line =
-                        Self::replace_tag_sequence(command_line, &private.tag_file);
-
-                    let end_bytes = if let KeyModifiers::ALT = key.modifiers {
-                        b"".as_slice()
-                    } else {
-                        b"\r\n".as_slice()
-                    };
-
-                    command_line.extend_from_slice(end_bytes);
-
-                    private.tx.produce(Arc::new(TimedBytes {
-                        timestamp: Local::now(),
-                        message: command_line,
-                    }));
+                    InputMode::Search => {
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::NextSearch);
+                    }
                 }
             }
             _ => {}
