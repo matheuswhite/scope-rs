@@ -16,6 +16,7 @@ use infra::mpmc::Channel;
 use inputs::inputs_task::{InputsConnections, InputsTask};
 use plugin::engine::{PluginEngine, PluginEngineConnections};
 use serial::serial_if::{SerialConnections, SerialInterface, SerialSetup};
+use std::cmp::max;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -44,7 +45,10 @@ pub enum Commands {
         port: Option<String>,
         baudrate: Option<u32>,
     },
-    List,
+    List {
+        #[clap(short, long)]
+        verbose: bool,
+    },
     Ble {
         name_device: String,
         mtu: u32,
@@ -174,22 +178,75 @@ fn main() -> Result<(), String> {
                 "Sorry! We're developing BLE interface and it's not available yet".to_string(),
             );
         }
-        Commands::List => {
+        Commands::List { verbose } => {
             let Ok(ports) = serialport::available_ports() else {
                 return Err("No serial ports found".to_string());
             };
 
+            let ports = ports
+                .iter()
+                .filter(|p| matches!(p.port_type, serialport::SerialPortType::UsbPort(_)))
+                .collect::<Vec<_>>();
+
+            if ports.is_empty() {
+                println!("No serial ports found");
+                return Ok(());
+            }
+
+            let serial_number_title = "Serial Number";
+            let serial_port_title = "Serial Port";
+
+            let max_name_width = ports.iter().map(|p| p.port_name.len()).max().unwrap();
+            let max_name_width = max(max_name_width, serial_port_title.len());
+
+            if verbose {
+                println!(
+                    "\x1b[1;30m{:>width$} - [{}|PID| VID] Manufacturer\x1b[0m",
+                    serial_port_title,
+                    serial_number_title,
+                    width = max_name_width,
+                );
+            }
+
             for port in ports {
-                match port.port_type {
-                    serialport::SerialPortType::UsbPort(usb_port_info) => {
-                        println!(
-                            "{} - [{}] {}",
-                            port.port_name,
-                            usb_port_info.serial_number.unwrap_or("???".to_string()),
-                            usb_port_info.manufacturer.unwrap_or("???".to_string())
-                        )
-                    }
-                    _ => {}
+                let serialport::SerialPortType::UsbPort(usb_port_info) = port.port_type.clone()
+                else {
+                    continue;
+                };
+
+                let manufacturer = usb_port_info.product.unwrap_or("???".to_string());
+                let serial_number = usb_port_info.serial_number.unwrap_or("???".to_string());
+                let pid = usb_port_info.pid;
+                let vid = usb_port_info.vid;
+
+                let serial_number = if serial_number.len() > (serial_number_title.len() - 3) {
+                    format!(
+                        "...{}",
+                        serial_number[serial_number.len() - (serial_number_title.len() - 3)..]
+                            .to_string()
+                    )
+                } else {
+                    serial_number
+                };
+
+                if verbose {
+                    println!(
+                        "{:>width$} - [{:>ser_width$}|{}|{}] {}",
+                        port.port_name,
+                        serial_number,
+                        pid,
+                        vid,
+                        manufacturer,
+                        width = max_name_width,
+                        ser_width = serial_number_title.len()
+                    )
+                } else {
+                    println!(
+                        "{:>width$} - {}",
+                        port.port_name,
+                        manufacturer,
+                        width = max_name_width
+                    );
                 }
             }
 
