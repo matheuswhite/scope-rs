@@ -5,6 +5,7 @@ extern crate core;
 mod graphics;
 mod infra;
 mod inputs;
+mod list;
 mod plugin;
 mod serial;
 
@@ -14,9 +15,9 @@ use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
 use infra::logger::Logger;
 use infra::mpmc::Channel;
 use inputs::inputs_task::{InputsConnections, InputsTask};
+use list::list_serial_ports;
 use plugin::engine::{PluginEngine, PluginEngineConnections};
 use serial::serial_if::{SerialConnections, SerialInterface, SerialSetup};
-use std::cmp::max;
 use std::path::PathBuf;
 use std::sync::mpsc::channel;
 use std::sync::Arc;
@@ -179,78 +180,7 @@ fn main() -> Result<(), String> {
             );
         }
         Commands::List { verbose } => {
-            let Ok(ports) = serialport::available_ports() else {
-                return Err("No serial ports found".to_string());
-            };
-
-            let ports = ports
-                .iter()
-                .filter(|p| matches!(p.port_type, serialport::SerialPortType::UsbPort(_)))
-                .collect::<Vec<_>>();
-
-            if ports.is_empty() {
-                println!("No serial ports found");
-                return Ok(());
-            }
-
-            let serial_number_title = "Serial Number";
-            let serial_port_title = "Serial Port";
-
-            let max_name_width = ports.iter().map(|p| p.port_name.len()).max().unwrap();
-            let max_name_width = max(max_name_width, serial_port_title.len());
-
-            if verbose {
-                println!(
-                    "\x1b[1;30m{:>width$} - [{}|PID| VID] Manufacturer\x1b[0m",
-                    serial_port_title,
-                    serial_number_title,
-                    width = max_name_width,
-                );
-            }
-
-            for port in ports {
-                let serialport::SerialPortType::UsbPort(usb_port_info) = port.port_type.clone()
-                else {
-                    continue;
-                };
-
-                let manufacturer = usb_port_info.product.unwrap_or("???".to_string());
-                let serial_number = usb_port_info.serial_number.unwrap_or("???".to_string());
-                let pid = usb_port_info.pid;
-                let vid = usb_port_info.vid;
-
-                let serial_number = if serial_number.len() > (serial_number_title.len() - 3) {
-                    format!(
-                        "...{}",
-                        serial_number[serial_number.len() - (serial_number_title.len() - 3)..]
-                            .to_string()
-                    )
-                } else {
-                    serial_number
-                };
-
-                if verbose {
-                    println!(
-                        "{:>width$} - [{:>ser_width$}|{}|{}] {}",
-                        port.port_name,
-                        serial_number,
-                        pid,
-                        vid,
-                        manufacturer,
-                        width = max_name_width,
-                        ser_width = serial_number_title.len()
-                    )
-                } else {
-                    println!(
-                        "{:>width$} - {}",
-                        port.port_name,
-                        manufacturer,
-                        width = max_name_width
-                    );
-                }
-            }
-
-            return Ok(());
+            return list_serial_ports(verbose);
         }
     };
 
