@@ -343,10 +343,10 @@ impl InputsTask {
                     }
                 }
             }
-            KeyCode::Enter if key.modifiers == KeyModifiers::SHIFT => {
+            KeyCode::Enter if key.modifiers == KeyModifiers::ALT => {
                 let sr = shared.read().expect("Cannot get input lock for read");
 
-                if let InputMode::Search = sr.mode {
+                if matches!(sr.mode, InputMode::Search) {
                     let _ = private
                         .graphics_cmd_sender
                         .send(GraphicsCommand::PrevSearch);
@@ -358,7 +358,7 @@ impl InputsTask {
                 match sw.mode {
                     InputMode::Normal => {
                         if sw.command_line.is_empty() {
-                            if let KeyModifiers::SHIFT = key.modifiers {
+                            if let KeyModifiers::ALT = key.modifiers {
                                 private.tx.produce(Arc::new(TimedBytes {
                                     timestamp: Local::now(),
                                     message: b"\r\n".to_vec(),
@@ -396,7 +396,7 @@ impl InputsTask {
                             let mut command_line =
                                 Self::replace_tag_sequence(command_line, &private.tag_file);
 
-                            let end_bytes = if let KeyModifiers::SHIFT = key.modifiers {
+                            let end_bytes = if let KeyModifiers::ALT = key.modifiers {
                                 b"".as_slice()
                             } else {
                                 b"\r\n".as_slice()
