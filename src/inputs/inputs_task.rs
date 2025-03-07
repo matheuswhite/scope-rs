@@ -267,15 +267,33 @@ impl InputsTask {
             KeyCode::Right => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
-                if sw.cursor < sw.command_line.chars().count() {
-                    sw.cursor += 1;
+                match sw.mode {
+                    InputMode::Normal => {
+                        if sw.cursor < sw.command_line.chars().count() {
+                            sw.cursor += 1;
+                        }
+                    }
+                    InputMode::Search => {
+                        if sw.search_cursor < sw.search_buffer.chars().count() {
+                            sw.search_cursor += 1;
+                        }
+                    }
                 }
             }
             KeyCode::Left => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
-                if sw.cursor > 0 {
-                    sw.cursor -= 1;
+                match sw.mode {
+                    InputMode::Normal => {
+                        if sw.cursor > 0 {
+                            sw.cursor -= 1;
+                        }
+                    }
+                    InputMode::Search => {
+                        if sw.search_cursor > 0 {
+                            sw.search_cursor -= 1;
+                        }
+                    }
                 }
             }
             KeyCode::Up => {
