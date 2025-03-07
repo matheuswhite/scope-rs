@@ -441,8 +441,19 @@ impl GraphicsTask {
 
         let cursor = (rect.x + cursor + 2, rect.y + 1);
 
+        let current = if search_state.total > 0 {
+            format!("{}", search_state.current + 1)
+        } else {
+            "--".to_string()
+        };
+        let total = if search_state.total > 0 {
+            format!("{}", search_state.total)
+        } else {
+            "--".to_string()
+        };
+
         let block = Block::default()
-            .title(format!("{}/{}", search_state.current, search_state.total,))
+            .title(format!("[Aa][{}/{}] Search Mode", current, total,))
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
             .border_style(Style::default().fg(Color::Yellow));
