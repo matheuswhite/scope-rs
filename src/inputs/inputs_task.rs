@@ -248,20 +248,44 @@ impl InputsTask {
             KeyCode::Delete => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
-                sw.command_line = sw
-                    .command_line
-                    .chars()
-                    .enumerate()
-                    .filter_map(|(i, c)| if i != sw.cursor { Some(c) } else { None })
-                    .collect();
-                Self::update_tag_list();
+                match sw.mode {
+                    InputMode::Normal => {
+                        sw.command_line = sw
+                            .command_line
+                            .chars()
+                            .enumerate()
+                            .filter_map(|(i, c)| if i != sw.cursor { Some(c) } else { None })
+                            .collect();
+                        Self::update_tag_list();
 
-                if sw.command_line.chars().count() > 0
-                    && sw.command_line.chars().all(|x| x.is_whitespace())
-                {
-                    sw.command_line.clear();
-                    sw.cursor = 0;
-                    Self::set_hint(&mut sw.current_hint, &private.hints);
+                        if sw.command_line.chars().count() > 0
+                            && sw.command_line.chars().all(|x| x.is_whitespace())
+                        {
+                            sw.command_line.clear();
+                            sw.cursor = 0;
+                            Self::set_hint(&mut sw.current_hint, &private.hints);
+                        }
+                    }
+                    InputMode::Search => {
+                        sw.search_buffer = sw
+                            .search_buffer
+                            .chars()
+                            .enumerate()
+                            .filter_map(|(i, c)| if i != sw.search_cursor { Some(c) } else { None })
+                            .collect();
+                        Self::update_tag_list();
+
+                        if sw.search_buffer.chars().count() > 0
+                            && sw.search_buffer.chars().all(|x| x.is_whitespace())
+                        {
+                            sw.search_buffer.clear();
+                            sw.search_cursor = 0;
+                        }
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::SearchChange);
+                    }
                 }
             }
             KeyCode::Right => {
