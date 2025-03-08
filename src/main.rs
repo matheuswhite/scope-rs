@@ -5,6 +5,7 @@ extern crate core;
 mod graphics;
 mod infra;
 mod inputs;
+mod list;
 mod plugin;
 mod serial;
 
@@ -14,6 +15,7 @@ use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
 use infra::logger::Logger;
 use infra::mpmc::Channel;
 use inputs::inputs_task::{InputsConnections, InputsTask};
+use list::list_serial_ports;
 use plugin::engine::{PluginEngine, PluginEngineConnections};
 use serial::serial_if::{SerialConnections, SerialInterface, SerialSetup};
 use std::path::PathBuf;
@@ -43,6 +45,10 @@ pub enum Commands {
     Serial {
         port: Option<String>,
         baudrate: Option<u32>,
+    },
+    List {
+        #[clap(short, long)]
+        verbose: bool,
     },
     Ble {
         name_device: String,
@@ -172,6 +178,9 @@ fn main() -> Result<(), String> {
             return Err(
                 "Sorry! We're developing BLE interface and it's not available yet".to_string(),
             );
+        }
+        Commands::List { verbose } => {
+            return list_serial_ports(verbose);
         }
     };
 
