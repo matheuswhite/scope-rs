@@ -37,6 +37,7 @@ pub struct InputsShared {
     pub autocomplete_list: Vec<Arc<String>>,
     pub pattern: String,
     pub mode: InputMode,
+    pub is_case_sensitive: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -117,6 +118,17 @@ impl InputsTask {
                     InputMode::Search => {
                         sw.mode = InputMode::Normal;
                     }
+                }
+            }
+            KeyCode::Char('w') | KeyCode::Char('W') if key.modifiers == KeyModifiers::CONTROL => {
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                if matches!(sw.mode, InputMode::Search) {
+                    sw.is_case_sensitive = !sw.is_case_sensitive;
+
+                    let _ = private
+                        .graphics_cmd_sender
+                        .send(GraphicsCommand::SearchChange);
                 }
             }
             KeyCode::Char(c) => {

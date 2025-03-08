@@ -428,6 +428,7 @@ impl GraphicsTask {
         search_state: &SearchState,
         rect: Rect,
         frame: &mut Frame,
+        is_case_sensitive: bool,
     ) {
         let (text, cursor) = {
             let inputs_shared = inputs_shared
@@ -453,7 +454,12 @@ impl GraphicsTask {
         };
 
         let block = Block::default()
-            .title(format!("[Aa][{}/{}] Search Mode", current, total,))
+            .title(format!(
+                "[{}][{}/{}] Search Mode",
+                if is_case_sensitive { "Aa" } else { "--" },
+                current,
+                total
+            ))
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
             .border_style(Style::default().fg(Color::Yellow));
@@ -478,11 +484,11 @@ impl GraphicsTask {
         latency: u64,
         search_state: &SearchState,
     ) {
-        let input_mode = {
+        let (input_mode, is_case_sensitive) = {
             let inputs_shared = inputs_shared
                 .read()
                 .expect("Cannot get inputs lock for read");
-            inputs_shared.mode
+            (inputs_shared.mode, inputs_shared.is_case_sensitive)
         };
 
         match input_mode {
@@ -493,9 +499,13 @@ impl GraphicsTask {
                 rect,
                 latency,
             ),
-            inputs::inputs_task::InputMode::Search => {
-                Self::draw_command_bar_search_mode(inputs_shared, search_state, rect, frame)
-            }
+            inputs::inputs_task::InputMode::Search => Self::draw_command_bar_search_mode(
+                inputs_shared,
+                search_state,
+                rect,
+                frame,
+                is_case_sensitive,
+            ),
         }
     }
 
@@ -752,18 +762,19 @@ impl GraphicsTask {
                         }
                     }
                     GraphicsCommand::SearchChange => {
-                        let search_buffer = {
+                        let (search_buffer, is_case_sensitive) = {
                             let input_sr = private
                                 .inputs_shared
                                 .read()
                                 .expect("Cannot get input lock for read");
-                            input_sr.search_buffer.clone()
+                            (input_sr.search_buffer.clone(), input_sr.is_case_sensitive)
                         };
 
                         Self::update_search_state(
                             &mut private.search_state,
                             &private.history,
                             search_buffer,
+                            is_case_sensitive,
                         );
                     }
                     GraphicsCommand::Exit => break 'draw_loop,
@@ -887,6 +898,7 @@ impl GraphicsTask {
         search_state: &mut SearchState,
         history: &VecDeque<GraphicalMessage>,
         pattern: String,
+        is_case_sensitive: bool,
     ) {
         if pattern.is_empty() {
             *search_state = SearchState::default();
@@ -895,16 +907,28 @@ impl GraphicsTask {
 
         let mut entries = vec![];
 
+        let pattern = if !is_case_sensitive {
+            pattern.to_lowercase()
+        } else {
+            pattern
+        };
+
         for (line, message) in history.iter().enumerate() {
             let GraphicalMessage::Rx { message, .. } = message else {
                 continue;
             };
 
-            let mut message = message
+            let message = message
                 .iter()
                 .map(|(msg, _)| msg.to_owned())
                 .collect::<Vec<_>>()
                 .join("");
+
+            let mut message = if !is_case_sensitive {
+                message.to_lowercase()
+            } else {
+                message
+            };
 
             while let Some(column) = message.find(&pattern) {
                 entries.push(SearchEntry { line, column });
