@@ -852,6 +852,21 @@ impl GraphicsTask {
                 private.typewriter += new_messages.iter().map(|gm| gm.serialize()).collect();
                 private.history.extend(new_messages.into_iter());
                 new_messages = vec![];
+
+                let (search_buffer, is_case_sensitive) = {
+                    let input_sr = private
+                        .inputs_shared
+                        .read()
+                        .expect("Cannot get input lock for read");
+                    (input_sr.search_buffer.clone(), input_sr.is_case_sensitive)
+                };
+
+                Self::update_search_state(
+                    &mut private.search_state,
+                    &private.history,
+                    search_buffer,
+                    is_case_sensitive,
+                );
             }
 
             terminal

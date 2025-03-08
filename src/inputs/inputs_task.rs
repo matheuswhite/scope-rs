@@ -114,6 +114,10 @@ impl InputsTask {
                 match sw.mode {
                     InputMode::Normal => {
                         sw.mode = InputMode::Search;
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::SearchChange);
                     }
                     InputMode::Search => {
                         sw.mode = InputMode::Normal;
