@@ -130,6 +130,12 @@ fn app(
 
     let now_str = Local::now().format("%Y%m%d_%H%M%S");
     let storage_base_filename = format!("{}.txt", now_str);
+    let graphics_config = graphics::graphics_task::GraphicsConfig {
+        storage_base_filename,
+        is_true_color,
+        capacity,
+        latency,
+    };
     let graphics_connections = GraphicsConnections::new(
         logger.clone().with_source("graphics".to_string()),
         logger_receiver,
@@ -137,10 +143,7 @@ fn app(
         rx_channel_consumers.pop().unwrap(),
         inputs_shared,
         serial_shared,
-        storage_base_filename,
-        capacity,
-        is_true_color,
-        latency,
+        graphics_config,
     );
     let text_view = GraphicsTask::spawn_graphics_task(
         graphics_connections,

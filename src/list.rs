@@ -31,7 +31,7 @@ impl Column {
 
     pub fn max_size(&self) -> usize {
         let fields = self.fields.iter().map(|s| s.len()).collect::<Vec<_>>();
-        *vec![self.title.len()]
+        *[self.title.len()]
             .iter()
             .chain(&fields)
             .max()
@@ -62,7 +62,7 @@ struct Table<const N: usize> {
 impl<const N: usize> Table<N> {
     pub fn new(titles: [String; N]) -> Self {
         let mut obj = Self {
-            columns: titles.map(|title| Column::new(title)),
+            columns: titles.map(Column::new),
         };
 
         obj.columns[N - 1].set_alignment(Alignment::Left);
@@ -187,5 +187,5 @@ pub fn list_serial_ports(is_verbose: bool) -> Result<(), String> {
         list_serial_ports_non_verbose(ports);
     }
 
-    return Ok(());
+    Ok(())
 }

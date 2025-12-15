@@ -448,7 +448,7 @@ impl InputsTask {
                                 .map(|arg| arg.to_string())
                                 .collect();
 
-                            Self::handle_user_command(command_line_split, &private);
+                            Self::handle_user_command(command_line_split, private);
                         } else {
                             let command_line = Self::replace_hex_sequence(command_line);
                             let mut command_line =
@@ -483,15 +483,15 @@ impl InputsTask {
 
     fn handle_connect_command(command_line_split: Vec<String>, private: &InputsConnections) {
         fn mount_setup(option: &str, setup: Option<SerialSetup>) -> SerialSetup {
-            if option.chars().all(|x| x.is_digit(10)) {
+            if option.chars().all(|x| x.is_ascii_digit()) {
                 SerialSetup {
-                    baudrate: Some(u32::from_str_radix(option, 10).unwrap()),
-                    ..setup.unwrap_or(SerialSetup::default())
+                    baudrate: Some(option.parse::<u32>().unwrap()),
+                    ..setup.unwrap_or_default()
                 }
             } else {
                 SerialSetup {
                     port: Some(option.to_string()),
-                    ..setup.unwrap_or(SerialSetup::default())
+                    ..setup.unwrap_or_default()
                 }
             }
         }
@@ -555,10 +555,10 @@ impl InputsTask {
     }
 
     fn handle_user_command(command_line_split: Vec<String>, private: &InputsConnections) {
-        let Some(cmd_name) = command_line_split.get(0) else {
+        let Some(cmd_name) = command_line_split.first() else {
             private.tx.produce(Arc::new(TimedBytes {
                 timestamp: Local::now(),
-                message: vec!['!' as u8],
+                message: vec![b'!'],
             }));
             return;
         };
@@ -661,7 +661,6 @@ impl InputsTask {
                     }
                     _ => {
                         error!(private.logger, "Invalid command. Please, choose one of these options: load, reload, unload");
-                        return;
                     }
                 }
             }
@@ -783,15 +782,15 @@ impl InputsTask {
                 match c {
                     '0'..='9' => {
                         *hex_val.get_or_insert(0) <<= hex_shift;
-                        *hex_val.get_or_insert(0) |= c as u8 - '0' as u8;
+                        *hex_val.get_or_insert(0) |= c as u8 - b'0';
                     }
                     'a'..='f' => {
                         *hex_val.get_or_insert(0) <<= hex_shift;
-                        *hex_val.get_or_insert(0) |= c as u8 - 'a' as u8 + 0x0a;
+                        *hex_val.get_or_insert(0) |= c as u8 - b'a' + 0x0a;
                     }
                     'A'..='F' => {
                         *hex_val.get_or_insert(0) <<= hex_shift;
-                        *hex_val.get_or_insert(0) |= c as u8 - 'A' as u8 + 0x0A;
+                        *hex_val.get_or_insert(0) |= c as u8 - b'A' + 0x0A;
                     }
                     _ => {
                         if let Some(hex) = hex_val.take() {

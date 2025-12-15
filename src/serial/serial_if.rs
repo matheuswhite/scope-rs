@@ -206,7 +206,7 @@ impl SerialInterface {
                     if buffer[0] == b'\n' {
                         rx.produce(Arc::new(TimedBytes {
                             timestamp: Local::now(),
-                            message: line.drain(..).collect(),
+                            message: std::mem::take(&mut line),
                         }));
                         now = Instant::now();
                     }
@@ -235,7 +235,7 @@ impl SerialInterface {
                 if !line.is_empty() {
                     rx.produce(Arc::new(TimedBytes {
                         timestamp: Local::now(),
-                        message: line.drain(..).collect(),
+                        message: std::mem::take(&mut line),
                     }));
                 }
             }
@@ -365,7 +365,7 @@ impl SerialInterface {
         let last_mode = sw.mode;
         if has_changes {
             drop(sw);
-            let _ = Self::disconnect(shared.clone(), serial, &logger, &plugin_engine_cmd_sender);
+            let _ = Self::disconnect(shared.clone(), serial, logger, plugin_engine_cmd_sender);
 
             match last_mode {
                 SerialMode::Reconnecting => None,

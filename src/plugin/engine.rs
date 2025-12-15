@@ -1,7 +1,7 @@
 use super::{
     bridge::{PluginEngineGate, PluginMethodCallGate},
     messages::{self, PluginExternalRequest, PluginMethodMessage, PluginResponse},
-    plugin::{Plugin, PluginUnloadMode},
+    Plugin, PluginUnloadMode,
 };
 use crate::{
     error,
@@ -83,7 +83,7 @@ impl PluginEngine {
     ) {
         let rt = Runtime::new().expect("Cannot create tokio runtime");
 
-        let _ = rt.block_on(async {
+        rt.block_on(async {
             let local = task::LocalSet::new();
 
             local
@@ -138,7 +138,7 @@ impl PluginEngine {
                                 (),
                                 false,
                             );
-                            plugin.set_unload_mode(super::plugin::PluginUnloadMode::Reload);
+                            plugin.set_unload_mode(PluginUnloadMode::Reload);
 
                             continue 'plugin_engine_loop;
                         }
@@ -172,7 +172,7 @@ impl PluginEngine {
                             (),
                             false,
                         );
-                        plugin.set_unload_mode(super::plugin::PluginUnloadMode::Unload);
+                        plugin.set_unload_mode(PluginUnloadMode::Unload);
                     }
                     PluginEngineCommand::UserCommand {
                         plugin_name,
@@ -347,16 +347,13 @@ impl PluginEngine {
                 }
             }
 
-            serial_recv_reqs = serial_recv_reqs
-                .into_iter()
-                .filter(|PluginMethodMessage { data, .. }| {
+            serial_recv_reqs.retain(|PluginMethodMessage { data, .. }| {
                     if let PluginExternalRequest::SerialRecv { timeout } = data {
                         Instant::now() < *timeout
                     } else {
                         false
                     }
-                })
-                .collect();
+                });
 
             if let Ok(rx_msg) = private.rx.try_recv() {
                 for plugin in plugin_list.values_mut() {
@@ -398,8 +395,7 @@ impl PluginEngine {
         Path::new(filepath)
             .with_extension("")
             .file_name()
-            .map(|filename| filename.to_str())
-            .flatten()
+            .and_then(|filename| filename.to_str())
             .map(|filename| filename.to_string())
     }
 

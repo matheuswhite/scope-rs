@@ -7,7 +7,7 @@ impl SliceExt<u8> for Vec<u8> {
     fn contains(&self, pat: &[u8]) -> bool {
         self.iter()
             .enumerate()
-            .any(|(i, byte)| pat.get(0) == Some(byte) && Some(pat) == self.get(i..(i + pat.len())))
+            .any(|(i, byte)| pat.first() == Some(byte) && Some(pat) == self.get(i..(i + pat.len())))
     }
 
     fn replace(&self, from: &[u8], to: &[u8]) -> Self {

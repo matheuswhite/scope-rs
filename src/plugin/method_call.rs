@@ -13,9 +13,19 @@ use super::{
 use mlua::{Function, IntoLuaMulti, Lua, Table, Thread, Value};
 use regex::Regex;
 use std::{
-    hash::{DefaultHasher, Hash, Hasher},
-    sync::Arc,
+    hash::{DefaultHasher, Hash, Hasher}, rc::Rc, sync::Arc
 };
+
+pub struct PluginMethodCallArgs<T> {
+    pub plugin_name: Arc<String>,
+    pub fn_name: String,
+    pub index: u128,
+    pub lua: Rc<Lua>,
+    pub initial_args: T,
+    pub gate: PluginMethodCallGate,
+    pub logger: Logger,
+    pub has_unpack: bool,
+}
 
 pub struct PluginMethodCall {
     plugin_name: Arc<String>,
@@ -27,16 +37,19 @@ pub struct PluginMethodCall {
 }
 
 impl PluginMethodCall {
-    pub fn spawn(
-        plugin_name: Arc<String>,
-        fn_name: String,
-        index: u128,
-        lua: Arc<Lua>,
-        initial_args: impl for<'a> IntoLuaMulti<'a> + 'static,
-        gate: PluginMethodCallGate,
-        logger: Logger,
-        has_unpack: bool,
+    pub fn spawn<T: for<'a> IntoLuaMulti<'a> + 'static>(
+        args: PluginMethodCallArgs<T>,
     ) {
+        let PluginMethodCallArgs {
+            plugin_name,
+            fn_name,
+            index,
+            lua,
+            initial_args,
+            gate,
+            logger,
+            has_unpack,
+        } = args;
         let mut hasher = DefaultHasher::new();
         plugin_name.hash(&mut hasher);
         fn_name.hash(&mut hasher);
@@ -96,12 +109,12 @@ impl PluginMethodCall {
             .await
             .map_err(|err| err.to_string())?;
 
-        let Some(mut table) = self.call_fn_inner(&lua, &thread, initial_args).await? else {
+        let Some(mut table) = self.call_fn_inner(lua, &thread, initial_args).await? else {
             return Ok(());
         };
 
         'run_loop: loop {
-            match self.call_fn_inner(&lua, &thread, table).await {
+            match self.call_fn_inner(lua, &thread, table).await {
                 Ok(Some(t)) => table = t,
                 Ok(None) => break 'run_loop Ok(()),
                 Err(err) => break 'run_loop Err(err),
@@ -197,7 +210,7 @@ impl PluginMethodCall {
             } => {
                 let pos = pattern_table
                     .iter()
-                    .filter_map(|pattern| Regex::new(&pattern).ok())
+                    .filter_map(|pattern| Regex::new(pattern).ok())
                     .position(|re| re.is_match(&string));
                 let pattern = pos
                     .and_then(|pos| pattern_table.get(pos))

@@ -31,7 +31,6 @@ use ratatui::{
 };
 use std::collections::VecDeque;
 use std::thread::{sleep, yield_now};
-use std::u16;
 use std::{
     cmp::{max, min},
     time::Duration,
@@ -45,6 +44,13 @@ use std::{
 };
 
 pub type GraphicsTask = Task<(), GraphicsCommand>;
+
+pub struct GraphicsConfig {
+    pub storage_base_filename: String,
+    pub capacity: usize,
+    pub is_true_color: bool,
+    pub latency: u64,
+}
 
 pub struct GraphicsConnections {
     logger: Logger,
@@ -134,7 +140,7 @@ impl GraphicsTask {
     ) {
         private.last_frame_size = frame.size();
         if private.auto_scroll {
-            private.scroll.0 = Self::max_main_axis(&private);
+            private.scroll.0 = Self::max_main_axis(private);
         }
         let scroll = private.scroll;
 
@@ -850,7 +856,7 @@ impl GraphicsTask {
                     }
                 }
                 private.typewriter += new_messages.iter().map(|gm| gm.serialize()).collect();
-                private.history.extend(new_messages.into_iter());
+                private.history.extend(new_messages);
                 new_messages = vec![];
 
                 let (search_buffer, is_case_sensitive) = {
@@ -1007,9 +1013,9 @@ impl GraphicsTask {
 
         for byte in msg {
             match *byte {
-                x if 0x20 <= x && x <= 0x7E => {
+                x if (0x20..=0x7E).contains(&x) => {
                     if !in_plain_text {
-                        output.push((buffer.drain(..).collect(), accent_color));
+                        output.push((std::mem::take(&mut buffer), accent_color));
                         in_plain_text = true;
                     }
 
@@ -1017,7 +1023,7 @@ impl GraphicsTask {
                 }
                 x => {
                     if in_plain_text {
-                        output.push((buffer.drain(..).collect(), color));
+                        output.push((std::mem::take(&mut buffer), color));
                         in_plain_text = false;
                     }
 
@@ -1037,7 +1043,7 @@ impl GraphicsTask {
         output
     }
 
-    fn timestamp_span(timestamp: &DateTime<Local>) -> Span {
+    fn timestamp_span(timestamp: &DateTime<Local>) -> Span<'_> {
         Span::styled(
             format!("{} ", timestamp.format("%H:%M:%S.%3f")),
             Style::default().fg(Color::DarkGray),
@@ -1051,7 +1057,7 @@ impl GraphicsTask {
             level,
         }: &LogMessage,
         (_scroll_y, scroll_x): (u16, u16),
-    ) -> Line {
+    ) -> Line<'_> {
         let scroll_x = scroll_x as usize;
         let mut spans = vec![Self::timestamp_span(timestamp)];
         let (bg, fg) = match level {
@@ -1093,7 +1099,7 @@ impl GraphicsTask {
     ) -> Line<'a> {
         let scroll_x = scroll_x as usize;
         let mut offset = 0;
-        let mut spans = vec![Self::timestamp_span(&timestamp)];
+        let mut spans = vec![Self::timestamp_span(timestamp)];
 
         for (msg, fg) in message {
             if scroll_x >= msg.len() + offset {
@@ -1104,7 +1110,7 @@ impl GraphicsTask {
             let cropped_message = if scroll_x < (msg.len() + offset) && scroll_x >= offset {
                 &msg[(scroll_x - offset)..]
             } else {
-                &msg
+                msg
             };
             offset += msg.len();
 
@@ -1125,7 +1131,7 @@ impl GraphicsTask {
         pattern: &str,
     ) -> Line<'a> {
         let scroll_x = scroll_x as usize;
-        let mut spans = vec![Self::timestamp_span(&timestamp)];
+        let mut spans = vec![Self::timestamp_span(timestamp)];
         let pattern_len = pattern.len();
 
         let mut message_and_color = vec![];
@@ -1200,11 +1206,7 @@ impl GraphicsTask {
         let main_axis_length = private.last_frame_size.height - Self::COMMAND_BAR_HEIGHT - 2;
         let history_len = Self::history_length(private) as u16;
 
-        if history_len > main_axis_length {
-            history_len - main_axis_length
-        } else {
-            0
-        }
+        history_len.saturating_sub(main_axis_length)
     }
 }
 
@@ -1216,10 +1218,7 @@ impl GraphicsConnections {
         rx: Consumer<Arc<TimedBytes>>,
         inputs_shared: Shared<InputsShared>,
         serial_shared: Shared<SerialShared>,
-        storage_base_filename: String,
-        capacity: usize,
-        is_true_color: bool,
-        latency: u64,
+        config: GraphicsConfig,
     ) -> Self {
         Self {
             logger,
@@ -1229,15 +1228,15 @@ impl GraphicsConnections {
             inputs_shared,
             serial_shared,
             history: VecDeque::new(),
-            typewriter: TypeWriter::new(storage_base_filename.clone()),
-            recorder: Recorder::new(storage_base_filename).expect("Cannot create Recorder"),
-            capacity,
+            typewriter: TypeWriter::new(config.storage_base_filename.clone()),
+            recorder: Recorder::new(config.storage_base_filename).expect("Cannot create Recorder"),
+            capacity: config.capacity,
             auto_scroll: true,
             scroll: (0, 0),
             last_frame_size: Rect::new(0, 0, u16::MAX, u16::MAX),
             system_log_level: LogLevel::Debug,
-            is_true_color,
-            latency,
+            is_true_color: config.is_true_color,
+            latency: config.latency,
             search_state: SearchState {
                 entries: vec![],
                 current: 0,
