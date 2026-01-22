@@ -758,7 +758,7 @@ impl InputsTask {
     fn replace_hex_sequence(command_line: String) -> Vec<u8> {
         let mut output = vec![];
         let mut in_hex_seq = false;
-        let valid = "0123456789abcdefABCDEF,_-.";
+        let valid = "0123456789abcdefABCDEF,_-. ";
         let mut hex_shift = 0;
         let mut hex_val = None;
 
