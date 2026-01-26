@@ -913,7 +913,7 @@ impl GraphicsTask {
         pattern: String,
         is_case_sensitive: bool,
     ) {
-        let screen_center_y = Self::max_main_axis(private) / 2;
+        let screen_center_y = (private.last_frame_size.height - Self::COMMAND_BAR_HEIGHT - 2) / 2;
         let history = &private.history;
         let search_state = &mut private.search_state;
 
@@ -955,22 +955,26 @@ impl GraphicsTask {
 
         search_state.total = entries.len();
         search_state.entries = entries;
+
+        if search_state.total == 0 {
+            search_state.current = 0;
+            return;
+        }
+
         search_state.current = if search_state.current > search_state.total - 1 {
             search_state.total - 1
         } else {
             search_state.current
         };
 
-        if !search_state.entries.is_empty() {
-            private.scroll.0 = search_state.entries[search_state.current].line as u16;
-            private.scroll.0 = private.scroll.0.saturating_sub(screen_center_y);
-            private.scroll.1 = search_state.entries[search_state.current].column as u16;
-            private.scroll.1 = private
-                .scroll
-                .1
-                .saturating_sub(private.last_frame_size.width / 2);
-            private.auto_scroll = false;
-        }
+        private.scroll.0 = search_state.entries[search_state.current].line as u16;
+        private.scroll.0 = private.scroll.0.saturating_sub(screen_center_y);
+        private.scroll.1 = search_state.entries[search_state.current].column as u16;
+        private.scroll.1 = private
+            .scroll
+            .1
+            .saturating_sub(private.last_frame_size.width / 2);
+        private.auto_scroll = false;
     }
 
     fn ansi_colors(patterns: &[(&[u8], Color)], msg: &[u8]) -> Vec<(String, Color)> {
