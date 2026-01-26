@@ -725,6 +725,9 @@ impl GraphicsTask {
                     }
                     GraphicsCommand::NextSearch => {
                         if private.search_state.total > 0 {
+                            let screen_center_y =
+                                (private.last_frame_size.height - Self::COMMAND_BAR_HEIGHT - 2) / 2;
+
                             private.search_state.current += 1;
                             private.search_state.current %= private.search_state.total;
                             private.scroll.0 = private.search_state.entries
@@ -738,14 +741,13 @@ impl GraphicsTask {
                                 .scroll
                                 .1
                                 .saturating_sub(private.last_frame_size.width / 2);
-                            private.scroll.0 = private
-                                .scroll
-                                .0
-                                .saturating_sub(private.last_frame_size.height / 2);
+                            private.scroll.0 = private.scroll.0.saturating_sub(screen_center_y);
                         }
                     }
                     GraphicsCommand::PrevSearch => {
                         if private.search_state.total > 0 {
+                            let screen_center_y =
+                                (private.last_frame_size.height - Self::COMMAND_BAR_HEIGHT - 2) / 2;
                             let new_current = private.search_state.current as isize - 1;
                             if new_current < 0 {
                                 private.search_state.current = private.search_state.total - 1;
@@ -764,10 +766,7 @@ impl GraphicsTask {
                                 .scroll
                                 .1
                                 .saturating_sub(private.last_frame_size.width / 2);
-                            private.scroll.0 = private
-                                .scroll
-                                .0
-                                .saturating_sub(private.last_frame_size.height / 2);
+                            private.scroll.0 = private.scroll.0.saturating_sub(screen_center_y);
                         }
                     }
                     GraphicsCommand::SearchChange => {
