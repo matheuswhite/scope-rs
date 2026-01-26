@@ -4,11 +4,11 @@ pub mod messages;
 pub mod method_call;
 pub mod shell;
 
-use bridge::PluginMethodCallGate;
-use method_call::PluginMethodCall;
 use crate::infra::logger::Logger;
 use crate::infra::LogLevel;
 use crate::plugin::method_call::PluginMethodCallArgs;
+use bridge::PluginMethodCallGate;
+use method_call::PluginMethodCall;
 use mlua::{Function, IntoLuaMulti, Lua, LuaOptions, Table};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;

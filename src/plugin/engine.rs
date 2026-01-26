@@ -348,12 +348,12 @@ impl PluginEngine {
             }
 
             serial_recv_reqs.retain(|PluginMethodMessage { data, .. }| {
-                    if let PluginExternalRequest::SerialRecv { timeout } = data {
-                        Instant::now() < *timeout
-                    } else {
-                        false
-                    }
-                });
+                if let PluginExternalRequest::SerialRecv { timeout } = data {
+                    Instant::now() < *timeout
+                } else {
+                    false
+                }
+            });
 
             if let Ok(rx_msg) = private.rx.try_recv() {
                 for plugin in plugin_list.values_mut() {
