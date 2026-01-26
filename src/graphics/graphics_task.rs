@@ -301,7 +301,10 @@ impl GraphicsTask {
                         .iter()
                         .enumerate()
                         .filter_map(|(i, SearchEntry { line, column })| {
-                            if current_line == *line {
+                            let line = *line as isize;
+                            let line = line - (scroll.0 as isize);
+
+                            if current_line as isize == line {
                                 Some(SearchDrawEntry {
                                     column: *column,
                                     is_active: i == current_active,
@@ -776,12 +779,7 @@ impl GraphicsTask {
                             (input_sr.search_buffer.clone(), input_sr.is_case_sensitive)
                         };
 
-                        Self::update_search_state(
-                            &mut private.search_state,
-                            &private.history,
-                            search_buffer,
-                            is_case_sensitive,
-                        );
+                        Self::update_search_state(&mut private, search_buffer, is_case_sensitive);
                     }
                     GraphicsCommand::Exit => break 'draw_loop,
                 }
@@ -867,12 +865,7 @@ impl GraphicsTask {
                     (input_sr.search_buffer.clone(), input_sr.is_case_sensitive)
                 };
 
-                Self::update_search_state(
-                    &mut private.search_state,
-                    &private.history,
-                    search_buffer,
-                    is_case_sensitive,
-                );
+                Self::update_search_state(&mut private, search_buffer, is_case_sensitive);
             }
 
             terminal
@@ -916,11 +909,14 @@ impl GraphicsTask {
     }
 
     fn update_search_state(
-        search_state: &mut SearchState,
-        history: &VecDeque<GraphicalMessage>,
+        private: &mut GraphicsConnections,
         pattern: String,
         is_case_sensitive: bool,
     ) {
+        let screen_center_y = Self::max_main_axis(private) / 2;
+        let history = &private.history;
+        let search_state = &mut private.search_state;
+
         if pattern.is_empty() {
             *search_state = SearchState::default();
             return;
@@ -957,9 +953,24 @@ impl GraphicsTask {
             }
         }
 
-        search_state.current = 0;
         search_state.total = entries.len();
         search_state.entries = entries;
+        search_state.current = if search_state.current > search_state.total - 1 {
+            search_state.total - 1
+        } else {
+            search_state.current
+        };
+
+        if !search_state.entries.is_empty() {
+            private.scroll.0 = search_state.entries[search_state.current].line as u16;
+            private.scroll.0 = private.scroll.0.saturating_sub(screen_center_y);
+            private.scroll.1 = search_state.entries[search_state.current].column as u16;
+            private.scroll.1 = private
+                .scroll
+                .1
+                .saturating_sub(private.last_frame_size.width / 2);
+            private.auto_scroll = false;
+        }
     }
 
     fn ansi_colors(patterns: &[(&[u8], Color)], msg: &[u8]) -> Vec<(String, Color)> {
