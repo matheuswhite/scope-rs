@@ -268,54 +268,60 @@ impl GraphicsTask {
         let current_active = private.search_state.current;
         let text = coll
             .enumerate()
-            .map(|(current_line, msg)| match msg {
-                GraphicalMessage::Log(log_msg) => Self::line_for_search_mode(
-                    &log_msg.timestamp,
-                    log_msg.message.to_owned(),
-                    scroll,
-                    vec![],
-                    pattern,
-                ),
-                GraphicalMessage::Tx { timestamp, message } => Self::line_for_search_mode(
-                    timestamp,
-                    message
-                        .iter()
-                        .map(|(msg, _)| msg.to_owned())
-                        .collect::<Vec<_>>()
-                        .join(""),
-                    scroll,
-                    vec![],
-                    pattern,
-                ),
-                GraphicalMessage::Rx { timestamp, message } => Self::line_for_search_mode(
-                    timestamp,
-                    message
-                        .iter()
-                        .map(|(msg, _)| msg.to_owned())
-                        .collect::<Vec<_>>()
-                        .join(""),
-                    scroll,
-                    private
-                        .search_state
-                        .entries
-                        .iter()
-                        .enumerate()
-                        .filter_map(|(i, SearchEntry { line, column })| {
-                            let line = *line as isize;
-                            let line = line - (scroll.0 as isize);
+            .map(|(current_line, msg)| {
+                let filtered_search_entries = private
+                    .search_state
+                    .entries
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(i, SearchEntry { line, column })| {
+                        let line = *line as isize;
+                        let line = line - (scroll.0 as isize);
 
-                            if current_line as isize == line {
-                                Some(SearchDrawEntry {
-                                    column: *column,
-                                    is_active: i == current_active,
-                                })
-                            } else {
-                                None
-                            }
-                        })
-                        .collect(),
-                    pattern,
-                ),
+                        if current_line as isize == line {
+                            Some(SearchDrawEntry {
+                                column: *column,
+                                is_active: i == current_active,
+                            })
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                match msg {
+                    GraphicalMessage::Log(LogMessage {
+                        timestamp, message, ..
+                    }) => Self::line_for_search_mode(
+                        timestamp,
+                        message.to_owned(),
+                        scroll,
+                        filtered_search_entries,
+                        pattern,
+                    ),
+                    GraphicalMessage::Tx { timestamp, message } => Self::line_for_search_mode(
+                        timestamp,
+                        message
+                            .iter()
+                            .map(|(msg, _)| msg.to_owned())
+                            .collect::<Vec<_>>()
+                            .join(""),
+                        scroll,
+                        filtered_search_entries,
+                        pattern,
+                    ),
+                    GraphicalMessage::Rx { timestamp, message } => Self::line_for_search_mode(
+                        timestamp,
+                        message
+                            .iter()
+                            .map(|(msg, _)| msg.to_owned())
+                            .collect::<Vec<_>>()
+                            .join(""),
+                        scroll,
+                        filtered_search_entries,
+                        pattern,
+                    ),
+                }
             })
             .collect::<Vec<_>>();
         let paragraph = Paragraph::new(text).block(block);
@@ -930,15 +936,7 @@ impl GraphicsTask {
         };
 
         for (line, message) in history.iter().enumerate() {
-            let GraphicalMessage::Rx { message, .. } = message else {
-                continue;
-            };
-
-            let message = message
-                .iter()
-                .map(|(msg, _)| msg.to_owned())
-                .collect::<Vec<_>>()
-                .join("");
+            let message = message.get_full_message();
 
             let mut message = if !is_case_sensitive {
                 message.to_lowercase()
@@ -1298,6 +1296,22 @@ impl GraphicalMessage {
             GraphicalMessage::Log(LogMessage { timestamp, .. }) => timestamp,
             GraphicalMessage::Tx { timestamp, .. } => timestamp,
             GraphicalMessage::Rx { timestamp, .. } => timestamp,
+        }
+    }
+
+    pub fn get_full_message(&self) -> String {
+        match self {
+            GraphicalMessage::Log(LogMessage { message, .. }) => message.to_owned(),
+            GraphicalMessage::Tx { message, .. } => message
+                .iter()
+                .map(|(msg, _)| msg.to_owned())
+                .collect::<Vec<_>>()
+                .join(""),
+            GraphicalMessage::Rx { message, .. } => message
+                .iter()
+                .map(|(msg, _)| msg.to_owned())
+                .collect::<Vec<_>>()
+                .join(""),
         }
     }
 }
