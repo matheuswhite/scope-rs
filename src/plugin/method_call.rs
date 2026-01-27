@@ -13,7 +13,9 @@ use super::{
 use mlua::{Function, IntoLuaMulti, Lua, Table, Thread, Value};
 use regex::Regex;
 use std::{
-    hash::{DefaultHasher, Hash, Hasher}, rc::Rc, sync::Arc
+    hash::{DefaultHasher, Hash, Hasher},
+    rc::Rc,
+    sync::Arc,
 };
 
 pub struct PluginMethodCallArgs<T> {
@@ -37,9 +39,7 @@ pub struct PluginMethodCall {
 }
 
 impl PluginMethodCall {
-    pub fn spawn<T: for<'a> IntoLuaMulti<'a> + 'static>(
-        args: PluginMethodCallArgs<T>,
-    ) {
+    pub fn spawn<T: for<'a> IntoLuaMulti<'a> + 'static>(args: PluginMethodCallArgs<T>) {
         let PluginMethodCallArgs {
             plugin_name,
             fn_name,

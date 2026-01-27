@@ -31,11 +31,7 @@ impl Column {
 
     pub fn max_size(&self) -> usize {
         let fields = self.fields.iter().map(|s| s.len()).collect::<Vec<_>>();
-        *[self.title.len()]
-            .iter()
-            .chain(&fields)
-            .max()
-            .unwrap_or(&0)
+        *[self.title.len()].iter().chain(&fields).max().unwrap_or(&0)
     }
 
     pub fn title(&self) -> String {
