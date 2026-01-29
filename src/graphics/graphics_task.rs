@@ -89,6 +89,7 @@ pub enum GraphicsCommand {
     PrevSearch,
     SearchChange,
     Exit,
+    Redraw,
 }
 
 enum GraphicalMessage {
@@ -616,12 +617,22 @@ impl GraphicsTask {
             (b"\x1b[36m", Color::Cyan),
             (b"\x1b[37m", Color::White),
         ];
+        let mut need_redraw = true;
 
         'draw_loop: loop {
             blink.tick();
 
+            if blink.is_active() {
+                need_redraw = true;
+            }
+
             if let Ok(cmd) = cmd_receiver.try_recv() {
+                need_redraw = true;
+
                 match cmd {
+                    GraphicsCommand::Redraw => {
+                        need_redraw = true;
+                    }
                     GraphicsCommand::SetLogLevel(level) => {
                         private.system_log_level = level;
                         success!(private.logger, "Log setted to {:?}", level);
@@ -848,6 +859,7 @@ impl GraphicsTask {
             }
 
             if !new_messages.is_empty() {
+                need_redraw = true;
                 new_messages
                     .sort_by(|a, b| a.get_timestamp().partial_cmp(b.get_timestamp()).unwrap());
                 if private.recorder.is_recording() {
@@ -873,28 +885,31 @@ impl GraphicsTask {
                 Self::update_search_state(&mut private, search_buffer, is_case_sensitive);
             }
 
-            terminal
-                .draw(|f| {
-                    let chunks = Layout::default()
-                        .direction(Direction::Vertical)
-                        .constraints([
-                            Constraint::Length(f.size().height - Self::COMMAND_BAR_HEIGHT),
-                            Constraint::Length(Self::COMMAND_BAR_HEIGHT),
-                        ])
-                        .split(f.size());
+            if need_redraw {
+                need_redraw = false;
+                terminal
+                    .draw(|f| {
+                        let chunks = Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([
+                                Constraint::Length(f.size().height - Self::COMMAND_BAR_HEIGHT),
+                                Constraint::Length(Self::COMMAND_BAR_HEIGHT),
+                            ])
+                            .split(f.size());
 
-                    Self::draw_history(&mut private, f, chunks[0], blink.get_current());
-                    Self::draw_command_bar(
-                        &private.inputs_shared,
-                        &private.serial_shared,
-                        f,
-                        chunks[1],
-                        private.latency,
-                        &private.search_state,
-                    );
-                    Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
-                })
-                .expect("Error to draw");
+                        Self::draw_history(&mut private, f, chunks[0], blink.get_current());
+                        Self::draw_command_bar(
+                            &private.inputs_shared,
+                            &private.serial_shared,
+                            f,
+                            chunks[1],
+                            private.latency,
+                            &private.search_state,
+                        );
+                        Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
+                    })
+                    .expect("Error to draw");
+            }
 
             if private.latency > 0 {
                 sleep(Duration::from_micros(private.latency));

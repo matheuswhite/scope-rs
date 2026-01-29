@@ -34,4 +34,8 @@ impl Timer {
 
         true
     }
+
+    pub fn is_active(&self) -> bool {
+        self.now.is_some()
+    }
 }

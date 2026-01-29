@@ -13,6 +13,7 @@ pub struct Blink<T: Clone> {
     timer_off: Timer,
     total_blinks: usize,
     num_blinks: usize,
+    total_timer: Timer,
 }
 
 impl<T: Clone> Blink<T> {
@@ -25,11 +26,15 @@ impl<T: Clone> Blink<T> {
             timer_off: Timer::new(duration),
             total_blinks,
             num_blinks: 0,
+            total_timer: Timer::new(
+                duration * (total_blinks as u32) * 2 + Duration::from_millis(100),
+            ),
         }
     }
 
     pub fn start(&mut self) {
         self.num_blinks = 0;
+        self.total_timer.start();
         self.timer_on.start();
         self.current = self.on.clone();
     }
@@ -42,10 +47,16 @@ impl<T: Clone> Blink<T> {
         if self.timer_off.tick() {
             self.action(TimerOff);
         }
+
+        self.total_timer.tick();
     }
 
     pub fn get_current(&self) -> T {
         self.current.clone()
+    }
+
+    pub fn is_active(&self) -> bool {
+        self.total_timer.is_active()
     }
 }
 
