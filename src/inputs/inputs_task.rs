@@ -499,10 +499,8 @@ impl InputsTask {
                     }
                 }
             }
-            _ => return LoopStatus::Continue,
+            _ => {}
         }
-
-        let _ = private.graphics_cmd_sender.send(GraphicsCommand::Redraw);
 
         LoopStatus::Continue
     }
