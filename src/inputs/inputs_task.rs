@@ -772,8 +772,10 @@ impl InputsTask {
                 },
                 event::Event::Paste(_) => {}
                 event::Event::Resize(_, _) => {}
-                _ => {}
+                _ => continue 'input_loop,
             }
+
+            let _ = private.graphics_cmd_sender.send(GraphicsCommand::Redraw);
         }
     }
 
