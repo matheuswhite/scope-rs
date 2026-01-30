@@ -1,6 +1,7 @@
 use crate::{
-    error,
-    graphics::graphics_task::GraphicsCommand,
+    debug, error,
+    graphics::{graphics_task::GraphicsCommand, selection::ScreenPosition},
+    info,
     infra::{
         logger::{LogLevel, Logger},
         messages::TimedBytes,
@@ -9,18 +10,19 @@ use crate::{
     },
     plugin::engine::PluginEngineCommand,
     serial::serial_if::{SerialCommand, SerialSetup},
-    success,
+    success, warning,
 };
 use chrono::Local;
 use core::panic;
-use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton};
+use lipsum::lipsum;
 use rand::seq::SliceRandom;
 use serialport::FlowControl;
 use std::{
     path::PathBuf,
     sync::{
-        mpsc::{Receiver, Sender},
         Arc, RwLock,
+        mpsc::{Receiver, Sender},
     },
 };
 
@@ -58,6 +60,7 @@ pub struct InputsConnections {
     history: Vec<String>,
     backup_command_line: String,
     tag_file: PathBuf,
+    rx_channel: Producer<Arc<TimedBytes>>,
 }
 
 enum LoopStatus {
@@ -612,6 +615,9 @@ impl InputsTask {
                     }
                 }
             }
+            "ipsum" => {
+                Self::handle_ipsum_command(command_line_split, private);
+            }
             "connect" => {
                 Self::handle_connect_command(command_line_split, private);
             }
@@ -638,7 +644,10 @@ impl InputsTask {
                     "warning" | "wrn" => LogLevel::Warning,
                     "error" | "err" => LogLevel::Error,
                     _ => {
-                        error!(private.logger, "Invalid log level. Please, choose one of these options: debug, info, success, warning, error");
+                        error!(
+                            private.logger,
+                            "Invalid log level. Please, choose one of these options: debug, info, success, warning, error"
+                        );
                         return;
                     }
                 };
@@ -684,7 +693,10 @@ impl InputsTask {
                             .send(PluginEngineCommand::UnloadPlugin { plugin_name });
                     }
                     _ => {
-                        error!(private.logger, "Invalid command. Please, choose one of these options: load, reload, unload");
+                        error!(
+                            private.logger,
+                            "Invalid command. Please, choose one of these options: load, reload, unload"
+                        );
                     }
                 }
             }
@@ -708,6 +720,94 @@ impl InputsTask {
                         command,
                         options,
                     });
+            }
+        }
+    }
+
+    fn handle_ipsum_command(command_line_split: Vec<String>, private: &InputsConnections) {
+        let n_words = 10 + (rand::random::<u8>() % 91) as usize;
+        let split_size = 20 + (rand::random::<u8>()) as usize;
+        let ipsum = lipsum(n_words);
+        let ipsum = ipsum
+            .chars()
+            .collect::<Vec<char>>()
+            .chunks(split_size)
+            .map(|chunk| chunk.iter().collect::<String>())
+            .collect::<Vec<String>>()
+            .join("\r\n");
+        // let ipsum = ipsum
+        //     .chars()
+        //     .map(|c| {
+        //         let outcome = rand::random::<f32>();
+        //         if outcome <= 0.01 {
+        //             rand::random::<u8>() as char
+        //         } else {
+        //             c
+        //         }
+        //     })
+        //     .collect::<String>();
+
+        match command_line_split.len() {
+            1 => {
+                for line in ipsum.lines() {
+                    private.rx_channel.produce(Arc::new(TimedBytes {
+                        timestamp: Local::now(),
+                        message: line.as_bytes().to_vec(),
+                    }));
+                }
+            }
+            2 => {
+                let mode = command_line_split[1].as_str();
+
+                match mode {
+                    "error" => {
+                        for line in ipsum.lines() {
+                            error!(private.logger, "{}", line);
+                        }
+                    }
+                    "warning" => {
+                        for line in ipsum.lines() {
+                            warning!(private.logger, "{}", line);
+                        }
+                    }
+                    "success" => {
+                        for line in ipsum.lines() {
+                            success!(private.logger, "{}", line);
+                        }
+                    }
+                    "info" => {
+                        for line in ipsum.lines() {
+                            info!(private.logger, "{}", line);
+                        }
+                    }
+                    "debug" => {
+                        for line in ipsum.lines() {
+                            debug!(private.logger, "{}", line);
+                        }
+                    }
+                    "rx" => {
+                        for line in ipsum.lines() {
+                            private.rx_channel.produce(Arc::new(TimedBytes {
+                                timestamp: Local::now(),
+                                message: line.as_bytes().to_vec(),
+                            }));
+                        }
+                    }
+                    "tx" => {
+                        for line in ipsum.lines() {
+                            private.tx.produce(Arc::new(TimedBytes {
+                                timestamp: Local::now(),
+                                message: line.as_bytes().to_vec(),
+                            }));
+                        }
+                    }
+                    _ => {
+                        error!(private.logger, "Invalid mode for \"!ipsum\" command");
+                    }
+                }
+            }
+            _ => {
+                error!(private.logger, "Too many arguments for \"!ipsum\" command");
             }
         }
     }
@@ -765,6 +865,26 @@ impl InputsTask {
                     }
                     event::MouseEventKind::ScrollUp => {
                         let _ = private.graphics_cmd_sender.send(GraphicsCommand::ScrollUp);
+                    }
+                    event::MouseEventKind::Down(MouseButton::Left) => {
+                        let point = ScreenPosition {
+                            x: mouse_evt.column,
+                            y: mouse_evt.row,
+                        };
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::Click(point));
+                    }
+                    event::MouseEventKind::Drag(MouseButton::Left) => {
+                        let point = ScreenPosition {
+                            x: mouse_evt.column,
+                            y: mouse_evt.row,
+                        };
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::Move(point));
                     }
                     _ => {}
                 },
@@ -861,6 +981,7 @@ impl InputsConnections {
         serial_if_cmd_sender: Sender<SerialCommand>,
         plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
         tag_file: PathBuf,
+        rx_channel: Producer<Arc<TimedBytes>>,
     ) -> Self {
         Self {
             logger,
@@ -877,6 +998,7 @@ impl InputsConnections {
             history: vec![],
             backup_command_line: String::new(),
             tag_file,
+            rx_channel,
         }
     }
 }

@@ -103,6 +103,7 @@ fn app(
         serial_if_cmd_sender.clone(),
         plugin_engine_cmd_sender.clone(),
         tag_file,
+        rx_channel.clone().new_producer(),
     );
 
     let serial_if = SerialInterface::spawn_serial_interface(
