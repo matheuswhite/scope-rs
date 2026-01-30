@@ -1,5 +1,6 @@
-use super::bytes::SliceExt;
 use super::Serialize;
+use super::bytes::SliceExt;
+use crate::graphics::selection::{ScreenPosition, Selection, SelectionPosition};
 use crate::{error, info, inputs, success};
 use crate::{
     infra::{
@@ -19,15 +20,15 @@ use chrono::{DateTime, Local};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{block::Title, Block, BorderType, Borders, Clear, Paragraph},
-    Frame, Terminal,
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, block::Title},
 };
 use std::collections::VecDeque;
 use std::thread::{sleep, yield_now};
@@ -38,8 +39,8 @@ use std::{
 use std::{
     io,
     sync::{
-        mpsc::{Receiver, Sender},
         Arc, RwLock,
+        mpsc::{Receiver, Sender},
     },
 };
 
@@ -70,6 +71,7 @@ pub struct GraphicsConnections {
     is_true_color: bool,
     latency: u64,
     search_state: SearchState,
+    selection: Option<Selection>,
 }
 
 pub enum GraphicsCommand {
@@ -90,6 +92,8 @@ pub enum GraphicsCommand {
     SearchChange,
     Exit,
     Redraw,
+    Click(ScreenPosition),
+    Move(ScreenPosition),
 }
 
 enum GraphicalMessage {
@@ -180,10 +184,10 @@ impl GraphicsTask {
                 .title(format!(
                     "[{:03}][ASCII] {}",
                     coll_size,
-                    private.typewriter.get_filename()
+                    private.typewriter.get_filename(),
                 ))
                 .title(
-                    Title::from(format!("[{}]", private.typewriter.get_size()))
+                    Title::from(format!("[{}]", private.recorder.get_size()))
                         .alignment(Alignment::Right),
                 )
                 .borders(Borders::ALL)
@@ -192,8 +196,14 @@ impl GraphicsTask {
         };
 
         let text = coll
-            .map(|msg| match msg {
-                GraphicalMessage::Log(log_msg) => Self::line_from_log_message(log_msg, scroll),
+            .enumerate()
+            .map(|(current_line, msg)| match msg {
+                GraphicalMessage::Log(log_msg) => Self::line_from_log_message(
+                    log_msg,
+                    scroll,
+                    current_line,
+                    private.selection.as_ref(),
+                ),
                 GraphicalMessage::Tx { timestamp, message } => Self::line_from_message(
                     timestamp,
                     message,
@@ -203,10 +213,17 @@ impl GraphicsTask {
                         Color::Blue
                     },
                     scroll,
+                    current_line,
+                    private.selection.as_ref(),
                 ),
-                GraphicalMessage::Rx { timestamp, message } => {
-                    Self::line_from_message(timestamp, message, Color::Reset, scroll)
-                }
+                GraphicalMessage::Rx { timestamp, message } => Self::line_from_message(
+                    timestamp,
+                    message,
+                    Color::Reset,
+                    scroll,
+                    current_line,
+                    private.selection.as_ref(),
+                ),
             })
             .collect::<Vec<_>>();
         let paragraph = Paragraph::new(text).block(block);
@@ -299,6 +316,8 @@ impl GraphicsTask {
                         scroll,
                         filtered_search_entries,
                         pattern,
+                        current_line,
+                        private.selection.as_ref(),
                     ),
                     GraphicalMessage::Tx { timestamp, message } => Self::line_for_search_mode(
                         timestamp,
@@ -310,6 +329,8 @@ impl GraphicsTask {
                         scroll,
                         filtered_search_entries,
                         pattern,
+                        current_line,
+                        private.selection.as_ref(),
                     ),
                     GraphicalMessage::Rx { timestamp, message } => Self::line_for_search_mode(
                         timestamp,
@@ -321,6 +342,8 @@ impl GraphicsTask {
                         scroll,
                         filtered_search_entries,
                         pattern,
+                        current_line,
+                        private.selection.as_ref(),
                     ),
                 }
             })
@@ -628,10 +651,20 @@ impl GraphicsTask {
 
             if let Ok(cmd) = cmd_receiver.try_recv() {
                 need_redraw = true;
+                    
+                let size = private.last_frame_size.as_size();
 
                 match cmd {
                     GraphicsCommand::Redraw => {
                         need_redraw = true;
+                    }
+                    GraphicsCommand::Click(p) => {
+                        private.selection = Some(Selection::new(p, p, size));
+                    }
+                    GraphicsCommand::Move(p) => {
+                        if let Some(selection) = private.selection.as_mut() {
+                            selection.update(p, size);
+                        }
                     }
                     GraphicsCommand::SetLogLevel(level) => {
                         private.system_log_level = level;
@@ -862,13 +895,12 @@ impl GraphicsTask {
                 need_redraw = true;
                 new_messages
                     .sort_by(|a, b| a.get_timestamp().partial_cmp(b.get_timestamp()).unwrap());
-                if private.recorder.is_recording() {
-                    if let Err(err) = private
+                if private.recorder.is_recording()
+                    && let Err(err) = private
                         .recorder
                         .add_bulk_content(new_messages.iter().map(|gm| gm.serialize()).collect())
-                    {
-                        error!(private.logger, "{}", err);
-                    }
+                {
+                    error!(private.logger, "{}", err);
                 }
                 private.typewriter += new_messages.iter().map(|gm| gm.serialize()).collect();
                 private.history.extend(new_messages);
@@ -1070,23 +1102,36 @@ impl GraphicsTask {
         output
     }
 
-    fn timestamp_span(timestamp: &DateTime<Local>) -> Span<'_> {
+    fn timestamp_span(timestamp: &DateTime<Local>, is_reverse: bool) -> Span<'_> {
         Span::styled(
-            format!("{} ", timestamp.format("%H:%M:%S.%3f")),
-            Style::default().fg(Color::DarkGray),
+            format!("{}", timestamp.format("%H:%M:%S.%3f")),
+            if !is_reverse {
+                Style::default().fg(Color::DarkGray)
+            } else {
+                Style::default().fg(Color::DarkGray).bg(Color::White)
+            },
         )
     }
 
-    fn line_from_log_message(
+    fn line_from_log_message<'a>(
         LogMessage {
             timestamp,
             message,
             level,
-        }: &LogMessage,
-        (_scroll_y, scroll_x): (u16, u16),
-    ) -> Line<'_> {
+        }: &'a LogMessage,
+        (scroll_y, scroll_x): (u16, u16),
+        line: usize,
+        selection: Option<&Selection>,
+    ) -> Line<'a> {
+        let time_span = if let Some(selection) = selection
+            && selection.is_inside(line, (scroll_x, scroll_y))
+        {
+            Self::timestamp_span(timestamp, true)
+        } else {
+            Self::timestamp_span(timestamp, false)
+        };
+        let mut spans = vec![time_span, Span::raw(" ")];
         let scroll_x = scroll_x as usize;
-        let mut spans = vec![Self::timestamp_span(timestamp)];
         let (bg, fg) = match level {
             crate::infra::LogLevel::Error => (Color::Red, Color::White),
             crate::infra::LogLevel::Warning => (Color::Yellow, Color::Black),
@@ -1123,10 +1168,19 @@ impl GraphicsTask {
         message: &'a [(String, Color)],
         bg: Color,
         (_scroll_y, scroll_x): (u16, u16),
+        line: usize,
+        selection: Option<&Selection>,
     ) -> Line<'a> {
-        let scroll_x = scroll_x as usize;
         let mut offset = 0;
-        let mut spans = vec![Self::timestamp_span(timestamp)];
+        let time_span = if let Some(selection) = selection
+            && selection.is_inside(line, (0, 0))
+        {
+            Self::timestamp_span(timestamp, true)
+        } else {
+            Self::timestamp_span(timestamp, false)
+        };
+        let mut spans = vec![time_span, Span::raw(" ")];
+        let scroll_x = scroll_x as usize;
 
         for (msg, fg) in message {
             if scroll_x >= msg.len() + offset {
@@ -1139,12 +1193,78 @@ impl GraphicsTask {
             } else {
                 msg
             };
-            offset += msg.len();
 
-            spans.push(Span::styled(
-                cropped_message,
-                Style::default().fg(*fg).bg(bg),
-            ));
+            let selection_pos = if let Some(selection) = selection {
+                selection.selection_position(line, (0, 0))
+            } else {
+                SelectionPosition::Outside
+            };
+
+            // TODO: Resolve scroll_x
+            let start = offset;
+            let end = offset + msg.len();
+            let reverse_style = Style::default()
+                .fg(if bg == Color::Reset { Color::Black } else { bg })
+                .bg(if *fg == Color::Reset {
+                    Color::White
+                } else {
+                    *fg
+                });
+            let normal_style = Style::default().fg(*fg).bg(bg);
+
+            match selection_pos {
+                SelectionPosition::OneLine {
+                    start_column,
+                    end_column,
+                } => {
+                    let is_inside = |x| start <= x && x <= end;
+
+                    if is_inside(start_column) && is_inside(end_column) {
+                        let (non_selected_left, rest) = msg.split_at(start_column);
+                        let (selected_part, non_selected_right) =
+                            rest.split_at(end_column - start_column);
+                        spans.push(Span::styled(non_selected_left.to_string(), normal_style));
+                        spans.push(Span::styled(selected_part.to_string(), reverse_style));
+                        spans.push(Span::styled(non_selected_right.to_string(), normal_style));
+                    } else if is_inside(start_column) && !is_inside(end_column) {
+                        let (non_selected_left, selected_part) = msg.split_at(start_column);
+                        spans.push(Span::styled(non_selected_left.to_string(), normal_style));
+                        spans.push(Span::styled(selected_part.to_string(), reverse_style));
+                    } else if !is_inside(start_column) && is_inside(end_column) {
+                        let (selected_part, non_selected_right) = msg.split_at(end_column);
+                        spans.push(Span::styled(selected_part.to_string(), reverse_style));
+                        spans.push(Span::styled(non_selected_right.to_string(), normal_style));
+                    } else {
+                        spans.push(Span::styled(cropped_message, normal_style));
+                    }
+                }
+                SelectionPosition::Top { column } => {
+                    if start <= column && column <= end {
+                        let (non_selected_part, selected_part) = msg.split_at(column);
+                        spans.push(Span::styled(non_selected_part.to_string(), normal_style));
+                        spans.push(Span::styled(selected_part.to_string(), reverse_style));
+                    } else {
+                        spans.push(Span::styled(cropped_message, normal_style));
+                    }
+                }
+                SelectionPosition::Middle => {
+                    spans.push(Span::styled(cropped_message, reverse_style));
+                }
+                SelectionPosition::Bottom { column } => {
+                    if start <= column && column <= end {
+                        let (selected_part, non_selected_part) = msg.split_at(column);
+                        spans.push(Span::styled(selected_part.to_string(), reverse_style));
+                        spans.push(Span::styled(non_selected_part.to_string(), normal_style));
+                    } else {
+                        spans.push(Span::styled(cropped_message, normal_style));
+                    }
+                }
+                SelectionPosition::Outside => {
+                    spans.push(Span::styled(cropped_message, normal_style));
+                }
+            }
+
+            offset += msg.len();
         }
 
         Line::from(spans)
@@ -1153,12 +1273,21 @@ impl GraphicsTask {
     fn line_for_search_mode<'a>(
         timestamp: &'a DateTime<Local>,
         mut message: String,
-        (_scroll_y, scroll_x): (u16, u16),
+        (scroll_y, scroll_x): (u16, u16),
         filtered_search_entries: Vec<SearchDrawEntry>,
         pattern: &str,
+        line: usize,
+        selection: Option<&Selection>,
     ) -> Line<'a> {
+        let time_span = if let Some(selection) = selection
+            && selection.is_inside(line, (scroll_x, scroll_y))
+        {
+            Self::timestamp_span(timestamp, true)
+        } else {
+            Self::timestamp_span(timestamp, false)
+        };
+        let mut spans = vec![time_span, Span::raw(" ")];
         let scroll_x = scroll_x as usize;
-        let mut spans = vec![Self::timestamp_span(timestamp)];
         let pattern_len = pattern.len();
 
         let mut message_and_color = vec![];
@@ -1269,6 +1398,7 @@ impl GraphicsConnections {
                 current: 0,
                 total: 0,
             },
+            selection: None,
         }
     }
 }
