@@ -16,13 +16,13 @@ use chrono::Local;
 use core::panic;
 use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use lipsum::lipsum;
-use rand::{seq::SliceRandom, Rng};
+use rand::{Rng, seq::SliceRandom};
 use serialport::FlowControl;
 use std::{
     path::PathBuf,
     sync::{
-        mpsc::{Receiver, Sender},
         Arc, RwLock,
+        mpsc::{Receiver, Sender},
     },
 };
 
@@ -96,6 +96,9 @@ impl InputsTask {
                     InputMode::Normal => return LoopStatus::Break,
                     InputMode::Search => {
                         sw.mode = InputMode::Normal;
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::ChangeToNormalMode);
                         return LoopStatus::Continue;
                     }
                 }
@@ -120,10 +123,18 @@ impl InputsTask {
 
                         let _ = private
                             .graphics_cmd_sender
+                            .send(GraphicsCommand::ChangeToSearchMode);
+
+                        let _ = private
+                            .graphics_cmd_sender
                             .send(GraphicsCommand::SearchChange);
                     }
                     InputMode::Search => {
                         sw.mode = InputMode::Normal;
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::ChangeToNormalMode);
                     }
                 }
             }
@@ -428,7 +439,7 @@ impl InputsTask {
                     }
                 }
             }
-            KeyCode::Enter if key.modifiers == KeyModifiers::ALT => {
+            KeyCode::Enter if key.modifiers == KeyModifiers::CONTROL => {
                 let sr = shared.read().expect("Cannot get input lock for read");
 
                 if matches!(sr.mode, InputMode::Search) {
@@ -644,7 +655,10 @@ impl InputsTask {
                     "warning" | "wrn" => LogLevel::Warning,
                     "error" | "err" => LogLevel::Error,
                     _ => {
-                        error!(private.logger, "Invalid log level. Please, choose one of these options: debug, info, success, warning, error");
+                        error!(
+                            private.logger,
+                            "Invalid log level. Please, choose one of these options: debug, info, success, warning, error"
+                        );
                         return;
                     }
                 };
@@ -690,7 +704,10 @@ impl InputsTask {
                             .send(PluginEngineCommand::UnloadPlugin { plugin_name });
                     }
                     _ => {
-                        error!(private.logger, "Invalid command. Please, choose one of these options: load, reload, unload");
+                        error!(
+                            private.logger,
+                            "Invalid command. Please, choose one of these options: load, reload, unload"
+                        );
                     }
                 }
             }
@@ -731,6 +748,7 @@ impl InputsTask {
             .join("\r\n");
 
         let has_special_chars = command_line_split.iter().any(|s| s == "--sp");
+        let has_ansii_colors = command_line_split.iter().any(|s| s == "--ansi");
         let mode = command_line_split
             .get(1)
             .map(|s| s.as_str())
@@ -748,6 +766,40 @@ impl InputsTask {
                     }
                 })
                 .collect::<String>()
+        } else {
+            ipsum
+        };
+
+        let ipsum = if has_ansii_colors {
+            let colors = [
+                "\x1b[31m", // Red
+                "\x1b[32m", // Green
+                "\x1b[33m", // Yellow
+                "\x1b[34m", // Blue
+                "\x1b[35m", // Magenta
+                "\x1b[36m", // Cyan
+                "\x1b[37m", // White
+            ];
+
+            ipsum
+                .lines()
+                .map(|line| {
+                    if line.len() < 2 {
+                        return line.to_string();
+                    }
+
+                    let start = rand::thread_rng().gen_range(0..line.len().saturating_sub(1));
+                    let end = rand::thread_rng().gen_range(start + 1..=line.len());
+                    let colored_line = &line[start..end];
+                    let (left, line, right) = (&line[..start], colored_line, &line[end..]);
+                    let color = colors
+                        .choose(&mut rand::thread_rng())
+                        .unwrap_or(&"\x1b[37m");
+
+                    format!("{}{}{}{}{}", left, color, line, "\x1b[0m", right)
+                })
+                .collect::<Vec<String>>()
+                .join("\r\n")
         } else {
             ipsum
         };
@@ -799,7 +851,10 @@ impl InputsTask {
                 }
             }
             _ => {
-                error!(private.logger, "Invalid mode for \"!ipsum\" command. Valid modes are: rx, tx, dbg, inf, ok, warn, err");
+                error!(
+                    private.logger,
+                    "Invalid mode for \"!ipsum\" command. Valid modes are: rx, tx, dbg, inf, ok, warn, err"
+                );
             }
         }
     }
