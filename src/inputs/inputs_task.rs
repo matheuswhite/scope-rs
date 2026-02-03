@@ -16,7 +16,7 @@ use chrono::Local;
 use core::panic;
 use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use lipsum::lipsum;
-use rand::seq::SliceRandom;
+use rand::{seq::SliceRandom, Rng};
 use serialport::FlowControl;
 use std::{
     path::PathBuf,
@@ -719,7 +719,7 @@ impl InputsTask {
     }
 
     fn handle_ipsum_command(command_line_split: Vec<String>, private: &InputsConnections) {
-        let n_words = 10 + (rand::random::<u8>() % 91) as usize;
+        let n_words = rand::thread_rng().gen_range(10..=100);
         let split_size = 20 + (rand::random::<u8>()) as usize;
         let ipsum = lipsum(n_words);
         let ipsum = ipsum
@@ -731,6 +731,10 @@ impl InputsTask {
             .join("\r\n");
 
         let has_special_chars = command_line_split.iter().any(|s| s == "sp");
+        let mode = command_line_split
+            .get(1)
+            .map(|s| s.as_str())
+            .unwrap_or("rx");
 
         let ipsum = if has_special_chars {
             ipsum
@@ -748,8 +752,33 @@ impl InputsTask {
             ipsum
         };
 
-        match command_line_split.len() {
-            1 => {
+        match mode {
+            "err" => {
+                for line in ipsum.lines() {
+                    error!(private.logger, "{}", line);
+                }
+            }
+            "warn" => {
+                for line in ipsum.lines() {
+                    warning!(private.logger, "{}", line);
+                }
+            }
+            "ok" => {
+                for line in ipsum.lines() {
+                    success!(private.logger, "{}", line);
+                }
+            }
+            "inf" => {
+                for line in ipsum.lines() {
+                    info!(private.logger, "{}", line);
+                }
+            }
+            "dbg" => {
+                for line in ipsum.lines() {
+                    debug!(private.logger, "{}", line);
+                }
+            }
+            "rx" => {
                 for line in ipsum.lines() {
                     private.rx_channel.produce(Arc::new(TimedBytes {
                         timestamp: Local::now(),
@@ -757,58 +786,16 @@ impl InputsTask {
                     }));
                 }
             }
-            2 | 3 => {
-                let mode = command_line_split[1].as_str();
-
-                match mode {
-                    "err" => {
-                        for line in ipsum.lines() {
-                            error!(private.logger, "{}", line);
-                        }
-                    }
-                    "warn" => {
-                        for line in ipsum.lines() {
-                            warning!(private.logger, "{}", line);
-                        }
-                    }
-                    "ok" => {
-                        for line in ipsum.lines() {
-                            success!(private.logger, "{}", line);
-                        }
-                    }
-                    "inf" => {
-                        for line in ipsum.lines() {
-                            info!(private.logger, "{}", line);
-                        }
-                    }
-                    "dbg" => {
-                        for line in ipsum.lines() {
-                            debug!(private.logger, "{}", line);
-                        }
-                    }
-                    "rx" | "sp" => {
-                        for line in ipsum.lines() {
-                            private.rx_channel.produce(Arc::new(TimedBytes {
-                                timestamp: Local::now(),
-                                message: line.as_bytes().to_vec(),
-                            }));
-                        }
-                    }
-                    "tx" => {
-                        for line in ipsum.lines() {
-                            private.tx.produce(Arc::new(TimedBytes {
-                                timestamp: Local::now(),
-                                message: line.as_bytes().to_vec(),
-                            }));
-                        }
-                    }
-                    _ => {
-                        error!(private.logger, "Invalid mode for \"!ipsum\" command");
-                    }
+            "tx" => {
+                for line in ipsum.lines() {
+                    private.tx.produce(Arc::new(TimedBytes {
+                        timestamp: Local::now(),
+                        message: line.as_bytes().to_vec(),
+                    }));
                 }
             }
             _ => {
-                error!(private.logger, "Too many arguments for \"!ipsum\" command");
+                error!(private.logger, "Invalid mode for \"!ipsum\" command");
             }
         }
     }
