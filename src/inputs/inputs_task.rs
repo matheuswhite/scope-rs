@@ -720,7 +720,7 @@ impl InputsTask {
 
     fn handle_ipsum_command(command_line_split: Vec<String>, private: &InputsConnections) {
         let n_words = rand::thread_rng().gen_range(10..=100);
-        let split_size = 20 + (rand::random::<u8>()) as usize;
+        let split_size = rand::thread_rng().gen_range(20..=80);
         let ipsum = lipsum(n_words);
         let ipsum = ipsum
             .chars()
@@ -780,17 +780,19 @@ impl InputsTask {
             }
             "rx" => {
                 for line in ipsum.lines() {
+                    let message = format!("{}\r\n", line);
                     private.rx_channel.produce(Arc::new(TimedBytes {
                         timestamp: Local::now(),
-                        message: line.as_bytes().to_vec(),
+                        message: message.into_bytes(),
                     }));
                 }
             }
             "tx" => {
                 for line in ipsum.lines() {
+                    let message = format!("{}\r\n", line);
                     private.tx.produce(Arc::new(TimedBytes {
                         timestamp: Local::now(),
-                        message: line.as_bytes().to_vec(),
+                        message: message.into_bytes(),
                     }));
                 }
             }
