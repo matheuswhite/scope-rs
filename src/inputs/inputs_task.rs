@@ -730,7 +730,7 @@ impl InputsTask {
             .collect::<Vec<String>>()
             .join("\r\n");
 
-        let has_special_chars = command_line_split.iter().any(|s| s == "sp");
+        let has_special_chars = command_line_split.iter().any(|s| s == "--sp");
         let mode = command_line_split
             .get(1)
             .map(|s| s.as_str())
@@ -779,19 +779,21 @@ impl InputsTask {
                 }
             }
             "rx" => {
+                let timestamp = Local::now();
                 for line in ipsum.lines() {
                     let message = format!("{}\r\n", line);
                     private.rx_channel.produce(Arc::new(TimedBytes {
-                        timestamp: Local::now(),
+                        timestamp,
                         message: message.into_bytes(),
                     }));
                 }
             }
             "tx" => {
+                let timestamp = Local::now();
                 for line in ipsum.lines() {
                     let message = format!("{}\r\n", line);
                     private.tx.produce(Arc::new(TimedBytes {
-                        timestamp: Local::now(),
+                        timestamp,
                         message: message.into_bytes(),
                     }));
                 }
