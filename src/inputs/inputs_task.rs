@@ -1,6 +1,7 @@
 use crate::{
-    error,
+    debug, error,
     graphics::graphics_task::GraphicsCommand,
+    info,
     infra::{
         logger::{LogLevel, Logger},
         messages::TimedBytes,
@@ -9,12 +10,13 @@ use crate::{
     },
     plugin::engine::PluginEngineCommand,
     serial::serial_if::{SerialCommand, SerialSetup},
-    success,
+    success, warning,
 };
 use chrono::Local;
 use core::panic;
 use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use rand::seq::SliceRandom;
+use lipsum::lipsum;
+use rand::{seq::SliceRandom, Rng};
 use serialport::FlowControl;
 use std::{
     path::PathBuf,
@@ -58,6 +60,7 @@ pub struct InputsConnections {
     history: Vec<String>,
     backup_command_line: String,
     tag_file: PathBuf,
+    rx_channel: Producer<Arc<TimedBytes>>,
 }
 
 enum LoopStatus {
@@ -612,6 +615,9 @@ impl InputsTask {
                     }
                 }
             }
+            "ipsum" => {
+                Self::handle_ipsum_command(command_line_split, private);
+            }
             "connect" => {
                 Self::handle_connect_command(command_line_split, private);
             }
@@ -708,6 +714,92 @@ impl InputsTask {
                         command,
                         options,
                     });
+            }
+        }
+    }
+
+    fn handle_ipsum_command(command_line_split: Vec<String>, private: &InputsConnections) {
+        let n_words = rand::thread_rng().gen_range(10..=100);
+        let split_size = rand::thread_rng().gen_range(20..=80);
+        let ipsum = lipsum(n_words);
+        let ipsum = ipsum
+            .chars()
+            .collect::<Vec<char>>()
+            .chunks(split_size)
+            .map(|chunk| chunk.iter().collect::<String>())
+            .collect::<Vec<String>>()
+            .join("\r\n");
+
+        let has_special_chars = command_line_split.iter().any(|s| s == "--sp");
+        let mode = command_line_split
+            .get(1)
+            .map(|s| s.as_str())
+            .unwrap_or("rx");
+
+        let ipsum = if has_special_chars {
+            ipsum
+                .chars()
+                .map(|c| {
+                    let outcome = rand::random::<f32>();
+                    if outcome <= 0.01 {
+                        rand::random::<u8>() as char
+                    } else {
+                        c
+                    }
+                })
+                .collect::<String>()
+        } else {
+            ipsum
+        };
+
+        match mode {
+            "err" => {
+                for line in ipsum.lines() {
+                    error!(private.logger, "{}", line);
+                }
+            }
+            "warn" => {
+                for line in ipsum.lines() {
+                    warning!(private.logger, "{}", line);
+                }
+            }
+            "ok" => {
+                for line in ipsum.lines() {
+                    success!(private.logger, "{}", line);
+                }
+            }
+            "inf" => {
+                for line in ipsum.lines() {
+                    info!(private.logger, "{}", line);
+                }
+            }
+            "dbg" => {
+                for line in ipsum.lines() {
+                    debug!(private.logger, "{}", line);
+                }
+            }
+            "rx" => {
+                let timestamp = Local::now();
+                for line in ipsum.lines() {
+                    let message = format!("{}\r\n", line);
+                    private.rx_channel.produce(Arc::new(TimedBytes {
+                        timestamp,
+                        message: message.into_bytes(),
+                    }));
+                }
+            }
+            "tx" => {
+                let timestamp = Local::now();
+                for line in ipsum.lines() {
+                    let message = format!("{}\r\n", line);
+                    private.tx.produce(Arc::new(TimedBytes {
+                        timestamp,
+                        message: message.into_bytes(),
+                    }));
+                }
+            }
+            _ => {
+                error!(private.logger, "Invalid mode for \"!ipsum\" command. Valid modes are: rx, tx, dbg, inf, ok, warn, err");
             }
         }
     }
@@ -863,6 +955,7 @@ impl InputsConnections {
         serial_if_cmd_sender: Sender<SerialCommand>,
         plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
         tag_file: PathBuf,
+        rx_channel: Producer<Arc<TimedBytes>>,
     ) -> Self {
         Self {
             logger,
@@ -879,6 +972,7 @@ impl InputsConnections {
             history: vec![],
             backup_command_line: String::new(),
             tag_file,
+            rx_channel,
         }
     }
 }
