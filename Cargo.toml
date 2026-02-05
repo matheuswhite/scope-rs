@@ -42,7 +42,7 @@ clap = { version = "4.1.9", features = ["derive"] }
 mlua = { version = "0.9.6", features = ["lua54", "vendored", "async", "send"] }
 anyhow = "1.0.79"
 homedir = "0.2.1"
-tokio = { version = "1.36.0", features = ["full"] }
+tokio = { version = "1.43.1", features = ["full"] }
 regex = "1.10.5"
 lipsum = "0.9.1"
 
