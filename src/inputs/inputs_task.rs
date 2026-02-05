@@ -799,7 +799,7 @@ impl InputsTask {
                 }
             }
             _ => {
-                error!(private.logger, "Invalid mode for \"!ipsum\" command");
+                error!(private.logger, "Invalid mode for \"!ipsum\" command. Valid modes are: rx, tx, dbg, inf, ok, warn, err");
             }
         }
     }
