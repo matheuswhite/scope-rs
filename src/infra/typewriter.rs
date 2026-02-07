@@ -1,7 +1,5 @@
 use std::{fs::OpenOptions, io::Write, ops::AddAssign};
 
-use super::into_byte_format;
-
 pub struct TypeWriter {
     contents: Vec<String>,
     filename: String,
@@ -21,8 +19,8 @@ impl TypeWriter {
         self.filename.to_string()
     }
 
-    pub fn get_size(&self) -> String {
-        into_byte_format(self.file_size)
+    pub fn get_size(&self) -> u128 {
+        self.file_size
     }
 
     pub fn flush(&mut self) -> Result<(), String> {

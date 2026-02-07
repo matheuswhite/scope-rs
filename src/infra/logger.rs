@@ -1,4 +1,4 @@
-use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::mpsc::{Receiver, Sender, channel};
 
 use chrono::{DateTime, Local};
 
@@ -9,6 +9,7 @@ pub struct Logger {
     id: Option<String>,
 }
 
+#[derive(Clone)]
 pub struct LogMessage {
     pub timestamp: DateTime<Local>,
     pub message: String,

@@ -19,8 +19,8 @@ use list::list_serial_ports;
 use plugin::engine::{PluginEngine, PluginEngineConnections};
 use serial::serial_if::{SerialConnections, SerialInterface, SerialSetup};
 use std::path::PathBuf;
-use std::sync::mpsc::channel;
 use std::sync::Arc;
+use std::sync::mpsc::channel;
 
 const DEFAULT_CAPACITY: usize = 2000;
 const DEFAULT_TAG_FILE: &str = "tags.yml";
@@ -34,8 +34,6 @@ struct Cli {
     capacity: Option<usize>,
     #[clap(short, long)]
     tag_file: Option<PathBuf>,
-    #[clap(short, long)]
-    non_colorful: bool,
     #[clap(short, long)]
     latency: Option<u64>,
 }
@@ -61,7 +59,6 @@ fn app(
     tag_file: PathBuf,
     port: Option<String>,
     baudrate: Option<u32>,
-    is_true_color: bool,
     latency: u64,
 ) -> Result<(), String> {
     let (logger, logger_receiver) = Logger::new("main".to_string());
@@ -133,7 +130,6 @@ fn app(
     let storage_base_filename = format!("{}.txt", now_str);
     let graphics_config = graphics::graphics_task::GraphicsConfig {
         storage_base_filename,
-        is_true_color,
         capacity,
         latency,
     };
@@ -196,7 +192,6 @@ fn main() -> Result<(), String> {
         tag_file,
         port,
         baudrate,
-        !cli.non_colorful,
         cli.latency.unwrap_or(500).clamp(0, 100_000),
     ) {
         return Err(format!("[\x1b[31mERR\x1b[0m] {}", err));

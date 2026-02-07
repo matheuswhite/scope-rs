@@ -1,5 +1,6 @@
-use super::bytes::SliceExt;
 use super::Serialize;
+use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
+use crate::graphics::screen::Screen;
 use crate::{error, info, inputs, success};
 use crate::{
     infra::{
@@ -15,21 +16,19 @@ use crate::{
     serial::serial_if::{SerialMode, SerialShared},
     warning,
 };
-use chrono::{DateTime, Local};
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
+    Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{block::Title, Block, BorderType, Borders, Clear, Paragraph},
-    Frame, Terminal,
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
-use std::collections::VecDeque;
 use std::thread::{sleep, yield_now};
 use std::{
     cmp::{max, min},
@@ -38,8 +37,8 @@ use std::{
 use std::{
     io,
     sync::{
-        mpsc::{Receiver, Sender},
         Arc, RwLock,
+        mpsc::{Receiver, Sender},
     },
 };
 
@@ -48,7 +47,6 @@ pub type GraphicsTask = Task<(), GraphicsCommand>;
 pub struct GraphicsConfig {
     pub storage_base_filename: String,
     pub capacity: usize,
-    pub is_true_color: bool,
     pub latency: u64,
 }
 
@@ -60,16 +58,11 @@ pub struct GraphicsConnections {
     rx: Consumer<Arc<TimedBytes>>,
     inputs_shared: Shared<InputsShared>,
     serial_shared: Shared<SerialShared>,
-    history: VecDeque<GraphicalMessage>,
     typewriter: TypeWriter,
     recorder: Recorder,
-    capacity: usize,
-    auto_scroll: bool,
-    scroll: (u16, u16),
-    last_frame_size: Rect,
-    is_true_color: bool,
     latency: u64,
-    search_state: SearchState,
+    buffer: Buffer,
+    screen: Screen,
 }
 
 pub enum GraphicsCommand {
@@ -88,38 +81,68 @@ pub enum GraphicsCommand {
     NextSearch,
     PrevSearch,
     SearchChange,
+    ChangeToNormalMode,
+    ChangeToSearchMode,
     Exit,
     Redraw,
 }
 
-enum GraphicalMessage {
-    Log(LogMessage),
-    Tx {
-        timestamp: DateTime<Local>,
-        message: Vec<(String, Color)>,
-    },
-    Rx {
-        timestamp: DateTime<Local>,
-        message: Vec<(String, Color)>,
-    },
+pub struct SaveStats {
+    file_size: u128,
+    is_recording: bool,
+    filename: String,
+    is_saving: bool,
+    save_color: Color,
 }
 
-#[derive(Default)]
-struct SearchEntry {
-    line: usize,
-    column: usize,
-}
+impl SaveStats {
+    pub fn new(file_size: u128, filename: String, save_color: Color) -> Self {
+        Self {
+            file_size,
+            is_recording: false,
+            filename,
+            is_saving: false,
+            save_color,
+        }
+    }
 
-struct SearchDrawEntry {
-    column: usize,
-    is_active: bool,
-}
+    pub fn file_size(&self) -> u128 {
+        self.file_size
+    }
 
-#[derive(Default)]
-pub struct SearchState {
-    entries: Vec<SearchEntry>,
-    current: usize,
-    total: usize,
+    pub fn is_recording(&self) -> bool {
+        self.is_recording
+    }
+
+    pub fn is_saving(&self) -> bool {
+        self.is_saving
+    }
+
+    pub fn save_color(&self) -> Color {
+        self.save_color
+    }
+
+    pub fn filename(&self) -> &str {
+        &self.filename
+    }
+
+    pub fn convert_to_typewriter(self, typewriter: &TypeWriter) -> Self {
+        Self {
+            file_size: typewriter.get_size(),
+            filename: typewriter.get_filename(),
+            is_recording: false,
+            ..self
+        }
+    }
+
+    pub fn convert_to_recorder(self, recorder: &Recorder) -> Self {
+        Self {
+            file_size: recorder.get_size(),
+            filename: recorder.get_filename(),
+            is_recording: true,
+            ..self
+        }
+    }
 }
 
 impl GraphicsTask {
@@ -131,226 +154,6 @@ impl GraphicsTask {
         cmd_receiver: Receiver<GraphicsCommand>,
     ) -> Self {
         Self::new((), connections, Self::task, cmd_sender, cmd_receiver)
-    }
-
-    fn draw_history_normal_mode(
-        private: &mut GraphicsConnections,
-        frame: &mut Frame,
-        rect: Rect,
-        blink_color: Color,
-    ) {
-        private.last_frame_size = frame.size();
-        if private.auto_scroll {
-            private.scroll.0 = Self::max_main_axis(private);
-        }
-        let scroll = private.scroll;
-
-        let (coll, coll_size) = (
-            private.history.range(scroll.0 as usize..).filter(|msg| {
-                if let GraphicalMessage::Log(log) = msg {
-                    log.level as u32 <= private.system_log_level as u32
-                } else {
-                    true
-                }
-            }),
-            Self::history_length(private),
-        );
-        let border_type = if private.auto_scroll {
-            BorderType::Thick
-        } else {
-            BorderType::Double
-        };
-
-        let block = if private.recorder.is_recording() {
-            Block::default()
-                .title(format!(
-                    "[{:03}][ASCII] ◉ {}",
-                    coll_size,
-                    private.recorder.get_filename()
-                ))
-                .title(
-                    Title::from(format!("[{}]", private.recorder.get_size()))
-                        .alignment(Alignment::Right),
-                )
-                .borders(Borders::ALL)
-                .border_type(border_type)
-                .border_style(Style::default().fg(Color::Yellow))
-        } else {
-            Block::default()
-                .title(format!(
-                    "[{:03}][ASCII] {}",
-                    coll_size,
-                    private.typewriter.get_filename()
-                ))
-                .title(
-                    Title::from(format!("[{}]", private.typewriter.get_size()))
-                        .alignment(Alignment::Right),
-                )
-                .borders(Borders::ALL)
-                .border_type(border_type)
-                .border_style(Style::default().fg(blink_color))
-        };
-
-        let text = coll
-            .map(|msg| match msg {
-                GraphicalMessage::Log(log_msg) => Self::line_from_log_message(log_msg, scroll),
-                GraphicalMessage::Tx { timestamp, message } => Self::line_from_message(
-                    timestamp,
-                    message,
-                    if private.is_true_color {
-                        Color::Rgb(12, 129, 123)
-                    } else {
-                        Color::Blue
-                    },
-                    scroll,
-                ),
-                GraphicalMessage::Rx { timestamp, message } => {
-                    Self::line_from_message(timestamp, message, Color::Reset, scroll)
-                }
-            })
-            .collect::<Vec<_>>();
-        let paragraph = Paragraph::new(text).block(block);
-        frame.render_widget(paragraph, rect);
-    }
-
-    fn draw_history_search_mode(
-        private: &mut GraphicsConnections,
-        frame: &mut Frame,
-        rect: Rect,
-        blink_color: Color,
-        pattern: &str,
-    ) {
-        private.last_frame_size = frame.size();
-        private.auto_scroll = false;
-        let scroll = private.scroll;
-
-        let (coll, coll_size) = (
-            private.history.range(scroll.0 as usize..).filter(|msg| {
-                if let GraphicalMessage::Log(log) = msg {
-                    log.level as u32 <= private.system_log_level as u32
-                } else {
-                    true
-                }
-            }),
-            Self::history_length(private),
-        );
-        let border_type = BorderType::Double;
-
-        let block = if private.recorder.is_recording() {
-            Block::default()
-                .title(format!(
-                    "[{:03}][ASCII] ◉ {}",
-                    coll_size,
-                    private.recorder.get_filename()
-                ))
-                .title(
-                    Title::from(format!("[{}]", private.recorder.get_size()))
-                        .alignment(Alignment::Right),
-                )
-                .borders(Borders::ALL)
-                .border_type(border_type)
-                .border_style(Style::default().fg(Color::Yellow))
-        } else {
-            Block::default()
-                .title(format!(
-                    "[{:03}][ASCII] {}",
-                    coll_size,
-                    private.typewriter.get_filename()
-                ))
-                .title(
-                    Title::from(format!("[{}]", private.typewriter.get_size()))
-                        .alignment(Alignment::Right),
-                )
-                .borders(Borders::ALL)
-                .border_type(border_type)
-                .border_style(Style::default().fg(blink_color))
-        };
-
-        let current_active = private.search_state.current;
-        let text = coll
-            .enumerate()
-            .map(|(current_line, msg)| {
-                let filtered_search_entries = private
-                    .search_state
-                    .entries
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, SearchEntry { line, column })| {
-                        let line = *line as isize;
-                        let line = line - (scroll.0 as isize);
-
-                        if current_line as isize == line {
-                            Some(SearchDrawEntry {
-                                column: *column,
-                                is_active: i == current_active,
-                            })
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-
-                match msg {
-                    GraphicalMessage::Log(LogMessage {
-                        timestamp, message, ..
-                    }) => Self::line_for_search_mode(
-                        timestamp,
-                        message.to_owned(),
-                        scroll,
-                        filtered_search_entries,
-                        pattern,
-                    ),
-                    GraphicalMessage::Tx { timestamp, message } => Self::line_for_search_mode(
-                        timestamp,
-                        message
-                            .iter()
-                            .map(|(msg, _)| msg.to_owned())
-                            .collect::<Vec<_>>()
-                            .join(""),
-                        scroll,
-                        filtered_search_entries,
-                        pattern,
-                    ),
-                    GraphicalMessage::Rx { timestamp, message } => Self::line_for_search_mode(
-                        timestamp,
-                        message
-                            .iter()
-                            .map(|(msg, _)| msg.to_owned())
-                            .collect::<Vec<_>>()
-                            .join(""),
-                        scroll,
-                        filtered_search_entries,
-                        pattern,
-                    ),
-                }
-            })
-            .collect::<Vec<_>>();
-        let paragraph = Paragraph::new(text).block(block);
-        frame.render_widget(paragraph, rect);
-    }
-
-    fn draw_history(
-        private: &mut GraphicsConnections,
-        frame: &mut Frame,
-        rect: Rect,
-        blink_color: Color,
-    ) {
-        let (input_mode, pattern) = {
-            let inputs_shared = private
-                .inputs_shared
-                .read()
-                .expect("Cannot get inputs lock for read");
-            (inputs_shared.mode, inputs_shared.search_buffer.clone())
-        };
-
-        match input_mode {
-            inputs::inputs_task::InputMode::Normal => {
-                Self::draw_history_normal_mode(private, frame, rect, blink_color)
-            }
-            inputs::inputs_task::InputMode::Search => {
-                Self::draw_history_search_mode(private, frame, rect, blink_color, &pattern)
-            }
-        }
     }
 
     pub fn draw_command_bar_normal_mode(
@@ -441,7 +244,7 @@ impl GraphicsTask {
 
     fn draw_command_bar_search_mode(
         inputs_shared: &Shared<InputsShared>,
-        search_state: &SearchState,
+        (search_current, search_total): (usize, usize),
         rect: Rect,
         frame: &mut Frame,
         is_case_sensitive: bool,
@@ -458,13 +261,13 @@ impl GraphicsTask {
 
         let cursor = (rect.x + cursor + 2, rect.y + 1);
 
-        let current = if search_state.total > 0 {
-            format!("{}", search_state.current + 1)
+        let current = if search_total > 0 {
+            format!("{}", search_current + 1)
         } else {
             "--".to_string()
         };
-        let total = if search_state.total > 0 {
-            format!("{}", search_state.total)
+        let total = if search_total > 0 {
+            format!("{}", search_total)
         } else {
             "--".to_string()
         };
@@ -481,7 +284,7 @@ impl GraphicsTask {
             .border_style(Style::default().fg(Color::Yellow));
 
         let paragraph = Paragraph::new(Span::from(" ".to_string() + &text))
-            .style(Style::default().fg(if search_state.total == 0 {
+            .style(Style::default().fg(if search_total == 0 {
                 Color::Red
             } else {
                 Color::Reset
@@ -498,7 +301,7 @@ impl GraphicsTask {
         frame: &mut Frame,
         rect: Rect,
         latency: u64,
-        search_state: &SearchState,
+        search_indexes: Option<(usize, usize)>,
     ) {
         let (input_mode, is_case_sensitive) = {
             let inputs_shared = inputs_shared
@@ -517,7 +320,7 @@ impl GraphicsTask {
             ),
             inputs::inputs_task::InputMode::Search => Self::draw_command_bar_search_mode(
                 inputs_shared,
-                search_state,
+                search_indexes.unwrap(),
                 rect,
                 frame,
                 is_case_sensitive,
@@ -603,21 +406,12 @@ impl GraphicsTask {
         let mut terminal = Terminal::new(backend).expect("Cannot create terminal backend");
         let mut blink = Blink::new(Duration::from_millis(200), 2, Color::Reset, Color::Black);
         let mut new_messages = vec![];
-        let patterns = [
-            (b"\x1b[0m".as_slice(), Color::Reset),
-            (b"\x1b[30m", Color::Black),
-            (b"\x1b[32m", Color::Green),
-            (b"\x1b[1;32m", Color::Green),
-            (b"\x1b[31m", Color::Red),
-            (b"\x1b[1;31m", Color::Red),
-            (b"\x1b[33m", Color::Yellow),
-            (b"\x1b[1;33m", Color::Yellow),
-            (b"\x1b[34m", Color::Blue),
-            (b"\x1b[35m", Color::Magenta),
-            (b"\x1b[36m", Color::Cyan),
-            (b"\x1b[37m", Color::White),
-        ];
         let mut need_redraw = true;
+        let mut save_stats = SaveStats::new(
+            private.typewriter.get_size(),
+            private.typewriter.get_filename(),
+            blink.get_current(),
+        );
 
         'draw_loop: loop {
             blink.tick();
@@ -630,9 +424,7 @@ impl GraphicsTask {
                 need_redraw = true;
 
                 match cmd {
-                    GraphicsCommand::Redraw => {
-                        need_redraw = true;
-                    }
+                    GraphicsCommand::Redraw => { /* just to trigger a redraw */ }
                     GraphicsCommand::SetLogLevel(level) => {
                         private.system_log_level = level;
                         success!(private.logger, "Log setted to {:?}", level);
@@ -660,12 +452,16 @@ impl GraphicsTask {
                         if private.recorder.is_recording() {
                             private.recorder.stop_record();
                             success!(private.logger, "Content recoded on \"{}\"", filename);
+                            save_stats = save_stats.convert_to_typewriter(&private.typewriter);
                         } else {
                             match private.recorder.start_record() {
-                                Ok(_) => info!(
-                                    private.logger,
-                                    "Recording content on \"{}\"...", filename
-                                ),
+                                Ok(_) => {
+                                    info!(
+                                        private.logger,
+                                        "Recording content on \"{}\"...", filename
+                                    );
+                                    save_stats = save_stats.convert_to_recorder(&private.recorder);
+                                }
                                 Err(err) => error!(
                                     private.logger,
                                     "Cannot start record the content on \"{}\": {}", filename, err
@@ -674,117 +470,79 @@ impl GraphicsTask {
                         }
                     }
                     GraphicsCommand::Clear => {
-                        private.auto_scroll = true;
-                        private.scroll = (0, 0);
-                        private.history.clear();
+                        private.screen.clear();
+                        private.buffer.clear();
                     }
                     GraphicsCommand::ScrollLeft => {
-                        if private.scroll.1 < 3 {
-                            private.scroll.1 = 0;
-                        } else {
-                            private.scroll.1 -= 3;
-                        }
+                        let max_main_axis = Self::max_main_axis(&private);
+
+                        private.screen.scroll_horizontal(-3, max_main_axis as usize);
                     }
-                    GraphicsCommand::ScrollRight => private.scroll.1 += 3,
+                    GraphicsCommand::ScrollRight => {
+                        let max_main_axis = Self::max_main_axis(&private);
+
+                        private.screen.scroll_horizontal(3, max_main_axis as usize);
+                    }
                     GraphicsCommand::ScrollUp => {
-                        if Self::max_main_axis(&private) > 0 {
-                            private.auto_scroll = false;
+                        let max_main_axis = Self::max_main_axis(&private);
+                        if max_main_axis > 0 {
+                            private.screen.disable_auto_scroll();
                         }
 
-                        if private.scroll.0 < 3 {
-                            private.scroll.0 = 0;
-                        } else {
-                            private.scroll.0 -= 3;
-                        }
+                        private.screen.scroll_vertical(-3, max_main_axis as usize);
                     }
                     GraphicsCommand::ScrollDown => {
                         let max_main_axis = Self::max_main_axis(&private);
 
-                        private.scroll.0 += 3;
-                        private.scroll.0 = private.scroll.0.clamp(0, max_main_axis);
-
-                        if private.scroll.0 == max_main_axis {
-                            private.auto_scroll = true;
-                        }
+                        private.screen.scroll_vertical(3, max_main_axis as usize);
                     }
                     GraphicsCommand::JumpToStart => {
                         if Self::max_main_axis(&private) > 0 {
-                            private.auto_scroll = false;
+                            private.screen.disable_auto_scroll();
                         }
 
-                        private.scroll.0 = 0;
+                        private.screen.jump_to_start();
                     }
                     GraphicsCommand::JumpToEnd => {
                         let max_main_axis = Self::max_main_axis(&private);
 
-                        private.scroll.0 = max_main_axis;
-                        private.auto_scroll = true;
+                        private.screen.jump_to_end(max_main_axis as usize);
                     }
                     GraphicsCommand::PageUp => {
-                        if Self::max_main_axis(&private) > 0 {
-                            private.auto_scroll = false;
+                        let max_main_axis = Self::max_main_axis(&private);
+                        if max_main_axis > 0 {
+                            private.screen.disable_auto_scroll();
                         }
 
-                        let page_height = private.last_frame_size.height - 5;
+                        let page_height = private.screen.size().height as isize - 5;
 
-                        if private.scroll.0 < page_height {
-                            private.scroll.0 = 0;
-                        } else {
-                            private.scroll.0 -= page_height;
-                        }
+                        private
+                            .screen
+                            .scroll_vertical(-page_height, max_main_axis as usize);
                     }
                     GraphicsCommand::PageDown => {
-                        if Self::max_main_axis(&private) > 0 {
-                            private.auto_scroll = false;
+                        let max_main_axis = Self::max_main_axis(&private);
+                        if max_main_axis > 0 {
+                            private.screen.disable_auto_scroll();
                         }
 
-                        private.scroll.0 = 0;
+                        let page_height = private.screen.size().height as isize - 5;
+
+                        private
+                            .screen
+                            .scroll_vertical(page_height, max_main_axis as usize);
                     }
                     GraphicsCommand::NextSearch => {
-                        if private.search_state.total > 0 {
-                            let screen_center_y =
-                                (private.last_frame_size.height - Self::COMMAND_BAR_HEIGHT - 2) / 2;
+                        let max_main_axis = Self::max_main_axis(&private);
 
-                            private.search_state.current += 1;
-                            private.search_state.current %= private.search_state.total;
-                            private.scroll.0 = private.search_state.entries
-                                [private.search_state.current]
-                                .line as u16;
-                            private.scroll.1 = private.search_state.entries
-                                [private.search_state.current]
-                                .column as u16;
-
-                            private.scroll.1 = private
-                                .scroll
-                                .1
-                                .saturating_sub(private.last_frame_size.width / 2);
-                            private.scroll.0 = private.scroll.0.saturating_sub(screen_center_y);
-                        }
+                        private.screen.jump_to_next_search(max_main_axis as usize);
                     }
                     GraphicsCommand::PrevSearch => {
-                        if private.search_state.total > 0 {
-                            let screen_center_y =
-                                (private.last_frame_size.height - Self::COMMAND_BAR_HEIGHT - 2) / 2;
-                            let new_current = private.search_state.current as isize - 1;
-                            if new_current < 0 {
-                                private.search_state.current = private.search_state.total - 1;
-                            } else {
-                                private.search_state.current = new_current as usize;
-                            }
+                        let max_main_axis = Self::max_main_axis(&private);
 
-                            private.scroll.0 = private.search_state.entries
-                                [private.search_state.current]
-                                .line as u16;
-                            private.scroll.1 = private.search_state.entries
-                                [private.search_state.current]
-                                .column as u16;
-
-                            private.scroll.1 = private
-                                .scroll
-                                .1
-                                .saturating_sub(private.last_frame_size.width / 2);
-                            private.scroll.0 = private.scroll.0.saturating_sub(screen_center_y);
-                        }
+                        private
+                            .screen
+                            .jump_to_previous_search(max_main_axis as usize);
                     }
                     GraphicsCommand::SearchChange => {
                         let (search_buffer, is_case_sensitive) = {
@@ -797,30 +555,33 @@ impl GraphicsTask {
 
                         Self::update_search_state(&mut private, search_buffer, is_case_sensitive);
                     }
+                    GraphicsCommand::ChangeToNormalMode => {
+                        let max_main_axis = Self::max_main_axis(&private);
+
+                        private.screen.change_mode_to_normal(max_main_axis as usize);
+                    }
+                    GraphicsCommand::ChangeToSearchMode => {
+                        let shared = private
+                            .inputs_shared
+                            .read()
+                            .expect("Cannot get input lock for read");
+                        let query = shared.search_buffer.clone();
+                        let is_case_sensitive = shared.is_case_sensitive;
+
+                        private
+                            .screen
+                            .change_mode_to_search(query, is_case_sensitive);
+                    }
                     GraphicsCommand::Exit => break 'draw_loop,
                 }
             }
 
             while let Ok(rx_msg) = private.rx.try_recv() {
-                if private.history.len() + new_messages.len() >= private.capacity {
-                    private.history.remove(0);
-                }
-
-                new_messages.push(GraphicalMessage::Rx {
-                    timestamp: rx_msg.timestamp,
-                    message: Self::ansi_colors(&patterns, &rx_msg.message),
-                });
+                new_messages.push(BufferLine::new_rx(rx_msg.timestamp, rx_msg.message.clone()));
             }
 
             while let Ok(tx_msg) = private.tx.try_recv() {
-                if private.history.len() + new_messages.len() >= private.capacity {
-                    private.history.remove(0);
-                }
-
-                new_messages.push(GraphicalMessage::Tx {
-                    timestamp: tx_msg.timestamp,
-                    message: Self::bytes_to_string(&tx_msg.message, Color::White),
-                });
+                new_messages.push(BufferLine::new_tx(tx_msg.timestamp, tx_msg.message.clone()));
             }
 
             while let Ok(LogMessage {
@@ -829,10 +590,6 @@ impl GraphicsTask {
                 level,
             }) = private.logger_receiver.try_recv()
             {
-                if private.history.len() + new_messages.len() >= private.capacity {
-                    private.history.remove(0);
-                }
-
                 let message = message.split("\n").collect::<Vec<_>>();
                 let message_len = message.len();
                 let log_msg_splited = message
@@ -840,18 +597,16 @@ impl GraphicsTask {
                     .filter(|msg| !msg.is_empty())
                     .enumerate()
                     .map(|(i, msg)| {
-                        GraphicalMessage::Log(LogMessage {
-                            timestamp,
-                            message: if i == 0 {
-                                msg.to_owned()
-                            } else {
-                                "  ".to_string() + msg
-                            }
-                            .replace('\r', "")
-                            .replace('\t', "    ")
-                                + if i < (message_len - 1) { "\r\n" } else { "" },
-                            level,
-                        })
+                        let message = if i == 0 {
+                            msg.to_string()
+                        } else {
+                            "  ".to_string() + msg
+                        }
+                        .replace('\r', "")
+                        .replace('\t', "    ")
+                            + if i < (message_len - 1) { "\r\n" } else { "" };
+
+                        BufferLine::new_log(timestamp, level, message.as_bytes().to_vec())
                     })
                     .collect::<Vec<_>>();
 
@@ -860,18 +615,17 @@ impl GraphicsTask {
 
             if !new_messages.is_empty() {
                 need_redraw = true;
-                new_messages
-                    .sort_by(|a, b| a.get_timestamp().partial_cmp(b.get_timestamp()).unwrap());
-                if private.recorder.is_recording() {
-                    if let Err(err) = private
+                new_messages.sort_by(|a, b| a.timestamp().partial_cmp(&b.timestamp()).unwrap());
+                if private.recorder.is_recording()
+                    && let Err(err) = private
                         .recorder
                         .add_bulk_content(new_messages.iter().map(|gm| gm.serialize()).collect())
-                    {
-                        error!(private.logger, "{}", err);
-                    }
+                {
+                    error!(private.logger, "{}", err);
                 }
                 private.typewriter += new_messages.iter().map(|gm| gm.serialize()).collect();
-                private.history.extend(new_messages);
+                private.buffer += new_messages;
+                private.screen.update_after_new_lines(&private.buffer);
                 new_messages = vec![];
 
                 let (search_buffer, is_case_sensitive) = {
@@ -889,22 +643,29 @@ impl GraphicsTask {
                 need_redraw = false;
                 terminal
                     .draw(|f| {
+                        let size = f.size();
+                        let screen_size = Rect {
+                            height: size.height - Self::COMMAND_BAR_HEIGHT,
+                            ..size
+                        };
+                        private.screen.set_size(screen_size);
+
                         let chunks = Layout::default()
                             .direction(Direction::Vertical)
                             .constraints([
-                                Constraint::Length(f.size().height - Self::COMMAND_BAR_HEIGHT),
+                                Constraint::Length(screen_size.height),
                                 Constraint::Length(Self::COMMAND_BAR_HEIGHT),
                             ])
                             .split(f.size());
 
-                        Self::draw_history(&mut private, f, chunks[0], blink.get_current());
+                        private.screen.draw(&private.buffer, &save_stats, f);
                         Self::draw_command_bar(
                             &private.inputs_shared,
                             &private.serial_shared,
                             f,
                             chunks[1],
                             private.latency,
-                            &private.search_state,
+                            private.screen.search_indexes(),
                         );
                         Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
                     })
@@ -933,16 +694,8 @@ impl GraphicsTask {
         pattern: String,
         is_case_sensitive: bool,
     ) {
-        let screen_center_y = (private.last_frame_size.height - Self::COMMAND_BAR_HEIGHT - 2) / 2;
-        let history = &private.history;
-        let search_state = &mut private.search_state;
-
-        if pattern.is_empty() {
-            *search_state = SearchState::default();
-            return;
-        }
-
-        let mut entries = vec![];
+        let decoder = private.screen.decoder();
+        let mode = private.screen.mode_mut();
 
         let pattern = if !is_case_sensitive {
             pattern.to_lowercase()
@@ -950,8 +703,14 @@ impl GraphicsTask {
             pattern
         };
 
-        for (line, message) in history.iter().enumerate() {
-            let message = message.get_full_message();
+        mode.set_query(pattern.clone(), is_case_sensitive);
+
+        if pattern.is_empty() {
+            return;
+        }
+
+        for (line, message) in private.buffer.iter().enumerate() {
+            let message = message.decode(decoder).message;
 
             let mut message = if !is_case_sensitive {
                 message.to_lowercase()
@@ -959,281 +718,30 @@ impl GraphicsTask {
                 message
             };
 
+            let mut offset_x = 0;
             while let Some(column) = message.find(&pattern) {
-                entries.push(SearchEntry { line, column });
-                let _: String = message.drain(..column + pattern.len()).collect();
+                mode.add_entry(BufferPosition {
+                    line,
+                    column: column + offset_x,
+                });
+                let remaining = message.drain(..column + pattern.len()).collect::<String>();
+                offset_x += remaining.len();
             }
         }
 
-        search_state.total = entries.len();
-        search_state.entries = entries;
-
-        if search_state.total == 0 {
-            search_state.current = 0;
-            return;
-        }
-
-        search_state.current = if search_state.current > search_state.total - 1 {
-            search_state.total - 1
-        } else {
-            search_state.current
-        };
-
-        private.scroll.0 = search_state.entries[search_state.current].line as u16;
-        private.scroll.0 = private.scroll.0.saturating_sub(screen_center_y);
-        private.scroll.1 = search_state.entries[search_state.current].column as u16;
-        private.scroll.1 = private
-            .scroll
-            .1
-            .saturating_sub(private.last_frame_size.width / 2);
-        private.auto_scroll = false;
-    }
-
-    fn ansi_colors(patterns: &[(&[u8], Color)], msg: &[u8]) -> Vec<(String, Color)> {
-        let msg = msg
-            .to_vec()
-            .replace(b"\x1b[m", b"")
-            .replace(b"\x1b[8D", b"")
-            .replace(b"\x1b[J", b"");
-        let mut output = vec![];
-        let mut buffer = vec![];
-        let mut color = Color::Reset;
-
-        for byte in msg {
-            buffer.push(byte);
-
-            if (byte as char) != 'm' {
-                continue;
-            }
-
-            'pattern_loop: for (pattern, new_color) in patterns {
-                if buffer.contains(pattern) {
-                    output.push((buffer.replace(pattern, b""), color));
-
-                    buffer.clear();
-                    color = *new_color;
-
-                    break 'pattern_loop;
-                }
-            }
-        }
-
-        if !buffer.is_empty() {
-            output.push((buffer, color));
-        }
-
-        output
-            .into_iter()
-            .flat_map(|(msg, color)| Self::bytes_to_string(&msg, color))
-            .collect()
-    }
-
-    fn bytes_to_string(msg: &[u8], color: Color) -> Vec<(String, Color)> {
-        let mut output = vec![];
-        let mut buffer = "".to_string();
-        let mut in_plain_text = true;
-        let accent_color = if color == Color::Yellow {
-            Color::DarkGray
-        } else {
-            Color::Yellow
-        };
-
-        for byte in msg {
-            match *byte {
-                x if (0x20..=0x7E).contains(&x) => {
-                    if !in_plain_text {
-                        output.push((std::mem::take(&mut buffer), accent_color));
-                        in_plain_text = true;
-                    }
-
-                    buffer.push(x as char);
-                }
-                x => {
-                    if in_plain_text {
-                        output.push((std::mem::take(&mut buffer), color));
-                        in_plain_text = false;
-                    }
-
-                    match x {
-                        0x0a => buffer += "\\n",
-                        0x0d => buffer += "\\r",
-                        _ => buffer += &format!("\\x{:02x}", byte),
-                    }
-                }
-            }
-        }
-
-        if !buffer.is_empty() {
-            output.push((buffer, if in_plain_text { color } else { accent_color }));
-        }
-
-        output
-    }
-
-    fn timestamp_span(timestamp: &DateTime<Local>) -> Span<'_> {
-        Span::styled(
-            format!("{} ", timestamp.format("%H:%M:%S.%3f")),
-            Style::default().fg(Color::DarkGray),
-        )
-    }
-
-    fn line_from_log_message(
-        LogMessage {
-            timestamp,
-            message,
-            level,
-        }: &LogMessage,
-        (_scroll_y, scroll_x): (u16, u16),
-    ) -> Line<'_> {
-        let scroll_x = scroll_x as usize;
-        let mut spans = vec![Self::timestamp_span(timestamp)];
-        let (bg, fg) = match level {
-            crate::infra::LogLevel::Error => (Color::Red, Color::White),
-            crate::infra::LogLevel::Warning => (Color::Yellow, Color::Black),
-            crate::infra::LogLevel::Success => (Color::LightGreen, Color::Black),
-            crate::infra::LogLevel::Info => (Color::White, Color::Black),
-            crate::infra::LogLevel::Debug => (Color::Reset, Color::DarkGray),
-        };
-
-        let end_index = if message.ends_with("\r\n") {
-            message.len() - 2
-        } else {
-            message.len()
-        };
-
-        if scroll_x < message.chars().count() {
-            spans.push(Span::styled(
-                &message[scroll_x..end_index],
-                Style::default().fg(fg).bg(bg),
-            ));
-
-            if message.ends_with("\r\n") {
-                spans.push(Span::styled(
-                    "\\r\\n",
-                    Style::default().fg(Color::Yellow).bg(bg),
-                ));
-            }
-        }
-
-        Line::from(spans)
-    }
-
-    fn line_from_message<'a>(
-        timestamp: &'a DateTime<Local>,
-        message: &'a [(String, Color)],
-        bg: Color,
-        (_scroll_y, scroll_x): (u16, u16),
-    ) -> Line<'a> {
-        let scroll_x = scroll_x as usize;
-        let mut offset = 0;
-        let mut spans = vec![Self::timestamp_span(timestamp)];
-
-        for (msg, fg) in message {
-            if scroll_x >= msg.len() + offset {
-                offset += msg.len();
-                continue;
-            }
-
-            let cropped_message = if scroll_x < (msg.len() + offset) && scroll_x >= offset {
-                &msg[(scroll_x - offset)..]
-            } else {
-                msg
-            };
-            offset += msg.len();
-
-            spans.push(Span::styled(
-                cropped_message,
-                Style::default().fg(*fg).bg(bg),
-            ));
-        }
-
-        Line::from(spans)
-    }
-
-    fn line_for_search_mode<'a>(
-        timestamp: &'a DateTime<Local>,
-        mut message: String,
-        (_scroll_y, scroll_x): (u16, u16),
-        filtered_search_entries: Vec<SearchDrawEntry>,
-        pattern: &str,
-    ) -> Line<'a> {
-        let scroll_x = scroll_x as usize;
-        let mut spans = vec![Self::timestamp_span(timestamp)];
-        let pattern_len = pattern.len();
-
-        let mut message_and_color = vec![];
-        for SearchDrawEntry { column, is_active } in filtered_search_entries {
-            if column >= message.len() {
-                message_and_color.push(("#".to_string(), Color::White, Color::Red));
-            } else {
-                message_and_color.push((
-                    message.drain(..column).collect::<String>(),
-                    Color::DarkGray,
-                    Color::Reset,
-                ));
-            }
-            message_and_color.push((
-                message.drain(..pattern_len).collect(),
-                if is_active {
-                    Color::Black
-                } else {
-                    Color::Yellow
-                },
-                if is_active {
-                    Color::Yellow
-                } else {
-                    Color::Reset
-                },
-            ));
-        }
-
-        if !message.is_empty() {
-            message_and_color.push((message, Color::DarkGray, Color::Reset));
-        }
-
-        let mut offset = 0;
-        for (msg, fg, bg) in message_and_color {
-            if scroll_x >= msg.len() + offset {
-                offset += msg.len();
-                continue;
-            }
-
-            let msg_len = msg.len();
-            let cropped_message = if scroll_x < (msg.len() + offset) && scroll_x >= offset {
-                msg[(scroll_x - offset)..].to_owned()
-            } else {
-                msg
-            };
-            offset += msg_len;
-
-            spans.push(Span::styled(
-                cropped_message,
-                Style::default().fg(fg).bg(bg),
-            ));
-        }
-
-        Line::from(spans)
-    }
-
-    fn history_length(private: &GraphicsConnections) -> usize {
+        let max_main_axis = Self::max_main_axis(private);
         private
-            .history
-            .iter()
-            .filter(|msg| {
-                if let GraphicalMessage::Log(log) = msg {
-                    log.level as u32 <= private.system_log_level as u32
-                } else {
-                    true
-                }
-            })
-            .count()
+            .screen
+            .jump_to_current_search(max_main_axis as usize);
+
+        private.screen.mode_mut().update_current();
     }
 
     fn max_main_axis(private: &GraphicsConnections) -> u16 {
-        let main_axis_length = private.last_frame_size.height - Self::COMMAND_BAR_HEIGHT - 2;
-        let history_len = Self::history_length(private) as u16;
+        let buffer_len = private.buffer.iter().count() as u16;
+        let screen_height = private.screen.size().height - 2;
 
-        history_len.saturating_sub(main_axis_length)
+        buffer_len.saturating_sub(screen_height)
     }
 }
 
@@ -1254,79 +762,12 @@ impl GraphicsConnections {
             rx,
             inputs_shared,
             serial_shared,
-            history: VecDeque::new(),
+            buffer: Buffer::new(config.capacity),
+            screen: Screen::default(),
             typewriter: TypeWriter::new(config.storage_base_filename.clone()),
             recorder: Recorder::new(config.storage_base_filename).expect("Cannot create Recorder"),
-            capacity: config.capacity,
-            auto_scroll: true,
-            scroll: (0, 0),
-            last_frame_size: Rect::new(0, 0, u16::MAX, u16::MAX),
             system_log_level: LogLevel::Debug,
-            is_true_color: config.is_true_color,
             latency: config.latency,
-            search_state: SearchState {
-                entries: vec![],
-                current: 0,
-                total: 0,
-            },
-        }
-    }
-}
-
-impl Serialize for GraphicalMessage {
-    fn serialize(&self) -> String {
-        match self {
-            GraphicalMessage::Log(log) => {
-                let log_level = match log.level {
-                    LogLevel::Error => "ERR",
-                    LogLevel::Warning => "WRN",
-                    LogLevel::Success => " OK",
-                    LogLevel::Info => "INF",
-                    LogLevel::Debug => "DBG",
-                };
-
-                format!(
-                    "[{}][{}] {}",
-                    log.timestamp.format("%H:%M:%S.%3f"),
-                    log_level,
-                    log.message
-                )
-            }
-            GraphicalMessage::Tx { timestamp, message } => {
-                let msg = message.iter().fold(String::new(), |acc, x| acc + &x.0);
-
-                format!("[{}][ =>] {}", timestamp.format("%H:%M:%S.%3f"), msg)
-            }
-            GraphicalMessage::Rx { timestamp, message } => {
-                let msg = message.iter().fold(String::new(), |acc, x| acc + &x.0);
-                format!("[{}][ <=] {}", timestamp.format("%H:%M:%S.%3f"), msg)
-            }
-        }
-    }
-}
-
-impl GraphicalMessage {
-    pub fn get_timestamp(&self) -> &DateTime<Local> {
-        match self {
-            GraphicalMessage::Log(LogMessage { timestamp, .. }) => timestamp,
-            GraphicalMessage::Tx { timestamp, .. } => timestamp,
-            GraphicalMessage::Rx { timestamp, .. } => timestamp,
-        }
-    }
-
-    pub fn get_full_message(&self) -> String {
-        match self {
-            GraphicalMessage::Log(LogMessage { message, .. }) => message.to_owned(),
-            GraphicalMessage::Tx { message, .. } => message
-                .iter()
-                .map(|(msg, _)| msg.to_owned())
-                .collect::<Vec<_>>()
-                .join(""),
-            GraphicalMessage::Rx { message, .. } => message
-                .iter()
-                .map(|(msg, _)| msg.to_owned())
-                .collect::<Vec<_>>()
-                .join(""),
         }
     }
 }
