@@ -36,10 +36,10 @@ impl Buffer {
     fn drop_oldest_if_needed(&mut self) {
         if self.lines.len() == self.capacity {
             self.lines.remove(0);
-        }
 
-        for (index, line) in self.lines.iter_mut().enumerate() {
-            line.line = index;
+            for (index, line) in self.lines.iter_mut().enumerate() {
+                line.line = index;
+            }
         }
     }
 

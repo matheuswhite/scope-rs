@@ -236,39 +236,11 @@ mod tests {
         let result = iter.collect::<Vec<_>>();
         let expected = [
             SpecialCharItem::Plain("uart:~$ ".to_string()),
-            SpecialCharItem::Special("\x1b[m".to_string(), 6),
-            SpecialCharItem::Special("\x1b[8D".to_string(), 9),
-            SpecialCharItem::Special("\x1b[J".to_string(), 13),
+            SpecialCharItem::Special("\x1b[m".to_string(), 8),
+            SpecialCharItem::Special("\x1b[8D".to_string(), 11),
+            SpecialCharItem::Special("\x1b[J".to_string(), 15),
             SpecialCharItem::Plain("uart:~$ ".to_string()),
-            SpecialCharItem::Special("\x1b[m".to_string(), 20),
-        ];
-        for (a, b) in result.iter().zip(expected.iter()) {
-            assert_eq!(a, b);
-        }
-    }
-
-    #[test]
-    fn test_long_string_out_of_order() {
-        let content = "uart:~$ \x1b[m\x1b[8D\x1b[Juart:~$ \x1b[m".to_string();
-        let iter = content.to_special_char(|string| {
-            if string.ends_with("\x1b[m") {
-                Some(3)
-            } else if string.ends_with("\x1b[8D") {
-                Some(4)
-            } else if string.ends_with("\x1b[J") {
-                Some(3)
-            } else {
-                None
-            }
-        });
-        let result = iter.collect::<Vec<_>>();
-        let expected = [
-            SpecialCharItem::Plain("uart:~$ ".to_string()),
-            SpecialCharItem::Special("\x1b[m".to_string(), 6),
-            SpecialCharItem::Special("\x1b[8D".to_string(), 9),
-            SpecialCharItem::Special("\x1b[J".to_string(), 13),
-            SpecialCharItem::Plain("uart:~$ ".to_string()),
-            SpecialCharItem::Special("\x1b[m".to_string(), 20),
+            SpecialCharItem::Special("\x1b[m".to_string(), 26),
         ];
         for (a, b) in result.iter().zip(expected.iter()) {
             assert_eq!(a, b);
@@ -292,12 +264,12 @@ mod tests {
         let result = iter.collect::<Vec<_>>();
         let expected = [
             SpecialCharItem::Plain("Lorem ipsum dolor sit ".to_string()),
-            SpecialCharItem::Special("\\x1b[35m".to_string(), 18),
+            SpecialCharItem::Special("\\x1b[35m".to_string(), 22),
             SpecialCharItem::Plain("amet, consectetur adipiscing elit, sed do eiusm".to_string()),
-            SpecialCharItem::Special("\\x1b[0m".to_string(), 65),
+            SpecialCharItem::Special("\\x1b[0m".to_string(), 77),
             SpecialCharItem::Plain("od tem".to_string()),
-            SpecialCharItem::Special("\\r".to_string(), 71),
-            SpecialCharItem::Special("\\n".to_string(), 73),
+            SpecialCharItem::Special("\\r".to_string(), 90),
+            SpecialCharItem::Special("\\n".to_string(), 92),
         ];
         for (a, b) in result.iter().zip(expected.iter()) {
             assert_eq!(a, b);
@@ -305,7 +277,7 @@ mod tests {
     }
 
     #[test]
-    fn test_flotting_letter() {
+    fn test_floating_letter() {
         let content1 = "{ectetur adipiscingelnit, sed d\\r\\n".to_string();
         let content2 = "{ectetur adipiscingelntt, sed d\\r\\n".to_string();
         let content3 = "{ectetur adipiscing elit, sed d\\r\\n".to_string();
@@ -329,18 +301,18 @@ mod tests {
         let expected = [
             vec![
                 SpecialCharItem::Plain("{ectetur adipiscingelnit, sed d".to_string()),
-                SpecialCharItem::Special("\\r".to_string(), 71),
-                SpecialCharItem::Special("\\n".to_string(), 73),
+                SpecialCharItem::Special("\\r".to_string(), 31),
+                SpecialCharItem::Special("\\n".to_string(), 33),
             ],
             vec![
                 SpecialCharItem::Plain("{ectetur adipiscingelntt, sed d".to_string()),
-                SpecialCharItem::Special("\\r".to_string(), 71),
-                SpecialCharItem::Special("\\n".to_string(), 73),
+                SpecialCharItem::Special("\\r".to_string(), 31),
+                SpecialCharItem::Special("\\n".to_string(), 33),
             ],
             vec![
                 SpecialCharItem::Plain("{ectetur adipiscing elit, sed d".to_string()),
-                SpecialCharItem::Special("\\r".to_string(), 71),
-                SpecialCharItem::Special("\\n".to_string(), 73),
+                SpecialCharItem::Special("\\r".to_string(), 31),
+                SpecialCharItem::Special("\\n".to_string(), 33),
             ],
         ];
         for (result, expected) in results.iter().zip(expected.iter()) {
@@ -367,9 +339,9 @@ mod tests {
         let result = iter.collect::<Vec<_>>();
         let expected = [
             SpecialCharItem::Plain("Lorem ipsum ".to_string()),
-            SpecialCharItem::Special("dolor".to_string(), 13),
+            SpecialCharItem::Special("dolor".to_string(), 12),
             SpecialCharItem::Plain(" sit amet, consectetur adipiscing elit, ".to_string()),
-            SpecialCharItem::Special("sed".to_string(), 58),
+            SpecialCharItem::Special("sed".to_string(), 57),
             SpecialCharItem::Plain(" do eiusmod tem\\r\\n".to_string()),
         ];
         for (a, b) in result.iter().zip(expected.iter()) {

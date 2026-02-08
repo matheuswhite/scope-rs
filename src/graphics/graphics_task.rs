@@ -458,7 +458,7 @@ impl GraphicsTask {
 
                         if private.recorder.is_recording() {
                             private.recorder.stop_record();
-                            success!(private.logger, "Content recoded on \"{}\"", filename);
+                            success!(private.logger, "Content recorded to \"{}\"", filename);
                             save_stats = save_stats.convert_to_typewriter(&private.typewriter);
                         } else {
                             match private.recorder.start_record() {
