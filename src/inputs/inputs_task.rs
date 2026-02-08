@@ -786,6 +786,8 @@ impl InputsTask {
                 "\x1b[37m", // White
             ];
 
+            let mut rng = rand::thread_rng();
+
             ipsum
                 .lines()
                 .map(|line| {
@@ -797,17 +799,15 @@ impl InputsTask {
                         return line.to_string();
                     }
 
-                    let start_char = rand::thread_rng().gen_range(0..chars - 1);
-                    let end_char = rand::thread_rng().gen_range(start_char + 1..=chars);
+                    let start_char = rng.gen_range(0..chars - 1);
+                    let end_char = rng.gen_range(start_char + 1..=chars);
 
                     let start = positions[start_char];
                     let end = positions[end_char];
 
                     let colored_line = &line[start..end];
                     let (left, line, right) = (&line[..start], colored_line, &line[end..]);
-                    let color = colors
-                        .choose(&mut rand::thread_rng())
-                        .unwrap_or(&"\x1b[37m");
+                    let color = colors.choose(&mut rng).unwrap_or(&"\x1b[37m");
 
                     format!("{}{}{}{}{}", left, color, line, "\x1b[0m", right)
                 })

@@ -476,11 +476,8 @@ impl ScreenMode {
                         line: line.line,
                         column,
                     };
-                    let index = entries.iter().position(|&pos| pos == query_pos);
 
-                    if let Some(i) = index
-                        && i == *current
-                    {
+                    if entries.get(*current) == Some(&query_pos) {
                         let chosen = Span::styled(query.to_string(), chosen_style);
                         Self::highlight_special_characters(chosen)
                     } else {
