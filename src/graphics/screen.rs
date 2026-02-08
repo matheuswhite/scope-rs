@@ -177,7 +177,13 @@ impl Screen {
             .border_style(border_style)
     }
 
-    pub fn draw(&self, buffer: &Buffer, save_stats: &SaveStats, frame: &mut Frame) {
+    pub fn draw(
+        &self,
+        buffer: &Buffer,
+        save_stats: &SaveStats,
+        frame: &mut Frame,
+        system_log_level: LogLevel,
+    ) {
         let block = self.build_block(buffer, save_stats);
 
         let start = self.position.line;
@@ -185,15 +191,22 @@ impl Screen {
         let end = start + visible_height;
         let max_width = self.size.width as usize;
 
-        let cropped_lines = buffer
+        let decoded_lines = buffer
             .get_range(start, end)
             .iter()
             .map(|buffer_line| buffer_line.decode(self.decoder))
+            .filter(|line| {
+                let Some(level) = line.level else {
+                    return true;
+                };
+
+                level as u32 <= system_log_level as u32
+            })
             .collect::<Vec<_>>();
 
         let lines = self
             .mode
-            .to_lines(cropped_lines)
+            .to_lines(decoded_lines)
             .into_iter()
             .map(|line| Self::crop(line, self.position.column, max_width))
             .collect::<Vec<_>>();

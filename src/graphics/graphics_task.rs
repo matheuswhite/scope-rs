@@ -667,7 +667,12 @@ impl GraphicsTask {
                             ])
                             .split(f.size());
 
-                        private.screen.draw(&private.buffer, &save_stats, f);
+                        private.screen.draw(
+                            &private.buffer,
+                            &save_stats,
+                            f,
+                            private.system_log_level,
+                        );
                         Self::draw_command_bar(
                             &private.inputs_shared,
                             &private.serial_shared,
