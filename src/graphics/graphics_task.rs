@@ -420,7 +420,7 @@ impl GraphicsTask {
                 need_redraw = true;
             }
 
-            if let Ok(cmd) = cmd_receiver.try_recv() {
+            while let Ok(cmd) = cmd_receiver.try_recv() {
                 need_redraw = true;
 
                 match cmd {
@@ -670,6 +670,7 @@ impl GraphicsTask {
                         Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
                     })
                     .expect("Error to draw");
+                continue;
             }
 
             if private.latency > 0 {
@@ -709,7 +710,8 @@ impl GraphicsTask {
             return;
         }
 
-        for (line, message) in private.buffer.iter().enumerate() {
+        for message in private.buffer.iter() {
+            let line = message.line;
             let message = message.decode(decoder).message;
 
             let mut message = if !is_case_sensitive {
@@ -738,7 +740,7 @@ impl GraphicsTask {
     }
 
     fn max_main_axis(private: &GraphicsConnections) -> u16 {
-        let buffer_len = private.buffer.iter().count() as u16;
+        let buffer_len = private.buffer.len() as u16;
         let screen_height = private.screen.size().height - 2;
 
         buffer_len.saturating_sub(screen_height)

@@ -41,6 +41,10 @@ impl Buffer {
             self.lines.remove(0);
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.lines.len()
+    }
 }
 
 impl AddAssign<BufferLine<Vec<u8>>> for Buffer {
@@ -120,7 +124,7 @@ impl BufferLine<Vec<u8>> {
 
 impl Serialize for BufferLine<Vec<u8>> {
     fn serialize(&self) -> String {
-        let message = String::from_utf8_lossy(&self.message);
+        let message = ScreenDecoder::Ascii.decode(&self.message);
 
         if let Some(level) = self.level {
             let log_level = match level {

@@ -111,10 +111,8 @@ impl Screen {
 
     pub fn update_after_new_lines(&mut self, buffer: &Buffer) {
         if self.auto_scroll {
-            let max_main_axis = buffer
-                .iter()
-                .count()
-                .saturating_sub(self.size.height as usize - 2);
+            let visible_height = self.size.height.saturating_sub(2) as usize;
+            let max_main_axis = buffer.len().saturating_sub(visible_height);
             self.position.line = max_main_axis;
         }
     }
@@ -168,7 +166,7 @@ impl Screen {
         Block::default()
             .title(format!(
                 "[{:03}][{}]{} {}",
-                buffer.iter().count(),
+                buffer.len(),
                 self.decoder.name(),
                 record_indicator,
                 save_stats.filename()
@@ -204,10 +202,15 @@ impl Screen {
 
     fn crop(line: Line, start_x: usize, max_width: usize) -> Line {
         let mut index = 0;
-        let timestamp = line.iter().next().cloned().unwrap_or(Span::raw(""));
+        let mut line_iter = line.iter();
+        let timestamp = line_iter.next().cloned().unwrap_or(Span::raw(""));
         let mut line_final: Vec<Span<'_>> = vec![timestamp.clone()];
+        /* timestamp + 2 space + border space */
+        let max_width = max_width.saturating_sub(timestamp.content.len() + 4);
 
-        for span in line.iter().skip(1) {
+        line_final.push(line_iter.next().cloned().unwrap());
+
+        for span in line_iter {
             let span_width = span.content.len();
 
             if index + span_width > start_x {
@@ -215,7 +218,9 @@ impl Screen {
                 let crop_end = (crop_start + max_width).min(span.content.len());
 
                 let cropped_content = span.content.to_string();
-                let cropped_content = &cropped_content[crop_start..crop_end];
+                let cropped_content = cropped_content
+                    .get(crop_start..crop_end)
+                    .unwrap_or_default();
                 line_final.push(Span::styled(cropped_content.to_string(), span.style));
             }
 
@@ -238,7 +243,7 @@ impl Screen {
     }
 
     fn screen_center_y(&self) -> u16 {
-        (self.size.height - 2) / 2
+        self.size.height.saturating_sub(2) / 2
     }
 
     fn jump_to_centered_position(

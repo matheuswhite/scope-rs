@@ -748,7 +748,7 @@ impl InputsTask {
             .join("\r\n");
 
         let has_special_chars = command_line_split.iter().any(|s| s == "--sp");
-        let has_ansii_colors = command_line_split.iter().any(|s| s == "--ansi");
+        let has_ansi_colors = command_line_split.iter().any(|s| s == "--ansi");
         let mode = command_line_split
             .get(1)
             .map(|s| s.as_str())
@@ -770,7 +770,7 @@ impl InputsTask {
             ipsum
         };
 
-        let ipsum = if has_ansii_colors {
+        let ipsum = if has_ansi_colors {
             let colors = [
                 "\x1b[31m", // Red
                 "\x1b[32m", // Green
@@ -784,12 +784,20 @@ impl InputsTask {
             ipsum
                 .lines()
                 .map(|line| {
-                    if line.len() < 2 {
+                    let mut positions = line.char_indices().map(|(i, _)| i).collect::<Vec<_>>();
+                    positions.push(line.len());
+
+                    let chars = positions.len().saturating_sub(1);
+                    if chars < 2 {
                         return line.to_string();
                     }
 
-                    let start = rand::thread_rng().gen_range(0..line.len().saturating_sub(1));
-                    let end = rand::thread_rng().gen_range(start + 1..=line.len());
+                    let start_char = rand::thread_rng().gen_range(0..chars - 1);
+                    let end_char = rand::thread_rng().gen_range(start_char + 1..=chars);
+
+                    let start = positions[start_char];
+                    let end = positions[end_char];
+
                     let colored_line = &line[start..end];
                     let (left, line, right) = (&line[..start], colored_line, &line[end..]);
                     let color = colors
