@@ -89,9 +89,9 @@ impl InputsTask {
         key: KeyEvent,
     ) -> LoopStatus {
         #[cfg(windows)]
-        const ALT_MODIFIER: KeyModifiers = KeyModifiers::CONTROL;
+        const ACTION_MODIFIER: KeyModifiers = KeyModifiers::CONTROL;
         #[cfg(not(windows))]
-        const ALT_MODIFIER: KeyModifiers = KeyModifiers::ALT;
+        const ACTION_MODIFIER: KeyModifiers = KeyModifiers::ALT;
 
         match key.code {
             KeyCode::Esc => {
@@ -207,12 +207,12 @@ impl InputsTask {
                     }
                 }
             }
-            KeyCode::PageUp if key.modifiers == ALT_MODIFIER => {
+            KeyCode::PageUp if key.modifiers == ACTION_MODIFIER => {
                 let _ = private
                     .graphics_cmd_sender
                     .send(GraphicsCommand::JumpToStart);
             }
-            KeyCode::PageDown if key.modifiers == ALT_MODIFIER => {
+            KeyCode::PageDown if key.modifiers == ACTION_MODIFIER => {
                 let _ = private.graphics_cmd_sender.send(GraphicsCommand::JumpToEnd);
             }
             KeyCode::PageUp => {
@@ -444,7 +444,7 @@ impl InputsTask {
                     }
                 }
             }
-            KeyCode::Enter if key.modifiers == ALT_MODIFIER => {
+            KeyCode::Enter if key.modifiers == ACTION_MODIFIER => {
                 let sr = shared.read().expect("Cannot get input lock for read");
 
                 if matches!(sr.mode, InputMode::Search) {

@@ -416,8 +416,15 @@ impl GraphicsTask {
         'draw_loop: loop {
             blink.tick();
 
+            save_stats.is_recording = private.recorder.is_recording();
+
             if blink.is_active() {
                 need_redraw = true;
+                save_stats.is_saving = true;
+                save_stats.save_color = blink.get_current();
+            } else {
+                save_stats.is_saving = false;
+                save_stats.save_color = Color::Reset;
             }
 
             while let Ok(cmd) = cmd_receiver.try_recv() {
@@ -514,7 +521,7 @@ impl GraphicsTask {
                             private.screen.disable_auto_scroll();
                         }
 
-                        let page_height = private.screen.size().height as isize - 5;
+                        let page_height = private.screen.size().height.saturating_sub(5) as isize;
 
                         private
                             .screen
@@ -526,7 +533,7 @@ impl GraphicsTask {
                             private.screen.disable_auto_scroll();
                         }
 
-                        let page_height = private.screen.size().height as isize - 5;
+                        let page_height = private.screen.size().height.saturating_sub(5) as isize;
 
                         private
                             .screen
@@ -732,17 +739,17 @@ impl GraphicsTask {
             }
         }
 
+        private.screen.mode_mut().update_current();
+
         let max_main_axis = Self::max_main_axis(private);
         private
             .screen
             .jump_to_current_search(max_main_axis as usize);
-
-        private.screen.mode_mut().update_current();
     }
 
     fn max_main_axis(private: &GraphicsConnections) -> u16 {
         let buffer_len = private.buffer.len() as u16;
-        let screen_height = private.screen.size().height - 2;
+        let screen_height = private.screen.size().height.saturating_sub(2);
 
         buffer_len.saturating_sub(screen_height)
     }

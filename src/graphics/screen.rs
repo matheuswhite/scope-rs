@@ -344,11 +344,13 @@ impl ScreenMode {
             query: current_query,
             entries,
             is_case_sensitive: current_is_case_sensitive,
+            current,
             ..
         } = self
         {
             *current_query = query;
             *current_is_case_sensitive = is_case_sensitive;
+            *current = 0;
             entries.clear();
         }
     }
