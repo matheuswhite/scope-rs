@@ -320,7 +320,7 @@ impl GraphicsTask {
             ),
             inputs::inputs_task::InputMode::Search => Self::draw_command_bar_search_mode(
                 inputs_shared,
-                search_indexes.unwrap(),
+                search_indexes.unwrap_or((0, 0)),
                 rect,
                 frame,
                 is_case_sensitive,

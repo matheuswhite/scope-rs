@@ -14,7 +14,7 @@ impl Buffer {
     pub fn new(capacity: usize) -> Self {
         Self {
             lines: Vec::new(),
-            capacity,
+            capacity: if capacity == 0 { 1 } else { capacity },
         }
     }
 
