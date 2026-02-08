@@ -207,22 +207,24 @@ impl Screen {
         let timestamp = line_iter.next().cloned().unwrap_or(Span::raw(""));
         let mut line_final: Vec<Span<'_>> = vec![timestamp.clone()];
         /* timestamp + 2 space + border space */
-        let max_width = max_width.saturating_sub(timestamp.content.len() + 4);
+        let max_width = max_width.saturating_sub(timestamp.content.chars().count() + 4);
 
         line_final.push(line_iter.next().cloned().unwrap());
 
         for span in line_iter {
-            let span_width = span.content.len();
+            let span_width = span.content.chars().count();
 
             if index + span_width > start_x {
                 let crop_start = start_x.saturating_sub(index);
-                let crop_end = (crop_start + max_width).min(span.content.len());
+                let crop_end = (crop_start + max_width).min(span_width);
 
-                let cropped_content = span.content.to_string();
-                let cropped_content = cropped_content
-                    .get(crop_start..crop_end)
-                    .unwrap_or_default();
-                line_final.push(Span::styled(cropped_content.to_string(), span.style));
+                let cropped_content = span
+                    .content
+                    .chars()
+                    .skip(crop_start)
+                    .take(crop_end.saturating_sub(crop_start))
+                    .collect::<String>();
+                line_final.push(Span::styled(cropped_content, span.style));
             }
 
             index += span_width;

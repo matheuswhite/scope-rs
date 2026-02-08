@@ -1,4 +1,5 @@
 use super::Serialize;
+use crate::graphics::ansi::ANSI;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
 use crate::graphics::screen::Screen;
 use crate::{error, info, inputs, success};
@@ -653,7 +654,7 @@ impl GraphicsTask {
                     .draw(|f| {
                         let size = f.size();
                         let screen_size = Rect {
-                            height: size.height - Self::COMMAND_BAR_HEIGHT,
+                            height: size.height.saturating_sub(Self::COMMAND_BAR_HEIGHT),
                             ..size
                         };
                         private.screen.set_size(screen_size);
@@ -721,6 +722,7 @@ impl GraphicsTask {
         for message in private.buffer.iter() {
             let line = message.line;
             let message = message.decode(decoder).message;
+            let message = ANSI::remove_encoding(message);
 
             let mut message = if !is_case_sensitive {
                 message.to_lowercase()

@@ -453,7 +453,7 @@ impl InputsTask {
                         .send(GraphicsCommand::PrevSearch);
                 }
             }
-            KeyCode::Enter if key.modifiers.is_empty() => {
+            KeyCode::Enter => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
                 match sw.mode {
