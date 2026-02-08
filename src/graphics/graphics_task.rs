@@ -626,6 +626,7 @@ impl GraphicsTask {
                 private.typewriter += new_messages.iter().map(|gm| gm.serialize()).collect();
                 private.buffer += new_messages;
                 private.screen.update_after_new_lines(&private.buffer);
+                save_stats.file_size = private.typewriter.get_size();
                 new_messages = vec![];
 
                 let (search_buffer, is_case_sensitive) = {

@@ -8,7 +8,6 @@ use std::ops::AddAssign;
 pub struct Buffer {
     lines: Vec<BufferLine<Vec<u8>>>,
     capacity: usize,
-    line_counter: usize,
 }
 
 impl Buffer {
@@ -16,7 +15,6 @@ impl Buffer {
         Self {
             lines: Vec::new(),
             capacity,
-            line_counter: 0,
         }
     }
 
@@ -33,12 +31,15 @@ impl Buffer {
 
     pub fn clear(&mut self) {
         self.lines.clear();
-        self.line_counter = 0;
     }
 
     fn drop_oldest_if_needed(&mut self) {
         if self.lines.len() == self.capacity {
             self.lines.remove(0);
+        }
+
+        for (index, line) in self.lines.iter_mut().enumerate() {
+            line.line = index;
         }
     }
 
@@ -51,8 +52,7 @@ impl AddAssign<BufferLine<Vec<u8>>> for Buffer {
     fn add_assign(&mut self, mut rhs: BufferLine<Vec<u8>>) {
         self.drop_oldest_if_needed();
 
-        rhs.line = self.line_counter;
-        self.line_counter += 1;
+        rhs.line = self.lines.len();
         self.lines.push(rhs);
     }
 }

@@ -88,6 +88,11 @@ impl InputsTask {
         shared: Arc<RwLock<InputsShared>>,
         key: KeyEvent,
     ) -> LoopStatus {
+        #[cfg(windows)]
+        const ALT_MODIFIER: KeyModifiers = KeyModifiers::CONTROL;
+        #[cfg(not(windows))]
+        const ALT_MODIFIER: KeyModifiers = KeyModifiers::ALT;
+
         match key.code {
             KeyCode::Esc => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
@@ -202,12 +207,12 @@ impl InputsTask {
                     }
                 }
             }
-            KeyCode::PageUp if key.modifiers == KeyModifiers::CONTROL => {
+            KeyCode::PageUp if key.modifiers == ALT_MODIFIER => {
                 let _ = private
                     .graphics_cmd_sender
                     .send(GraphicsCommand::JumpToStart);
             }
-            KeyCode::PageDown if key.modifiers == KeyModifiers::CONTROL => {
+            KeyCode::PageDown if key.modifiers == ALT_MODIFIER => {
                 let _ = private.graphics_cmd_sender.send(GraphicsCommand::JumpToEnd);
             }
             KeyCode::PageUp => {
@@ -439,7 +444,7 @@ impl InputsTask {
                     }
                 }
             }
-            KeyCode::Enter if key.modifiers == KeyModifiers::CONTROL => {
+            KeyCode::Enter if key.modifiers == ALT_MODIFIER => {
                 let sr = shared.read().expect("Cannot get input lock for read");
 
                 if matches!(sr.mode, InputMode::Search) {
@@ -448,7 +453,7 @@ impl InputsTask {
                         .send(GraphicsCommand::PrevSearch);
                 }
             }
-            KeyCode::Enter => {
+            KeyCode::Enter if key.modifiers.is_empty() => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
                 match sw.mode {

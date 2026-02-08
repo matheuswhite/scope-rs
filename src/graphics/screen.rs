@@ -181,7 +181,8 @@ impl Screen {
         let block = self.build_block(buffer, save_stats);
 
         let start = self.position.line;
-        let end = start + self.size.height as usize;
+        let visible_height = self.size.height.saturating_sub(2) as usize;
+        let end = start + visible_height;
         let max_width = self.size.width as usize;
 
         let cropped_lines = buffer
