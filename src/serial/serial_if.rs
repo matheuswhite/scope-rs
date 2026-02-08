@@ -14,8 +14,8 @@ use serialport::{DataBits, FlowControl, Parity, StopBits};
 use std::{
     io::{self, Read, Write},
     sync::{
-        mpsc::{Receiver, Sender},
         Arc, RwLock,
+        mpsc::{Receiver, Sender},
     },
     thread::{sleep, yield_now},
     time::{Duration, Instant},
@@ -193,10 +193,10 @@ impl SerialInterface {
                 continue 'task_loop;
             };
 
-            if let Ok(data_to_sent) = tx.try_recv() {
-                if ser.write_all(data_to_sent.message.as_slice()).is_err() {
-                    error!(logger, "Cannot sent: {:?}", data_to_sent.message);
-                }
+            if let Ok(data_to_send) = tx.try_recv()
+                && ser.write_all(data_to_send.message.as_slice()).is_err()
+            {
+                error!(logger, "Cannot send: {:?}", data_to_send.message);
             }
 
             match ser.read(&mut buffer) {

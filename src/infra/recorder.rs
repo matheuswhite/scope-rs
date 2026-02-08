@@ -1,7 +1,5 @@
 use std::{fs::File, io::Write, path::PathBuf};
 
-use super::into_byte_format;
-
 pub struct Recorder {
     base_filename: String,
     suffix: usize,
@@ -31,8 +29,8 @@ impl Recorder {
         format!("{}_rec{}.txt", self.base_filename, self.suffix)
     }
 
-    pub fn get_size(&self) -> String {
-        into_byte_format(self.file_size)
+    pub fn get_size(&self) -> u128 {
+        self.file_size
     }
 
     pub fn is_recording(&self) -> bool {

@@ -1,7 +1,7 @@
 use std::{
     sync::{
-        mpsc::{Receiver, Sender},
         Arc, RwLock,
+        mpsc::{Receiver, Sender},
     },
     thread::{self, JoinHandle},
 };

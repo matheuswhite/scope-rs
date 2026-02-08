@@ -3,8 +3,8 @@ name = "scope-monitor"
 description = "A multi-platform serial monitor with user-extensible features"
 authors = ["Matheus T. dos Santos <matheuswhite1@protonmail.com>"]
 version = "0.3.2"
-edition = "2021"
-rust-version = "1.82.0"
+edition = "2024"
+rust-version = "1.92.0"
 license-file = "LICENSE"
 readme = "README.md"
 repository = "https://github.com/matheuswhite/scope-rs"
@@ -13,7 +13,7 @@ keywords = ["serial", "monitor", "windows", "linux", "plugin"]
 exclude = [
   "/.git/",
   "/.github/",
-  '/.idea/',
+  "/.idea/",
   "/.vscode/",
   "/.zed/",
   "/imgs/",
@@ -23,7 +23,7 @@ exclude = [
 ]
 
 [badges]
-maintenance = { status = 'actively-developed' }
+maintenance = { status = "actively-developed" }
 
 [[bin]]
 name = "scope"

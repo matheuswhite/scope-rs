@@ -16,13 +16,13 @@ use chrono::Local;
 use core::panic;
 use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use lipsum::lipsum;
-use rand::{seq::SliceRandom, Rng};
+use rand::{Rng, seq::SliceRandom};
 use serialport::FlowControl;
 use std::{
     path::PathBuf,
     sync::{
-        mpsc::{Receiver, Sender},
         Arc, RwLock,
+        mpsc::{Receiver, Sender},
     },
 };
 
@@ -88,6 +88,11 @@ impl InputsTask {
         shared: Arc<RwLock<InputsShared>>,
         key: KeyEvent,
     ) -> LoopStatus {
+        #[cfg(windows)]
+        const ACTION_MODIFIER: KeyModifiers = KeyModifiers::CONTROL;
+        #[cfg(not(windows))]
+        const ACTION_MODIFIER: KeyModifiers = KeyModifiers::ALT;
+
         match key.code {
             KeyCode::Esc => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
@@ -96,6 +101,9 @@ impl InputsTask {
                     InputMode::Normal => return LoopStatus::Break,
                     InputMode::Search => {
                         sw.mode = InputMode::Normal;
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::ChangeToNormalMode);
                         return LoopStatus::Continue;
                     }
                 }
@@ -120,10 +128,18 @@ impl InputsTask {
 
                         let _ = private
                             .graphics_cmd_sender
+                            .send(GraphicsCommand::ChangeToSearchMode);
+
+                        let _ = private
+                            .graphics_cmd_sender
                             .send(GraphicsCommand::SearchChange);
                     }
                     InputMode::Search => {
                         sw.mode = InputMode::Normal;
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::ChangeToNormalMode);
                     }
                 }
             }
@@ -191,12 +207,12 @@ impl InputsTask {
                     }
                 }
             }
-            KeyCode::PageUp if key.modifiers == KeyModifiers::CONTROL => {
+            KeyCode::PageUp if key.modifiers == ACTION_MODIFIER => {
                 let _ = private
                     .graphics_cmd_sender
                     .send(GraphicsCommand::JumpToStart);
             }
-            KeyCode::PageDown if key.modifiers == KeyModifiers::CONTROL => {
+            KeyCode::PageDown if key.modifiers == ACTION_MODIFIER => {
                 let _ = private.graphics_cmd_sender.send(GraphicsCommand::JumpToEnd);
             }
             KeyCode::PageUp => {
@@ -428,7 +444,7 @@ impl InputsTask {
                     }
                 }
             }
-            KeyCode::Enter if key.modifiers == KeyModifiers::ALT => {
+            KeyCode::Enter if key.modifiers == ACTION_MODIFIER => {
                 let sr = shared.read().expect("Cannot get input lock for read");
 
                 if matches!(sr.mode, InputMode::Search) {
@@ -644,7 +660,10 @@ impl InputsTask {
                     "warning" | "wrn" => LogLevel::Warning,
                     "error" | "err" => LogLevel::Error,
                     _ => {
-                        error!(private.logger, "Invalid log level. Please, choose one of these options: debug, info, success, warning, error");
+                        error!(
+                            private.logger,
+                            "Invalid log level. Please, choose one of these options: debug, info, success, warning, error"
+                        );
                         return;
                     }
                 };
@@ -690,7 +709,10 @@ impl InputsTask {
                             .send(PluginEngineCommand::UnloadPlugin { plugin_name });
                     }
                     _ => {
-                        error!(private.logger, "Invalid command. Please, choose one of these options: load, reload, unload");
+                        error!(
+                            private.logger,
+                            "Invalid command. Please, choose one of these options: load, reload, unload"
+                        );
                     }
                 }
             }
@@ -731,6 +753,7 @@ impl InputsTask {
             .join("\r\n");
 
         let has_special_chars = command_line_split.iter().any(|s| s == "--sp");
+        let has_ansi_colors = command_line_split.iter().any(|s| s == "--ansi");
         let mode = command_line_split
             .get(1)
             .map(|s| s.as_str())
@@ -748,6 +771,48 @@ impl InputsTask {
                     }
                 })
                 .collect::<String>()
+        } else {
+            ipsum
+        };
+
+        let ipsum = if has_ansi_colors {
+            let colors = [
+                "\x1b[31m", // Red
+                "\x1b[32m", // Green
+                "\x1b[33m", // Yellow
+                "\x1b[34m", // Blue
+                "\x1b[35m", // Magenta
+                "\x1b[36m", // Cyan
+                "\x1b[37m", // White
+            ];
+
+            let mut rng = rand::thread_rng();
+
+            ipsum
+                .lines()
+                .map(|line| {
+                    let mut positions = line.char_indices().map(|(i, _)| i).collect::<Vec<_>>();
+                    positions.push(line.len());
+
+                    let chars = positions.len().saturating_sub(1);
+                    if chars < 2 {
+                        return line.to_string();
+                    }
+
+                    let start_char = rng.gen_range(0..chars - 1);
+                    let end_char = rng.gen_range(start_char + 1..=chars);
+
+                    let start = positions[start_char];
+                    let end = positions[end_char];
+
+                    let colored_line = &line[start..end];
+                    let (left, line, right) = (&line[..start], colored_line, &line[end..]);
+                    let color = colors.choose(&mut rng).unwrap_or(&"\x1b[37m");
+
+                    format!("{}{}{}{}{}", left, color, line, "\x1b[0m", right)
+                })
+                .collect::<Vec<String>>()
+                .join("\r\n")
         } else {
             ipsum
         };
@@ -799,7 +864,10 @@ impl InputsTask {
                 }
             }
             _ => {
-                error!(private.logger, "Invalid mode for \"!ipsum\" command. Valid modes are: rx, tx, dbg, inf, ok, warn, err");
+                error!(
+                    private.logger,
+                    "Invalid mode for \"!ipsum\" command. Valid modes are: rx, tx, dbg, inf, ok, warn, err"
+                );
             }
         }
     }

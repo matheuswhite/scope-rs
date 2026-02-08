@@ -1,7 +1,7 @@
 use super::{
+    Plugin, PluginUnloadMode,
     bridge::{PluginEngineGate, PluginMethodCallGate},
     messages::{self, PluginExternalRequest, PluginMethodMessage, PluginResponse},
-    Plugin, PluginUnloadMode,
 };
 use crate::{
     error,

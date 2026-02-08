@@ -4,8 +4,8 @@ pub mod messages;
 pub mod method_call;
 pub mod shell;
 
-use crate::infra::logger::Logger;
 use crate::infra::LogLevel;
+use crate::infra::logger::Logger;
 use crate::plugin::method_call::PluginMethodCallArgs;
 use bridge::PluginMethodCallGate;
 use method_call::PluginMethodCall;
