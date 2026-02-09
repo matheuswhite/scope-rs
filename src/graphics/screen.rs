@@ -448,9 +448,9 @@ impl ScreenMode {
         };
 
         let disable_style = Style::default().bg(Color::Black).fg(Color::DarkGray);
+        let message = ANSI::remove_encoding(line.message);
 
         if query.is_empty() {
-            let message = ANSI::remove_encoding(line.message);
             return vec![Span::styled(message, disable_style)];
         }
 
@@ -462,7 +462,7 @@ impl ScreenMode {
             query.to_lowercase()
         };
 
-        let message_splitted = line.message.to_special_char(|string| {
+        let message_splitted = message.to_special_char(|string| {
             let string = if *is_case_sensitive {
                 string.to_string()
             } else {
