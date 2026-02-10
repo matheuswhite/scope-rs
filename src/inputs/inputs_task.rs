@@ -1,6 +1,6 @@
 use crate::{
     debug, error,
-    graphics::graphics_task::GraphicsCommand,
+    graphics::{graphics_task::GraphicsCommand, screen::ScreenPosition},
     info,
     infra::{
         logger::{LogLevel, Logger},
@@ -14,7 +14,7 @@ use crate::{
 };
 use chrono::Local;
 use core::panic;
-use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton};
 use lipsum::lipsum;
 use rand::{Rng, seq::SliceRandom};
 use serialport::FlowControl;
@@ -925,6 +925,26 @@ impl InputsTask {
                     }
                     event::MouseEventKind::ScrollUp => {
                         let _ = private.graphics_cmd_sender.send(GraphicsCommand::ScrollUp);
+                    }
+                    event::MouseEventKind::Down(MouseButton::Left) => {
+                        let point = ScreenPosition {
+                            x: mouse_evt.column,
+                            y: mouse_evt.row,
+                        };
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::Click(point));
+                    }
+                    event::MouseEventKind::Drag(MouseButton::Left) => {
+                        let point = ScreenPosition {
+                            x: mouse_evt.column,
+                            y: mouse_evt.row,
+                        };
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::Move(point));
                     }
                     _ => {}
                 },

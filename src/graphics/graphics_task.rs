@@ -1,7 +1,7 @@
 use super::Serialize;
 use crate::graphics::ansi::ANSI;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
-use crate::graphics::screen::Screen;
+use crate::graphics::screen::{Screen, ScreenPosition};
 use crate::{error, info, inputs, success};
 use crate::{
     infra::{
@@ -86,6 +86,8 @@ pub enum GraphicsCommand {
     ChangeToSearchMode,
     Exit,
     Redraw,
+    Click(ScreenPosition),
+    Move(ScreenPosition),
 }
 
 pub struct SaveStats {
@@ -433,6 +435,12 @@ impl GraphicsTask {
 
                 match cmd {
                     GraphicsCommand::Redraw => { /* just to trigger a redraw */ }
+                    GraphicsCommand::Click(start_pos) => {
+                        private.screen.set_selection(start_pos);
+                    }
+                    GraphicsCommand::Move(end_pos) => {
+                        private.screen.set_selection_end(end_pos);
+                    }
                     GraphicsCommand::SetLogLevel(level) => {
                         private.system_log_level = level;
                         success!(private.logger, "Log setted to {:?}", level);

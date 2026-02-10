@@ -157,6 +157,16 @@ pub struct BufferPosition {
     pub column: usize,
 }
 
+impl PartialOrd for BufferPosition {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        if self.line != other.line {
+            self.line.partial_cmp(&other.line)
+        } else {
+            self.column.partial_cmp(&other.column)
+        }
+    }
+}
+
 pub fn timestamp_fmt(timestamp: DateTime<Local>) -> String {
     timestamp.format("%H:%M:%S.%3f").to_string()
 }
