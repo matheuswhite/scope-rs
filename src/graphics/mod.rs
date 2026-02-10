@@ -3,6 +3,7 @@ pub mod buffer;
 pub mod graphics_task;
 pub mod palette;
 pub mod screen;
+pub mod selection;
 pub mod special_char;
 
 pub trait Serialize {

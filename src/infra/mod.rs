@@ -23,3 +23,14 @@ impl From<u128> for ByteFormat {
         ByteFormat(format!("{:.1} {}", size, unit))
     }
 }
+
+#[allow(unused)]
+macro_rules! dump {
+    ($filename:literal, $content:expr) => {
+        #[cfg(debug_assertions)]
+        std::fs::write($filename, $content).expect(&format!("Failed to write to {}", $filename));
+    };
+}
+
+#[allow(unused)]
+pub(crate) use dump;

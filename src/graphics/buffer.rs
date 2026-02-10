@@ -1,5 +1,9 @@
 use crate::{
-    graphics::{Serialize, screen::ScreenDecoder},
+    graphics::{
+        Serialize,
+        screen::ScreenDecoder,
+        selection::{Selection, SelectionPosition},
+    },
     infra::LogLevel,
 };
 use chrono::{DateTime, Local};
@@ -16,6 +20,44 @@ impl Buffer {
             lines: Vec::new(),
             capacity: if capacity == 0 { 1 } else { capacity },
         }
+    }
+
+    pub fn get_selection_content(&self, selection: &Selection, decoder: ScreenDecoder) -> String {
+        let (start, end) = selection.ordered_positions();
+        let mut result = vec![];
+
+        for line in self.get_range(start.line, end.line + 1) {
+            let content = decoder.decode(&line.message);
+            let content = content.as_str().chars();
+
+            match selection.selection_position(line.line) {
+                SelectionPosition::OneLine {
+                    start_column,
+                    end_column,
+                } => {
+                    result.push(
+                        content
+                            .skip(start_column)
+                            .take(end_column - start_column)
+                            .collect::<String>(),
+                    );
+                }
+                SelectionPosition::Top { column } => {
+                    result.push(content.skip(column).collect::<String>());
+                }
+                SelectionPosition::Bottom { column } => {
+                    let content_len = content.as_str().chars().count();
+                    let column = column.clamp(0, content_len);
+                    result.push(content.take(column).collect::<String>());
+                }
+                SelectionPosition::Middle => {
+                    result.push(content.collect::<String>());
+                }
+                SelectionPosition::Outside => {}
+            }
+        }
+
+        result.join("").replace("\\r", "\r").replace("\\n", "\n")
     }
 
     pub fn get_range(&self, start: usize, end: usize) -> &[BufferLine<Vec<u8>>] {
@@ -155,6 +197,16 @@ impl Serialize for BufferLine<Vec<u8>> {
 pub struct BufferPosition {
     pub line: usize,
     pub column: usize,
+}
+
+impl PartialOrd for BufferPosition {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        if self.line != other.line {
+            self.line.partial_cmp(&other.line)
+        } else {
+            self.column.partial_cmp(&other.column)
+        }
+    }
 }
 
 pub fn timestamp_fmt(timestamp: DateTime<Local>) -> String {

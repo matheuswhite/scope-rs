@@ -1,7 +1,7 @@
 use super::Serialize;
 use crate::graphics::ansi::ANSI;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
-use crate::graphics::screen::Screen;
+use crate::graphics::screen::{Screen, ScreenPosition};
 use crate::{error, info, inputs, success};
 use crate::{
     infra::{
@@ -17,6 +17,7 @@ use crate::{
     serial::serial_if::{SerialMode, SerialShared},
     warning,
 };
+use arboard::Clipboard;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     execute,
@@ -64,6 +65,7 @@ pub struct GraphicsConnections {
     latency: u64,
     buffer: Buffer,
     screen: Screen,
+    clipboard: Option<Clipboard>,
 }
 
 pub enum GraphicsCommand {
@@ -86,6 +88,9 @@ pub enum GraphicsCommand {
     ChangeToSearchMode,
     Exit,
     Redraw,
+    Click(ScreenPosition),
+    Move(ScreenPosition),
+    CopyToClipboard,
 }
 
 pub struct SaveStats {
@@ -394,6 +399,35 @@ impl GraphicsTask {
         frame.render_widget(paragraph, area);
     }
 
+    fn handle_copy_to_clipboard(
+        private: &mut GraphicsConnections,
+        copy_blink: &mut Blink<Color>,
+    ) -> Result<(), String> {
+        let clipboard = private
+            .clipboard
+            .as_mut()
+            .ok_or_else(|| "Clipboard not available in system".to_string())?;
+
+        let Some(selection) = private.screen.selection() else {
+            return Ok(());
+        };
+
+        let content = private
+            .buffer
+            .get_selection_content(selection, private.screen.decoder());
+        if content.is_empty() {
+            return Ok(());
+        }
+
+        clipboard
+            .set_text(content.clone())
+            .map_err(|err| format!("Failed to copy to clipboard: {}", err))?;
+
+        copy_blink.start();
+
+        Ok(())
+    }
+
     pub fn task(
         _shared: Arc<RwLock<()>>,
         mut private: GraphicsConnections,
@@ -405,24 +439,30 @@ impl GraphicsTask {
             .expect("Cannot enable alternate screen and mouse capture");
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend).expect("Cannot create terminal backend");
-        let mut blink = Blink::new(Duration::from_millis(200), 2, Color::Reset, Color::Black);
+        let mut save_blink = Blink::new(Duration::from_millis(200), 2, Color::Reset, Color::Black);
+        let mut copy_blink = Blink::new(Duration::from_millis(150), 2, Color::Green, Color::Black);
         let mut new_messages = vec![];
         let mut need_redraw = true;
         let mut save_stats = SaveStats::new(
             private.typewriter.get_size(),
             private.typewriter.get_filename(),
-            blink.get_current(),
+            save_blink.get_current(),
         );
 
         'draw_loop: loop {
-            blink.tick();
+            save_blink.tick();
+            copy_blink.tick();
 
             save_stats.is_recording = private.recorder.is_recording();
 
-            if blink.is_active() {
+            if save_blink.is_active() {
                 need_redraw = true;
                 save_stats.is_saving = true;
-                save_stats.save_color = blink.get_current();
+                save_stats.save_color = save_blink.get_current();
+            } else if copy_blink.is_active() {
+                need_redraw = true;
+                save_stats.is_saving = true;
+                save_stats.save_color = copy_blink.get_current();
             } else {
                 save_stats.is_saving = false;
                 save_stats.save_color = Color::Reset;
@@ -433,9 +473,22 @@ impl GraphicsTask {
 
                 match cmd {
                     GraphicsCommand::Redraw => { /* just to trigger a redraw */ }
+                    GraphicsCommand::Click(start_pos) => {
+                        private.screen.set_selection(start_pos);
+                    }
+                    GraphicsCommand::Move(end_pos) => {
+                        private.screen.set_selection_end(end_pos);
+                    }
+                    GraphicsCommand::CopyToClipboard => {
+                        if let Err(res) =
+                            Self::handle_copy_to_clipboard(&mut private, &mut copy_blink)
+                        {
+                            error!(private.logger, "{}", res);
+                        }
+                    }
                     GraphicsCommand::SetLogLevel(level) => {
                         private.system_log_level = level;
-                        success!(private.logger, "Log setted to {:?}", level);
+                        success!(private.logger, "Log set to {:?}", level);
                     }
                     GraphicsCommand::SaveData => {
                         if private.recorder.is_recording() {
@@ -444,11 +497,11 @@ impl GraphicsTask {
                             continue 'draw_loop;
                         }
 
-                        blink.start();
+                        save_blink.start();
                         let filename = private.typewriter.get_filename();
 
                         match private.typewriter.flush() {
-                            Ok(_) => success!(private.logger, "Content save on \"{}\"", filename),
+                            Ok(_) => success!(private.logger, "Content saved on \"{}\"", filename),
                             Err(err) => {
                                 error!(private.logger, "Cannot save on \"{}\": {}", filename, err)
                             }
@@ -785,6 +838,7 @@ impl GraphicsConnections {
             recorder: Recorder::new(config.storage_base_filename).expect("Cannot create Recorder"),
             system_log_level: LogLevel::Debug,
             latency: config.latency,
+            clipboard: Clipboard::new().ok(),
         }
     }
 }
