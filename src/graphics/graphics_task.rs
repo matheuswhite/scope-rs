@@ -2,6 +2,7 @@ use super::Serialize;
 use crate::graphics::ansi::ANSI;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
 use crate::graphics::screen::{Screen, ScreenPosition};
+use crate::infra::dump;
 use crate::{error, info, inputs, success};
 use crate::{
     infra::{
@@ -66,7 +67,7 @@ pub struct GraphicsConnections {
     buffer: Buffer,
     screen: Screen,
     #[allow(unused)]
-    clipboard: Clipboard,
+    clipboard: Option<Clipboard>,
 }
 
 pub enum GraphicsCommand {
@@ -400,6 +401,37 @@ impl GraphicsTask {
         frame.render_widget(paragraph, area);
     }
 
+    fn handle_copy_to_clipboard(
+        private: &mut GraphicsConnections,
+        copy_blink: &mut Blink<Color>,
+    ) -> Result<(), String> {
+        let clipboard = private
+            .clipboard
+            .as_mut()
+            .ok_or_else(|| "Clipboard not avaiable in system".to_string())?;
+
+        let Some(selection) = private.screen.selection() else {
+            return Ok(());
+        };
+
+        let content = private
+            .buffer
+            .get_selection_content(selection, private.screen.decoder());
+        if content.is_empty() {
+            return Ok(());
+        }
+
+        dump!("clipboard_dump.txt", &content);
+
+        clipboard
+            .set_text(content.clone())
+            .map_err(|err| format!("Failed to copy to clipboard: {}", err))?;
+
+        copy_blink.start();
+
+        Ok(())
+    }
+
     pub fn task(
         _shared: Arc<RwLock<()>>,
         mut private: GraphicsConnections,
@@ -452,18 +484,10 @@ impl GraphicsTask {
                         private.screen.set_selection_end(end_pos);
                     }
                     GraphicsCommand::CopyToClipboard => {
-                        if let Some(selection) = private.screen.selection() {
-                            let content = private
-                                .buffer
-                                .get_selection_content(selection, private.screen.decoder());
-
-                            if !content.is_empty() {
-                                private.clipboard.set_text(content).unwrap_or_else(|err| {
-                                    error!(private.logger, "Failed to copy to clipboard: {}", err);
-                                });
-
-                                copy_blink.start();
-                            }
+                        if let Err(res) =
+                            Self::handle_copy_to_clipboard(&mut private, &mut copy_blink)
+                        {
+                            error!(private.logger, "{}", res);
                         }
                     }
                     GraphicsCommand::SetLogLevel(level) => {
@@ -818,7 +842,7 @@ impl GraphicsConnections {
             recorder: Recorder::new(config.storage_base_filename).expect("Cannot create Recorder"),
             system_log_level: LogLevel::Debug,
             latency: config.latency,
-            clipboard: Clipboard::new().expect("Cannot initialize clipboard"),
+            clipboard: Clipboard::new().ok(),
         }
     }
 }

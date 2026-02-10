@@ -28,6 +28,7 @@ impl Buffer {
 
         for line in self.get_range(start.line, end.line + 1) {
             let content = decoder.decode(&line.message);
+            let content = content.chars();
 
             match selection.selection_position(line.line) {
                 SelectionPosition::OneLine {
@@ -36,20 +37,20 @@ impl Buffer {
                 } => {
                     result.push(
                         content
-                            .get(start_column..end_column)
-                            .unwrap_or("")
-                            .to_string(),
+                            .skip(start_column)
+                            .take(end_column - start_column)
+                            .collect::<String>(),
                     );
                 }
                 SelectionPosition::Top { column } => {
-                    result.push(content.get(column..).unwrap_or("").to_string());
+                    result.push(content.skip(column).collect::<String>());
                 }
                 SelectionPosition::Bottom { column } => {
-                    let column = column.clamp(0, content.len());
-                    result.push(content.get(..column).unwrap_or("").to_string());
+                    let column = column.clamp(0, content.clone().count());
+                    result.push(content.take(column).collect::<String>());
                 }
                 SelectionPosition::Middle => {
-                    result.push(content);
+                    result.push(content.collect::<String>());
                 }
                 SelectionPosition::Outside => {}
             }

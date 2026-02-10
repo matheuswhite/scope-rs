@@ -25,9 +25,11 @@ impl From<u128> for ByteFormat {
 }
 
 #[allow(unused)]
-#[macro_export]
 macro_rules! dump {
     ($filename:literal, $content:expr) => {
+        #[cfg(debug_assertions)]
         std::fs::write($filename, $content).expect(&format!("Failed to write to {}", $filename));
     };
 }
+
+pub(crate) use dump;
