@@ -456,9 +456,9 @@ impl ScreenMode {
     fn reverse_forward_span(span: Span, span_column: usize, column_split: usize) -> Vec<Span> {
         let span_width = span.content.chars().count();
 
-        if column_split < span_column {
+        if column_split <= span_column {
             vec![span.reversed()]
-        } else if column_split > span_column + span_width {
+        } else if column_split >= span_column + span_width {
             vec![span]
         } else {
             let split_point = column_split.saturating_sub(span_column);

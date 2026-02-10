@@ -32,4 +32,5 @@ macro_rules! dump {
     };
 }
 
+#[allow(unused)]
 pub(crate) use dump;

@@ -28,7 +28,7 @@ impl Buffer {
 
         for line in self.get_range(start.line, end.line + 1) {
             let content = decoder.decode(&line.message);
-            let content = content.chars();
+            let content = content.as_str().chars();
 
             match selection.selection_position(line.line) {
                 SelectionPosition::OneLine {
@@ -46,7 +46,8 @@ impl Buffer {
                     result.push(content.skip(column).collect::<String>());
                 }
                 SelectionPosition::Bottom { column } => {
-                    let column = column.clamp(0, content.clone().count());
+                    let content_len = content.as_str().chars().count();
+                    let column = column.clamp(0, content_len);
                     result.push(content.take(column).collect::<String>());
                 }
                 SelectionPosition::Middle => {

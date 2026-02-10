@@ -2,7 +2,6 @@ use super::Serialize;
 use crate::graphics::ansi::ANSI;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
 use crate::graphics::screen::{Screen, ScreenPosition};
-use crate::infra::dump;
 use crate::{error, info, inputs, success};
 use crate::{
     infra::{
@@ -66,7 +65,6 @@ pub struct GraphicsConnections {
     latency: u64,
     buffer: Buffer,
     screen: Screen,
-    #[allow(unused)]
     clipboard: Option<Clipboard>,
 }
 
@@ -408,7 +406,7 @@ impl GraphicsTask {
         let clipboard = private
             .clipboard
             .as_mut()
-            .ok_or_else(|| "Clipboard not avaiable in system".to_string())?;
+            .ok_or_else(|| "Clipboard not available in system".to_string())?;
 
         let Some(selection) = private.screen.selection() else {
             return Ok(());
@@ -420,8 +418,6 @@ impl GraphicsTask {
         if content.is_empty() {
             return Ok(());
         }
-
-        dump!("clipboard_dump.txt", &content);
 
         clipboard
             .set_text(content.clone())
