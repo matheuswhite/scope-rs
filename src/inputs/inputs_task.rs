@@ -108,6 +108,11 @@ impl InputsTask {
                     }
                 }
             }
+            KeyCode::Char('c') | KeyCode::Char('C') if key.modifiers == KeyModifiers::CONTROL => {
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::CopyToClipboard);
+            }
             KeyCode::Char('l') | KeyCode::Char('L') if key.modifiers == KeyModifiers::CONTROL => {
                 let _ = private.graphics_cmd_sender.send(GraphicsCommand::Clear);
             }

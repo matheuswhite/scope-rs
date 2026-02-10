@@ -61,6 +61,10 @@ impl Screen {
         }
     }
 
+    pub fn selection(&self) -> Option<&Selection> {
+        self.selection.as_ref()
+    }
+
     pub fn change_mode_to_normal(&mut self, max_main_axis: usize) {
         self.mode = ScreenMode::Normal;
         self.clamp_position(max_main_axis);

@@ -1,5 +1,9 @@
 use crate::{
-    graphics::{Serialize, screen::ScreenDecoder},
+    graphics::{
+        Serialize,
+        screen::ScreenDecoder,
+        selection::{Selection, SelectionPosition},
+    },
     infra::LogLevel,
 };
 use chrono::{DateTime, Local};
@@ -16,6 +20,42 @@ impl Buffer {
             lines: Vec::new(),
             capacity: if capacity == 0 { 1 } else { capacity },
         }
+    }
+
+    pub fn get_selection_content(&self, selection: &Selection, decoder: ScreenDecoder) -> String {
+        let (start, end) = selection.ordered_positions();
+        let mut result = vec![];
+
+        for line in self.get_range(start.line, end.line + 1) {
+            let content = decoder.decode(&line.message);
+
+            match selection.selection_position(line.line) {
+                SelectionPosition::OneLine {
+                    start_column,
+                    end_column,
+                } => {
+                    result.push(
+                        content
+                            .get(start_column..end_column)
+                            .unwrap_or("")
+                            .to_string(),
+                    );
+                }
+                SelectionPosition::Top { column } => {
+                    result.push(content.get(column..).unwrap_or("").to_string());
+                }
+                SelectionPosition::Bottom { column } => {
+                    let column = column.clamp(0, content.len());
+                    result.push(content.get(..column).unwrap_or("").to_string());
+                }
+                SelectionPosition::Middle => {
+                    result.push(content);
+                }
+                SelectionPosition::Outside => {}
+            }
+        }
+
+        result.join("").replace("\\r", "\r").replace("\\n", "\n")
     }
 
     pub fn get_range(&self, start: usize, end: usize) -> &[BufferLine<Vec<u8>>] {

@@ -5,7 +5,7 @@ use super::timer::{Timeout, Timer};
 struct TimerOn;
 struct TimerOff;
 
-pub struct Blink<T: Clone> {
+pub struct Blink<T: Clone + Default> {
     on: T,
     off: T,
     current: T,
@@ -16,7 +16,7 @@ pub struct Blink<T: Clone> {
     total_timer: Timer,
 }
 
-impl<T: Clone> Blink<T> {
+impl<T: Clone + Default> Blink<T> {
     pub fn new(duration: Duration, total_blinks: usize, on: T, off: T) -> Self {
         Self {
             on: on.clone(),
@@ -60,20 +60,22 @@ impl<T: Clone> Blink<T> {
     }
 }
 
-impl<T: Clone> Timeout<TimerOn> for Blink<T> {
+impl<T: Clone + Default> Timeout<TimerOn> for Blink<T> {
     fn action(&mut self, _id: TimerOn) {
         self.timer_off.start();
         self.current = self.off.clone();
     }
 }
 
-impl<T: Clone> Timeout<TimerOff> for Blink<T> {
+impl<T: Clone + Default> Timeout<TimerOff> for Blink<T> {
     fn action(&mut self, _id: TimerOff) {
         self.num_blinks += 1;
         self.current = self.on.clone();
 
         if self.num_blinks < self.total_blinks {
             self.timer_on.start();
+        } else {
+            self.current = T::default();
         }
     }
 }
