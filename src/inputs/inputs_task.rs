@@ -460,6 +460,9 @@ impl InputsTask {
                     }
                 }
             }
+            KeyCode::Tab => {
+                Self::handle_tab_input(private, shared.clone());
+            }
             KeyCode::Enter if key.modifiers == ACTION_MODIFIER => {
                 let sr = shared.read().expect("Cannot get input lock for read");
 
@@ -537,6 +540,42 @@ impl InputsTask {
         }
 
         LoopStatus::Continue
+    }
+
+    fn handle_tab_input(private: &mut InputsConnections, shared: Arc<RwLock<InputsShared>>) {
+        let mut sw = shared.write().expect("Cannot get input lock for write");
+
+        let Some(first_entry) = sw.tag_list.get_first_autocomplete_list() else {
+            return;
+        };
+
+        let first_entry = format!("@{}", first_entry);
+        let first_entry_len = first_entry.chars().count();
+
+        let InputMode::Normal = sw.mode else {
+            return;
+        };
+
+        let pattern = sw.tag_list.pattern();
+        let pattern_len = pattern.chars().count();
+        let cursor = sw.cursor;
+        let start = cursor.saturating_sub(pattern_len);
+
+        sw.command_line.replace_range(start..cursor, &first_entry);
+        sw.cursor += first_entry_len - pattern_len;
+
+        let command_line_len = sw.command_line.chars().count();
+        let white_space = sw
+            .command_line
+            .chars()
+            .skip(cursor)
+            .position(|c| c.is_whitespace())
+            .map(|pos| pos + cursor)
+            .unwrap_or(command_line_len);
+        let cursor = sw.cursor;
+        sw.command_line.replace_range(cursor..white_space, "");
+
+        Self::update_tag_list(&mut sw, private);
     }
 
     fn handle_connect_command(command_line_split: Vec<String>, private: &InputsConnections) {

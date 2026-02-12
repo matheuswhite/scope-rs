@@ -21,6 +21,10 @@ impl TagList {
             .map_err(|_| format!("Failed to parse tag file at {}", file_path.display()))
     }
 
+    pub fn get_first_autocomplete_list(&self) -> Option<Arc<String>> {
+        self.autocomplete_list.first().cloned()
+    }
+
     pub fn new(file_path: PathBuf) -> Result<Self, String> {
         let tags = Self::parse_tag_list(&file_path)?;
         Ok(Self {
@@ -68,7 +72,11 @@ impl TagList {
                 0 => false,
                 1 if self.pattern.as_str() == "@" => true,
                 1 if self.pattern.as_str() != "@" => false,
-                _ => &self.pattern[0..1] == "@" && k.starts_with(&self.pattern[1..]),
+                _ => {
+                    k != &self.pattern[1..]
+                        && &self.pattern[0..1] == "@"
+                        && k.starts_with(&self.pattern[1..])
+                }
             })
             .map(|k| Arc::new(k.clone()))
             .collect();

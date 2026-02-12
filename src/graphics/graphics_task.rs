@@ -408,7 +408,11 @@ impl GraphicsTask {
                         Style::default().fg(Color::Cyan),
                     ),
                     Span::styled(
-                        x[pattern.len() - 1..].to_string(),
+                        if x.as_str() == "..." {
+                            x.to_string()
+                        } else {
+                            x[pattern.len() - 1..].to_string()
+                        },
                         Style::default().fg(Color::DarkGray),
                     ),
                 ])
