@@ -668,11 +668,7 @@ impl ScreenMode {
                 string.to_lowercase()
             };
 
-            if string.contains(&query) {
-                Some(query.len())
-            } else {
-                None
-            }
+            string.find(&query).map(|start| (start, query.len()).into())
         });
 
         let mut output = vec![];
@@ -744,18 +740,32 @@ impl ScreenMode {
         let mut result = vec![];
 
         let iter = span.content.to_special_char(|string| {
+            let mut least_pos = usize::MAX;
+            let mut found_pattern = None;
+
             if let Some(pos) = string.find("\\x")
                 && let Some(hex) = string.get(pos + 2..pos + 4)
                 && u8::from_str_radix(hex, 16).is_ok()
+                && pos < least_pos
             {
-                return Some(4);
+                least_pos = pos;
+                found_pattern = Some((pos, 4).into());
             }
 
-            if string.contains("\\n") || string.contains("\\r") {
-                Some(2)
-            } else {
-                None
+            if let Some(start) = string.find("\\n")
+                && start < least_pos
+            {
+                least_pos = start;
+                found_pattern = Some((start, 2).into());
             }
+
+            if let Some(start) = string.find("\\r")
+                && start < least_pos
+            {
+                found_pattern = Some((start, 2).into());
+            }
+
+            found_pattern
         });
 
         for item in iter {

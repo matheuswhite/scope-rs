@@ -25,13 +25,19 @@ impl ANSI {
         let style = input.style;
         let mut color = input.style.fg.unwrap_or(Color::Reset);
         let iter = input.content.to_special_char(|string| {
+            let mut least_pos = usize::MAX;
+            let mut found_pattern = None;
+
             for (pattern, _) in Self::PATTERNS {
-                if string.contains(pattern) {
-                    return Some(pattern.len());
+                if let Some(start) = string.find(pattern)
+                    && start < least_pos
+                {
+                    least_pos = start;
+                    found_pattern = Some(pattern);
                 }
             }
 
-            None
+            found_pattern.map(|found_pattern| (least_pos, found_pattern.len()).into())
         });
 
         for item in iter {
@@ -56,13 +62,19 @@ impl ANSI {
     pub fn remove_encoding(input: String) -> String {
         let mut result = String::new();
         let iter = input.to_special_char(|string| {
+            let mut least_pos = usize::MAX;
+            let mut found_pattern = None;
+
             for (pattern, _) in Self::PATTERNS {
-                if string.contains(pattern) {
-                    return Some(pattern.len());
+                if let Some(start) = string.find(pattern)
+                    && start < least_pos
+                {
+                    least_pos = start;
+                    found_pattern = Some(pattern);
                 }
             }
 
-            None
+            found_pattern.map(|found_pattern| (least_pos, found_pattern.len()).into())
         });
 
         for item in iter {

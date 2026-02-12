@@ -1,4 +1,4 @@
-use std::{borrow::Cow, str::Chars};
+use std::borrow::Cow;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum SpecialCharItem {
@@ -6,29 +6,43 @@ pub enum SpecialCharItem {
     Special(String, usize),
 }
 
-pub struct SpecialChar<'a, F>
+pub struct SpecialCharPosition {
+    pub start: usize,
+    pub length: usize,
+}
+
+pub struct SpecialChar<F>
 where
-    F: FnMut(&str) -> Option<usize>,
+    F: FnMut(&str) -> Option<SpecialCharPosition>,
 {
-    content: Chars<'a>,
+    content: String,
     special: Option<(String, usize)>,
     column: usize,
     filter: F,
 }
 
 pub trait ToSpecialChar {
-    fn to_special_char<F>(&self, filter: F) -> SpecialChar<'_, F>
+    fn to_special_char<F>(self, filter: F) -> SpecialChar<F>
     where
-        F: FnMut(&str) -> Option<usize>;
+        F: FnMut(&str) -> Option<SpecialCharPosition>;
+}
+
+impl From<(usize, usize)> for SpecialCharPosition {
+    fn from(value: (usize, usize)) -> Self {
+        Self {
+            start: value.0,
+            length: value.1,
+        }
+    }
 }
 
 impl ToSpecialChar for String {
-    fn to_special_char<F>(&self, filter: F) -> SpecialChar<'_, F>
+    fn to_special_char<F>(self, filter: F) -> SpecialChar<F>
     where
-        F: FnMut(&str) -> Option<usize>,
+        F: FnMut(&str) -> Option<SpecialCharPosition>,
     {
         SpecialChar {
-            content: self.chars(),
+            content: self,
             special: None,
             column: 0,
             filter,
@@ -37,12 +51,12 @@ impl ToSpecialChar for String {
 }
 
 impl ToSpecialChar for &str {
-    fn to_special_char<F>(&self, filter: F) -> SpecialChar<'_, F>
+    fn to_special_char<F>(self, filter: F) -> SpecialChar<F>
     where
-        F: FnMut(&str) -> Option<usize>,
+        F: FnMut(&str) -> Option<SpecialCharPosition>,
     {
         SpecialChar {
-            content: self.chars(),
+            content: self.to_string(),
             special: None,
             column: 0,
             filter,
@@ -51,12 +65,12 @@ impl ToSpecialChar for &str {
 }
 
 impl<'a> ToSpecialChar for Cow<'a, str> {
-    fn to_special_char<F>(&self, filter: F) -> SpecialChar<'_, F>
+    fn to_special_char<F>(self, filter: F) -> SpecialChar<F>
     where
-        F: FnMut(&str) -> Option<usize>,
+        F: FnMut(&str) -> Option<SpecialCharPosition>,
     {
         SpecialChar {
-            content: self.chars(),
+            content: self.to_string(),
             special: None,
             column: 0,
             filter,
@@ -64,9 +78,9 @@ impl<'a> ToSpecialChar for Cow<'a, str> {
     }
 }
 
-impl<'a, F> Iterator for SpecialChar<'a, F>
+impl<F> Iterator for SpecialChar<F>
 where
-    F: FnMut(&str) -> Option<usize>,
+    F: FnMut(&str) -> Option<SpecialCharPosition>,
 {
     type Item = SpecialCharItem;
 
@@ -75,33 +89,26 @@ where
             return Some(SpecialCharItem::Special(special, column));
         }
 
-        let mut buffer = String::new();
-
-        for letter in &mut self.content {
-            buffer.push(letter);
-
-            let Some(length) = (self.filter)(&buffer) else {
-                continue;
-            };
-
-            let pivot = buffer.len().saturating_sub(length);
-            let plain = buffer[..pivot].to_string();
-            self.special = Some((buffer[pivot..].to_string(), self.column + pivot));
-            self.column += buffer.len();
-
-            if !plain.is_empty() {
-                return Some(SpecialCharItem::Plain(plain));
-            } else {
-                let (special, column) = self.special.take().unwrap();
-                return Some(SpecialCharItem::Special(special, column));
-            }
+        if self.content.is_empty() {
+            return None;
         }
 
-        if !buffer.is_empty() {
-            return Some(SpecialCharItem::Plain(buffer));
-        }
+        let Some(SpecialCharPosition { start, length }) = (self.filter)(&self.content) else {
+            let plain = self.content.drain(..).collect();
+            return Some(SpecialCharItem::Plain(plain));
+        };
 
-        None
+        let plain = self.content.drain(..start).collect::<String>();
+        let special = self.content.drain(..length).collect::<String>();
+        self.special = Some((special, self.column + start));
+        self.column += start + length;
+
+        if !plain.is_empty() {
+            Some(SpecialCharItem::Plain(plain))
+        } else {
+            let (special, column) = self.special.take().unwrap();
+            Some(SpecialCharItem::Special(special, column))
+        }
     }
 }
 
@@ -113,12 +120,10 @@ mod tests {
     fn test_basic() {
         let content = "Hello \n World\\x03!".to_string();
         let iter = content.to_special_char(|string| {
-            if string.contains("\n") {
-                Some(1)
-            } else if string.contains("\\x03") {
-                Some(4)
+            if let Some(start) = string.find("\n") {
+                Some((start, 1).into())
             } else {
-                None
+                string.find("\\x03").map(|start| (start, 4).into())
             }
         });
         let result = iter.collect::<Vec<_>>();
@@ -137,13 +142,8 @@ mod tests {
     #[test]
     fn test_replace_from_start() {
         let content = "\x1b[mHello".to_string();
-        let iter = content.to_special_char(|string| {
-            if string.ends_with("\x1b[m") {
-                Some(3)
-            } else {
-                None
-            }
-        });
+        let iter =
+            content.to_special_char(|string| string.find("\x1b[m").map(|start| (start, 3).into()));
         let result = iter.collect::<Vec<_>>();
         let expected = [
             SpecialCharItem::Special("\x1b[m".to_string(), 0),
@@ -157,13 +157,8 @@ mod tests {
     #[test]
     fn test_replace_from_end() {
         let content = "Hello \x1b[m".to_string();
-        let iter = content.to_special_char(|string| {
-            if string.ends_with("\x1b[m") {
-                Some(3)
-            } else {
-                None
-            }
-        });
+        let iter =
+            content.to_special_char(|string| string.find("\x1b[m").map(|start| (start, 3).into()));
         let result = iter.collect::<Vec<_>>();
         let expected = [
             SpecialCharItem::Plain("Hello ".to_string()),
@@ -177,13 +172,8 @@ mod tests {
     #[test]
     fn test_replace_seq_eq() {
         let content = "Hello \x1b[m \x1b[m".to_string();
-        let iter = content.to_special_char(|string| {
-            if string.ends_with("\x1b[m") {
-                Some(3)
-            } else {
-                None
-            }
-        });
+        let iter =
+            content.to_special_char(|string| string.find("\x1b[m").map(|start| (start, 3).into()));
         let result = iter.collect::<Vec<_>>();
         let expected = [
             SpecialCharItem::Plain("Hello ".to_string()),
@@ -200,12 +190,10 @@ mod tests {
     fn test_replace_seq_diff() {
         let content = "Hello \x1b[m\x1b[8D".to_string();
         let iter = content.to_special_char(|string| {
-            if string.ends_with("\x1b[m") {
-                Some(3)
-            } else if string.ends_with("\x1b[8D") {
-                Some(4)
+            if let Some(start) = string.find("\x1b[m") {
+                Some((start, 3).into())
             } else {
-                None
+                string.find("\x1b[8D").map(|start| (start, 4).into())
             }
         });
         let result = iter.collect::<Vec<_>>();
@@ -223,15 +211,19 @@ mod tests {
     fn test_long_string() {
         let content = "uart:~$ \x1b[m\x1b[8D\x1b[Juart:~$ \x1b[m".to_string();
         let iter = content.to_special_char(|string| {
-            if string.ends_with("\x1b[m") {
-                Some(3)
-            } else if string.ends_with("\x1b[8D") {
-                Some(4)
-            } else if string.ends_with("\x1b[J") {
-                Some(3)
-            } else {
-                None
+            let mut min_pos = usize::MAX;
+            let mut result = None;
+            let patterns = [("\x1b[m", 3), ("\x1b[8D", 4), ("\x1b[J", 3)];
+            for (pattern, length) in patterns.iter() {
+                if let Some(start) = string.find(pattern)
+                    && start < min_pos
+                {
+                    min_pos = start;
+                    result = Some((start, *length).into());
+                }
             }
+
+            result
         });
         let result = iter.collect::<Vec<_>>();
         let expected = [
@@ -251,15 +243,19 @@ mod tests {
     fn test_ansi() {
         let content = "Lorem ipsum dolor sit \\x1b[35mamet, consectetur adipiscing elit, sed do eiusm\\x1b[0mod tem\\r\\n".to_string();
         let iter = content.to_special_char(|string| {
-            if string.contains("\\r") || string.contains("\\n") {
-                Some(2)
-            } else if string.contains("\\x1b[35m") {
-                Some(8)
-            } else if string.contains("\\x1b[0m") {
-                Some(7)
-            } else {
-                None
+            let mut min_pos = usize::MAX;
+            let mut result = None;
+            let patterns = [("\\r", 2), ("\\n", 2), ("\\x1b[35m", 8), ("\\x1b[0m", 7)];
+            for (pattern, length) in patterns.iter() {
+                if let Some(start) = string.find(pattern)
+                    && start < min_pos
+                {
+                    min_pos = start;
+                    result = Some((start, *length).into());
+                }
             }
+
+            result
         });
         let result = iter.collect::<Vec<_>>();
         let expected = [
@@ -282,10 +278,10 @@ mod tests {
         let content2 = "{ectetur adipiscingelntt, sed d\\r\\n".to_string();
         let content3 = "{ectetur adipiscing elit, sed d\\r\\n".to_string();
         let filter = |string: &str| {
-            if string.contains("\\r") || string.contains("\\n") {
-                Some(2)
+            if let Some(start) = string.find("\\r") {
+                Some((start, 2).into())
             } else {
-                None
+                string.find("\\n").map(|start| (start, 2).into())
             }
         };
 
@@ -328,12 +324,10 @@ mod tests {
             "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tem\\r\\n"
                 .to_string();
         let iter = content.to_special_char(|string| {
-            if string.contains("dolor") {
-                Some(5)
-            } else if string.contains("sed") {
-                Some(3)
+            if let Some(start) = string.find("dolor") {
+                Some((start, 5).into())
             } else {
-                None
+                string.find("sed").map(|start| (start, 3).into())
             }
         });
         let result = iter.collect::<Vec<_>>();
@@ -353,7 +347,7 @@ mod tests {
     fn test_no_special() {
         let content = "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tem"
             .to_string();
-        let iter = content.to_special_char(|_| None);
+        let iter = content.clone().to_special_char(|_| None);
         let result = iter.collect::<Vec<_>>();
         let expected = [SpecialCharItem::Plain(content)];
         for (a, b) in result.iter().zip(expected.iter()) {
