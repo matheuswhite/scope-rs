@@ -1087,16 +1087,16 @@ impl InputsTask {
     }
 
     fn replace_tag_sequence(command_line: String, tag_list: &TagList) -> String {
-        let mut res = String::new();
+        let mut res = String::with_capacity(command_line.len());
 
         for item in command_line.to_special_char(|string| tag_list.tag_filter(string)) {
             match item {
                 SpecialCharItem::Plain(s) => {
-                    res += &s;
+                    res.push_str(&s);
                 }
                 SpecialCharItem::Special(s, _column) => {
                     let tag_value = tag_list.get_tagged_key(&s);
-                    res += &tag_value;
+                    res.push_str(&tag_value);
                 }
             }
         }

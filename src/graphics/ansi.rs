@@ -37,7 +37,11 @@ impl ANSI {
                 }
             }
 
-            found_pattern.map(|found_pattern| (least_pos, found_pattern.len()).into())
+            found_pattern.map(|found_pattern| {
+                let start = string[..least_pos].chars().count();
+                let length = found_pattern.chars().count();
+                (start, length).into()
+            })
         });
 
         for item in iter {
@@ -74,7 +78,11 @@ impl ANSI {
                 }
             }
 
-            found_pattern.map(|found_pattern| (least_pos, found_pattern.len()).into())
+            found_pattern.map(|found_pattern| {
+                let start = string[..least_pos].chars().count();
+                let length = found_pattern.chars().count();
+                (start, length).into()
+            })
         });
 
         for item in iter {

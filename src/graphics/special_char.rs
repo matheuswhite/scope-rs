@@ -7,7 +7,9 @@ pub enum SpecialCharItem {
 }
 
 pub struct SpecialCharPosition {
+    /// Character start offset (counted in Unicode scalar values).
     pub start: usize,
+    /// Character length (counted in Unicode scalar values).
     pub length: usize,
 }
 
@@ -133,9 +135,13 @@ mod tests {
         let content = "Hello \n World\\x03!".to_string();
         let iter = content.to_special_char(|string| {
             if let Some(start) = string.find("\n") {
-                Some((start, 1).into())
+                let start = string[..start].chars().count();
+                Some((start, "\n".chars().count()).into())
             } else {
-                string.find("\\x03").map(|start| (start, 4).into())
+                string.find("\\x03").map(|start| {
+                    let start = string[..start].chars().count();
+                    (start, "\\x03".chars().count()).into()
+                })
             }
         });
         let result = iter.collect::<Vec<_>>();
@@ -154,8 +160,12 @@ mod tests {
     #[test]
     fn test_replace_from_start() {
         let content = "\x1b[mHello".to_string();
-        let iter =
-            content.to_special_char(|string| string.find("\x1b[m").map(|start| (start, 3).into()));
+        let iter = content.to_special_char(|string| {
+            string.find("\x1b[m").map(|start| {
+                let start = string[..start].chars().count();
+                (start, "\x1b[m".chars().count()).into()
+            })
+        });
         let result = iter.collect::<Vec<_>>();
         let expected = [
             SpecialCharItem::Special("\x1b[m".to_string(), 0),
@@ -169,8 +179,12 @@ mod tests {
     #[test]
     fn test_replace_from_end() {
         let content = "Hello \x1b[m".to_string();
-        let iter =
-            content.to_special_char(|string| string.find("\x1b[m").map(|start| (start, 3).into()));
+        let iter = content.to_special_char(|string| {
+            string.find("\x1b[m").map(|start| {
+                let start = string[..start].chars().count();
+                (start, "\x1b[m".chars().count()).into()
+            })
+        });
         let result = iter.collect::<Vec<_>>();
         let expected = [
             SpecialCharItem::Plain("Hello ".to_string()),
@@ -184,8 +198,12 @@ mod tests {
     #[test]
     fn test_replace_seq_eq() {
         let content = "Hello \x1b[m \x1b[m".to_string();
-        let iter =
-            content.to_special_char(|string| string.find("\x1b[m").map(|start| (start, 3).into()));
+        let iter = content.to_special_char(|string| {
+            string.find("\x1b[m").map(|start| {
+                let start = string[..start].chars().count();
+                (start, "\x1b[m".chars().count()).into()
+            })
+        });
         let result = iter.collect::<Vec<_>>();
         let expected = [
             SpecialCharItem::Plain("Hello ".to_string()),
@@ -203,9 +221,13 @@ mod tests {
         let content = "Hello \x1b[m\x1b[8D".to_string();
         let iter = content.to_special_char(|string| {
             if let Some(start) = string.find("\x1b[m") {
-                Some((start, 3).into())
+                let start = string[..start].chars().count();
+                Some((start, "\x1b[m".chars().count()).into())
             } else {
-                string.find("\x1b[8D").map(|start| (start, 4).into())
+                string.find("\x1b[8D").map(|start| {
+                    let start = string[..start].chars().count();
+                    (start, "\x1b[8D".chars().count()).into()
+                })
             }
         });
         let result = iter.collect::<Vec<_>>();
@@ -225,13 +247,14 @@ mod tests {
         let iter = content.to_special_char(|string| {
             let mut min_pos = usize::MAX;
             let mut result = None;
-            let patterns = [("\x1b[m", 3), ("\x1b[8D", 4), ("\x1b[J", 3)];
-            for (pattern, length) in patterns.iter() {
+            let patterns = ["\x1b[m", "\x1b[8D", "\x1b[J"];
+            for pattern in patterns.iter() {
                 if let Some(start) = string.find(pattern)
                     && start < min_pos
                 {
                     min_pos = start;
-                    result = Some((start, *length).into());
+                    let start = string[..start].chars().count();
+                    result = Some((start, pattern.chars().count()).into());
                 }
             }
 
@@ -257,13 +280,14 @@ mod tests {
         let iter = content.to_special_char(|string| {
             let mut min_pos = usize::MAX;
             let mut result = None;
-            let patterns = [("\\r", 2), ("\\n", 2), ("\\x1b[35m", 8), ("\\x1b[0m", 7)];
-            for (pattern, length) in patterns.iter() {
+            let patterns = ["\\r", "\\n", "\\x1b[35m", "\\x1b[0m"];
+            for pattern in patterns.iter() {
                 if let Some(start) = string.find(pattern)
                     && start < min_pos
                 {
                     min_pos = start;
-                    result = Some((start, *length).into());
+                    let start = string[..start].chars().count();
+                    result = Some((start, pattern.chars().count()).into());
                 }
             }
 
@@ -291,9 +315,13 @@ mod tests {
         let content3 = "{ectetur adipiscing elit, sed d\\r\\n".to_string();
         let filter = |string: &str| {
             if let Some(start) = string.find("\\r") {
-                Some((start, 2).into())
+                let start = string[..start].chars().count();
+                Some((start, "\\r".chars().count()).into())
             } else {
-                string.find("\\n").map(|start| (start, 2).into())
+                string.find("\\n").map(|start| {
+                    let start = string[..start].chars().count();
+                    (start, "\\n".chars().count()).into()
+                })
             }
         };
 
@@ -337,9 +365,13 @@ mod tests {
                 .to_string();
         let iter = content.to_special_char(|string| {
             if let Some(start) = string.find("dolor") {
-                Some((start, 5).into())
+                let start = string[..start].chars().count();
+                Some((start, "dolor".chars().count()).into())
             } else {
-                string.find("sed").map(|start| (start, 3).into())
+                string.find("sed").map(|start| {
+                    let start = string[..start].chars().count();
+                    (start, "sed".chars().count()).into()
+                })
             }
         });
         let result = iter.collect::<Vec<_>>();

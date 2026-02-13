@@ -668,7 +668,10 @@ impl ScreenMode {
                 string.to_ascii_lowercase()
             };
 
-            string.find(&query).map(|start| (start, query.len()).into())
+            string.find(&query).map(|start| {
+                let start = string[..start].chars().count();
+                (start, query.chars().count()).into()
+            })
         });
 
         let mut output = vec![];
@@ -749,20 +752,23 @@ impl ScreenMode {
                 && pos < least_pos
             {
                 least_pos = pos;
-                found_pattern = Some((pos, 4).into());
+                let pos = string[..pos].chars().count();
+                found_pattern = Some((pos, "\\x00".chars().count()).into());
             }
 
             if let Some(start) = string.find("\\n")
                 && start < least_pos
             {
                 least_pos = start;
-                found_pattern = Some((start, 2).into());
+                let start = string[..start].chars().count();
+                found_pattern = Some((start, "\\n".chars().count()).into());
             }
 
             if let Some(start) = string.find("\\r")
                 && start < least_pos
             {
-                found_pattern = Some((start, 2).into());
+                let start = string[..start].chars().count();
+                found_pattern = Some((start, "\\r".chars().count()).into());
             }
 
             found_pattern
