@@ -575,14 +575,14 @@ impl InputsTask {
         sw.cursor += first_entry_len - pattern_len;
 
         let command_line_len = sw.command_line.chars().count();
+        let cursor_after = sw.cursor;
         let white_space = sw
             .command_line
             .chars()
-            .skip(cursor)
+            .skip(cursor_after)
             .position(|c| c.is_whitespace())
-            .map(|pos| pos + cursor)
+            .map(|pos| pos + cursor_after)
             .unwrap_or(command_line_len);
-        let cursor_after = sw.cursor;
         sw.command_line =
             Self::replace_range_chars(&sw.command_line, cursor_after..white_space, "");
 

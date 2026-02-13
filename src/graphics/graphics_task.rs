@@ -411,7 +411,8 @@ impl GraphicsTask {
                         if x.as_str() == "..." {
                             x.to_string()
                         } else {
-                            x[pattern.len() - 1..].to_string()
+                            let skip_chars = pattern.chars().count().saturating_sub(1);
+                            x.as_str().chars().skip(skip_chars).collect::<String>()
                         },
                         Style::default().fg(Color::DarkGray),
                     ),

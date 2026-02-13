@@ -20,9 +20,14 @@ impl TagList {
         }
 
         let tag_file_content = std::fs::read_to_string(file_path)
-            .map_err(|_| format!("Cannot read tag file at {}", file_path.display()))?;
-        serde_yaml::from_str(&tag_file_content)
-            .map_err(|_| format!("Failed to parse tag file at {}", file_path.display()))
+            .map_err(|err| format!("Cannot read tag file at {}: {}", file_path.display(), err))?;
+        serde_yaml::from_str(&tag_file_content).map_err(|err| {
+            format!(
+                "Failed to parse tag file at {}: {}",
+                file_path.display(),
+                err
+            )
+        })
     }
 
     pub fn get_first_autocomplete_list(&self) -> Option<Arc<String>> {
