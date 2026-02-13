@@ -1,0 +1,136 @@
+name: Release to new version
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths:
+      - "Cargo.toml"
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  check-version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.check_ver.outputs.version }}
+      exists: ${{ steps.tag_check.outputs.exists }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Extract Version
+        id: check_ver
+        run: |
+          VERSION=$(python -c "import tomllib; print(tomllib.load(open('Cargo.toml', 'rb'))['package']['version'])")
+          echo "Detected version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Check for Existing Tag
+        id: tag_check
+        run: |
+          VERSION="${{ steps.check_ver.outputs.version }}"
+          if git rev-parse "v$VERSION" >/dev/null 2>&1; then
+            echo "Tag v$VERSION already exists. Skipping release."
+            echo "exists=true" >> $GITHUB_OUTPUT
+          else
+            echo "Tag v$VERSION does not exist. Proceeding."
+            echo "exists=false" >> $GITHUB_OUTPUT
+          fi
+
+  build-release-binaries:
+    needs: check-version
+    if: needs.check-version.outputs.exists == 'false'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            asset: linux-x86_64
+            ext: ""
+          - os: windows-latest
+            asset: windows-x86_64
+            ext: ".exe"
+          - os: macos-latest
+            asset: macos-x86_64
+            ext: ""
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libudev-dev
+
+      - name: Build (release)
+        run: cargo build --release --verbose
+
+      - name: Package binary
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp "target/release/scope${{ matrix.ext }}" "dist/scope-${{ matrix.asset }}${{ matrix.ext }}"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: scope-${{ matrix.asset }}
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: check-version
+    if: needs.check-version.outputs.exists == 'false'
+    runs-on: macos-latest
+    permissions: write-all
+    environment: crates
+
+    steps:
+      - name: Publish crate
+        run: cargo publish
+
+  release:
+    needs: [check-version, build-release-binaries]
+    runs-on: ubuntu-latest
+    if: needs.check-version.outputs.exists == 'false'
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create Tag
+        run: |
+          VERSION="${{ needs.check-version.outputs.version }}"
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git tag -a "v$VERSION" -m "Auto-release v$VERSION"
+          git push origin "v$VERSION"
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+            tag_name: v${{ needs.check-version.outputs.version }}
+            name: v${{ needs.check-version.outputs.version }}
+            generate_release_notes: true
+            draft: false
+            prerelease: false
+            files: |
+              dist/**
