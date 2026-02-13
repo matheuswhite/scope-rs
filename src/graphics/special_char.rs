@@ -98,8 +98,8 @@ where
             return Some(SpecialCharItem::Plain(plain));
         };
 
-        let plain = self.content.drain(..start).collect::<String>();
-        let special = self.content.drain(..length).collect::<String>();
+        let plain = drain_chars_prefix(&mut self.content, start);
+        let special = drain_chars_prefix(&mut self.content, length);
         self.special = Some((special, self.column + start));
         self.column += start + length;
 
@@ -110,6 +110,18 @@ where
             Some(SpecialCharItem::Special(special, column))
         }
     }
+}
+
+fn char_to_byte_idx(s: &str, char_idx: usize) -> usize {
+    s.char_indices()
+        .nth(char_idx)
+        .map(|(byte_idx, _)| byte_idx)
+        .unwrap_or(s.len())
+}
+
+fn drain_chars_prefix(s: &mut String, char_count: usize) -> String {
+    let byte_idx = char_to_byte_idx(s, char_count);
+    s.drain(..byte_idx).collect()
 }
 
 #[cfg(test)]

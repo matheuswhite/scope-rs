@@ -658,14 +658,14 @@ impl ScreenMode {
         let query = if *is_case_sensitive {
             query.to_string()
         } else {
-            query.to_lowercase()
+            query.to_ascii_lowercase()
         };
 
         let message_splitted = message.to_special_char(|string| {
             let string = if *is_case_sensitive {
                 string.to_string()
             } else {
-                string.to_lowercase()
+                string.to_ascii_lowercase()
             };
 
             string.find(&query).map(|start| (start, query.len()).into())

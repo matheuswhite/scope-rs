@@ -20,11 +20,11 @@ use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Mous
 use lipsum::lipsum;
 use rand::{Rng, seq::SliceRandom};
 use serialport::FlowControl;
+use std::ops::Range;
 use std::sync::{
     Arc, RwLock,
     mpsc::{Receiver, Sender},
 };
-use std::vec;
 
 pub type InputsTask = Task<InputsShared, ()>;
 
@@ -511,9 +511,9 @@ impl InputsTask {
 
                             Self::handle_user_command(command_line_split, private);
                         } else {
-                            let command_line = Self::replace_hex_sequence(command_line);
-                            let mut command_line =
+                            let command_line =
                                 Self::replace_tag_sequence(command_line, &sw.tag_list);
+                            let mut command_line = Self::replace_hex_sequence(command_line);
 
                             let end_bytes = if let KeyModifiers::ALT = key.modifiers {
                                 b"".as_slice()
@@ -542,6 +542,16 @@ impl InputsTask {
         LoopStatus::Continue
     }
 
+    fn replace_range_chars(text: &str, range: Range<usize>, replacement: &str) -> String {
+        let mut new_text = String::new();
+
+        new_text.push_str(&text.chars().take(range.start).collect::<String>());
+        new_text.push_str(replacement);
+        new_text.push_str(&text.chars().skip(range.end).collect::<String>());
+
+        new_text
+    }
+
     fn handle_tab_input(private: &mut InputsConnections, shared: Arc<RwLock<InputsShared>>) {
         let mut sw = shared.write().expect("Cannot get input lock for write");
 
@@ -561,7 +571,7 @@ impl InputsTask {
         let cursor = sw.cursor;
         let start = cursor.saturating_sub(pattern_len);
 
-        sw.command_line.replace_range(start..cursor, &first_entry);
+        sw.command_line = Self::replace_range_chars(&sw.command_line, start..cursor, &first_entry);
         sw.cursor += first_entry_len - pattern_len;
 
         let command_line_len = sw.command_line.chars().count();
@@ -572,8 +582,9 @@ impl InputsTask {
             .position(|c| c.is_whitespace())
             .map(|pos| pos + cursor)
             .unwrap_or(command_line_len);
-        let cursor = sw.cursor;
-        sw.command_line.replace_range(cursor..white_space, "");
+        let cursor_after = sw.cursor;
+        sw.command_line =
+            Self::replace_range_chars(&sw.command_line, cursor_after..white_space, "");
 
         Self::update_tag_list(&mut sw, private);
     }
@@ -1075,8 +1086,7 @@ impl InputsTask {
         output
     }
 
-    fn replace_tag_sequence(command_line: Vec<u8>, tag_list: &TagList) -> Vec<u8> {
-        let command_line = String::from_utf8(command_line).unwrap();
+    fn replace_tag_sequence(command_line: String, tag_list: &TagList) -> String {
         let mut res = String::new();
 
         for item in command_line.to_special_char(|string| tag_list.tag_filter(string)) {
@@ -1091,7 +1101,7 @@ impl InputsTask {
             }
         }
 
-        res.as_bytes().to_vec()
+        res
     }
 
     fn update_tag_list(sw: &mut InputsShared, private: &mut InputsConnections) {

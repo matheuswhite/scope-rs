@@ -791,7 +791,7 @@ impl GraphicsTask {
         let mode = private.screen.mode_mut();
 
         let pattern = if !is_case_sensitive {
-            pattern.to_lowercase()
+            pattern.to_ascii_lowercase()
         } else {
             pattern
         };
@@ -807,20 +807,23 @@ impl GraphicsTask {
             let message = message.decode(decoder).message;
             let message = ANSI::remove_encoding(message);
 
-            let mut message = if !is_case_sensitive {
-                message.to_lowercase()
+            let message = if !is_case_sensitive {
+                message.to_ascii_lowercase()
             } else {
                 message
             };
 
-            let mut offset_x = 0;
-            while let Some(column) = message.find(&pattern) {
+            let mut search_start_byte = 0;
+            while let Some(rel_byte) = message[search_start_byte..].find(&pattern) {
+                let abs_byte = search_start_byte + rel_byte;
+
+                let column_chars = message[..abs_byte].chars().count();
                 mode.add_entry(BufferPosition {
                     line,
-                    column: column + offset_x,
+                    column: column_chars,
                 });
-                let remaining = message.drain(..column + pattern.len()).collect::<String>();
-                offset_x += remaining.len();
+
+                search_start_byte = abs_byte + pattern.len();
             }
         }
 
