@@ -96,10 +96,13 @@ jobs:
     needs: check-version
     if: needs.check-version.outputs.exists == 'false'
     runs-on: macos-latest
-    permissions: write-all
     environment: crates
 
     steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
       - name: Publish crate
         run: cargo publish
 
@@ -107,6 +110,8 @@ jobs:
     needs: [check-version, build-release-binaries]
     runs-on: ubuntu-latest
     if: needs.check-version.outputs.exists == 'false'
+    permissions: write-all
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
