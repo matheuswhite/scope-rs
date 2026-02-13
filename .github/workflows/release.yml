@@ -63,7 +63,7 @@ jobs:
             asset: windows-x86_64
             ext: ".exe"
           - os: macos-latest
-            asset: macos-x86_64
+            asset: macos-arm64
             ext: ""
     runs-on: ${{ matrix.os }}
     steps:
@@ -133,10 +133,10 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-            tag_name: v${{ needs.check-version.outputs.version }}
-            name: v${{ needs.check-version.outputs.version }}
-            generate_release_notes: true
-            draft: false
-            prerelease: false
-            files: |
-              dist/**
+          tag_name: v${{ needs.check-version.outputs.version }}
+          name: v${{ needs.check-version.outputs.version }}
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+          files: |
+            dist/**
