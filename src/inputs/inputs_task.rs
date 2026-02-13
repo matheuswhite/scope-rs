@@ -1,3 +1,5 @@
+use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
+use crate::infra::tags::TagList;
 use crate::{
     debug, error,
     graphics::{graphics_task::GraphicsCommand, screen::ScreenPosition},
@@ -18,12 +20,10 @@ use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Mous
 use lipsum::lipsum;
 use rand::{Rng, seq::SliceRandom};
 use serialport::FlowControl;
-use std::{
-    path::PathBuf,
-    sync::{
-        Arc, RwLock,
-        mpsc::{Receiver, Sender},
-    },
+use std::ops::Range;
+use std::sync::{
+    Arc, RwLock,
+    mpsc::{Receiver, Sender},
 };
 
 pub type InputsTask = Task<InputsShared, ()>;
@@ -36,10 +36,9 @@ pub struct InputsShared {
     pub cursor: usize,
     pub history_len: usize,
     pub current_hint: Option<String>,
-    pub autocomplete_list: Vec<Arc<String>>,
-    pub pattern: String,
     pub mode: InputMode,
     pub is_case_sensitive: bool,
+    pub tag_list: TagList,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -59,8 +58,8 @@ pub struct InputsConnections {
     history_index: Option<usize>,
     history: Vec<String>,
     backup_command_line: String,
-    tag_file: PathBuf,
     rx_channel: Producer<Arc<TimedBytes>>,
+    has_tag_failed: bool,
 }
 
 enum LoopStatus {
@@ -73,9 +72,15 @@ impl InputsTask {
         inputs_connections: InputsConnections,
         inputs_cmd_sender: Sender<()>,
         inputs_cmd_receiver: Receiver<()>,
+        tag_list: TagList,
     ) -> Self {
+        let shared = InputsShared {
+            tag_list,
+            ..Default::default()
+        };
+
         Self::new(
-            InputsShared::default(),
+            shared,
             inputs_connections,
             Self::task,
             inputs_cmd_sender,
@@ -183,7 +188,7 @@ impl InputsTask {
                         }
 
                         sw.cursor += 1;
-                        Self::update_tag_list();
+                        Self::update_tag_list(&mut sw, private);
                         private.history_index = None;
                     }
                     InputMode::Search => {
@@ -204,7 +209,7 @@ impl InputsTask {
                         }
 
                         sw.search_cursor += 1;
-                        Self::update_tag_list();
+                        Self::update_tag_list(&mut sw, private);
 
                         let _ = private
                             .graphics_cmd_sender
@@ -243,7 +248,7 @@ impl InputsTask {
                                 .enumerate()
                                 .filter_map(|(i, c)| if i != sw.cursor { Some(c) } else { None })
                                 .collect();
-                            Self::update_tag_list();
+                            Self::update_tag_list(&mut sw, private);
                         }
 
                         if sw.command_line.chars().count() > 0
@@ -265,7 +270,7 @@ impl InputsTask {
                                     |(i, c)| if i != sw.search_cursor { Some(c) } else { None },
                                 )
                                 .collect();
-                            Self::update_tag_list();
+                            Self::update_tag_list(&mut sw, private);
 
                             let _ = private
                                 .graphics_cmd_sender
@@ -296,7 +301,7 @@ impl InputsTask {
                             .enumerate()
                             .filter_map(|(i, c)| if i != sw.cursor { Some(c) } else { None })
                             .collect();
-                        Self::update_tag_list();
+                        Self::update_tag_list(&mut sw, private);
 
                         if sw.command_line.chars().count() > 0
                             && sw.command_line.chars().all(|x| x.is_whitespace())
@@ -313,7 +318,7 @@ impl InputsTask {
                             .enumerate()
                             .filter_map(|(i, c)| if i != sw.search_cursor { Some(c) } else { None })
                             .collect();
-                        Self::update_tag_list();
+                        Self::update_tag_list(&mut sw, private);
 
                         if sw.search_buffer.chars().count() > 0
                             && sw.search_buffer.chars().all(|x| x.is_whitespace())
@@ -335,11 +340,13 @@ impl InputsTask {
                     InputMode::Normal => {
                         if sw.cursor < sw.command_line.chars().count() {
                             sw.cursor += 1;
+                            Self::update_tag_list(&mut sw, private);
                         }
                     }
                     InputMode::Search => {
                         if sw.search_cursor < sw.search_buffer.chars().count() {
                             sw.search_cursor += 1;
+                            Self::update_tag_list(&mut sw, private);
                         }
                     }
                 }
@@ -351,11 +358,13 @@ impl InputsTask {
                     InputMode::Normal => {
                         if sw.cursor > 0 {
                             sw.cursor -= 1;
+                            Self::update_tag_list(&mut sw, private);
                         }
                     }
                     InputMode::Search => {
                         if sw.search_cursor > 0 {
                             sw.search_cursor -= 1;
+                            Self::update_tag_list(&mut sw, private);
                         }
                     }
                 }
@@ -371,6 +380,7 @@ impl InputsTask {
                         sw.search_cursor = sw.search_buffer.chars().count();
                     }
                 }
+                Self::update_tag_list(&mut sw, private);
             }
             KeyCode::Home => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
@@ -383,6 +393,7 @@ impl InputsTask {
                         sw.search_cursor = 0;
                     }
                 }
+                Self::update_tag_list(&mut sw, private);
             }
             KeyCode::Up => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
@@ -406,7 +417,7 @@ impl InputsTask {
                         sw.command_line
                             .clone_from(&private.history[private.history_index.unwrap()]);
                         sw.cursor = sw.command_line.chars().count();
-                        Self::update_tag_list();
+                        Self::update_tag_list(&mut sw, private);
                     }
                     InputMode::Search => {
                         let _ = private
@@ -440,7 +451,7 @@ impl InputsTask {
                         }
 
                         sw.cursor = sw.command_line.chars().count();
-                        Self::update_tag_list();
+                        Self::update_tag_list(&mut sw, private);
                     }
                     InputMode::Search => {
                         let _ = private
@@ -448,6 +459,9 @@ impl InputsTask {
                             .send(GraphicsCommand::NextSearch);
                     }
                 }
+            }
+            KeyCode::Tab => {
+                Self::handle_tab_input(private, shared.clone());
             }
             KeyCode::Enter if key.modifiers == ACTION_MODIFIER => {
                 let sr = shared.read().expect("Cannot get input lock for read");
@@ -483,10 +497,9 @@ impl InputsTask {
                             private.history.push(command_line.clone());
                         }
 
-                        Self::clear_tag_list();
+                        sw.tag_list.clear();
                         private.history_index = None;
                         sw.cursor = 0;
-                        drop(sw);
 
                         if command_line.starts_with("!") {
                             let command_line_split = command_line
@@ -498,9 +511,9 @@ impl InputsTask {
 
                             Self::handle_user_command(command_line_split, private);
                         } else {
-                            let command_line = Self::replace_hex_sequence(command_line);
-                            let mut command_line =
-                                Self::replace_tag_sequence(command_line, &private.tag_file);
+                            let command_line =
+                                Self::replace_tag_sequence(command_line, &sw.tag_list);
+                            let mut command_line = Self::replace_hex_sequence(command_line);
 
                             let end_bytes = if let KeyModifiers::ALT = key.modifiers {
                                 b"".as_slice()
@@ -527,6 +540,53 @@ impl InputsTask {
         }
 
         LoopStatus::Continue
+    }
+
+    fn replace_range_chars(text: &str, range: Range<usize>, replacement: &str) -> String {
+        let mut new_text = String::new();
+
+        new_text.push_str(&text.chars().take(range.start).collect::<String>());
+        new_text.push_str(replacement);
+        new_text.push_str(&text.chars().skip(range.end).collect::<String>());
+
+        new_text
+    }
+
+    fn handle_tab_input(private: &mut InputsConnections, shared: Arc<RwLock<InputsShared>>) {
+        let mut sw = shared.write().expect("Cannot get input lock for write");
+
+        let Some(first_entry) = sw.tag_list.get_first_autocomplete_list() else {
+            return;
+        };
+
+        let first_entry = format!("@{}", first_entry);
+        let first_entry_len = first_entry.chars().count();
+
+        let InputMode::Normal = sw.mode else {
+            return;
+        };
+
+        let pattern = sw.tag_list.pattern();
+        let pattern_len = pattern.chars().count();
+        let cursor = sw.cursor;
+        let start = cursor.saturating_sub(pattern_len);
+
+        sw.command_line = Self::replace_range_chars(&sw.command_line, start..cursor, &first_entry);
+        sw.cursor += first_entry_len - pattern_len;
+
+        let command_line_len = sw.command_line.chars().count();
+        let cursor_after = sw.cursor;
+        let white_space = sw
+            .command_line
+            .chars()
+            .skip(cursor_after)
+            .position(|c| c.is_whitespace())
+            .map(|pos| pos + cursor_after)
+            .unwrap_or(command_line_len);
+        sw.command_line =
+            Self::replace_range_chars(&sw.command_line, cursor_after..white_space, "");
+
+        Self::update_tag_list(&mut sw, private);
     }
 
     fn handle_connect_command(command_line_split: Vec<String>, private: &InputsConnections) {
@@ -1026,17 +1086,44 @@ impl InputsTask {
         output
     }
 
-    fn replace_tag_sequence(command_line: Vec<u8>, _tag_file: &PathBuf) -> Vec<u8> {
-        // TODO
-        command_line
+    fn replace_tag_sequence(command_line: String, tag_list: &TagList) -> String {
+        let mut res = String::with_capacity(command_line.len());
+
+        for item in command_line.to_special_char(|string| tag_list.tag_filter(string)) {
+            match item {
+                SpecialCharItem::Plain(s) => {
+                    res.push_str(&s);
+                }
+                SpecialCharItem::Special(s, _column) => {
+                    let tag_value = tag_list.get_tagged_key(&s);
+                    res.push_str(&tag_value);
+                }
+            }
+        }
+
+        res
     }
 
-    fn update_tag_list() {
-        // TODO
-    }
+    fn update_tag_list(sw: &mut InputsShared, private: &mut InputsConnections) {
+        let (buffer, cursor) = if sw.mode == InputMode::Normal {
+            (&sw.command_line, sw.cursor)
+        } else {
+            (&sw.search_buffer, sw.search_cursor)
+        };
 
-    fn clear_tag_list() {
-        // TODO
+        if let Err(err) = sw.tag_list.reload() {
+            if !private.has_tag_failed {
+                error!(private.logger, "Failed to reload tag list: {}", err);
+                private.has_tag_failed = true;
+                sw.tag_list.full_clear();
+            }
+            return;
+        }
+
+        private.has_tag_failed = false;
+
+        sw.tag_list.update_pattern(buffer, cursor);
+        sw.tag_list.update_autocomplete_list();
     }
 }
 
@@ -1047,7 +1134,6 @@ impl InputsConnections {
         graphics_cmd_sender: Sender<GraphicsCommand>,
         serial_if_cmd_sender: Sender<SerialCommand>,
         plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
-        tag_file: PathBuf,
         rx_channel: Producer<Arc<TimedBytes>>,
     ) -> Self {
         Self {
@@ -1064,8 +1150,8 @@ impl InputsConnections {
             ],
             history: vec![],
             backup_command_line: String::new(),
-            tag_file,
             rx_channel,
+            has_tag_failed: false,
         }
     }
 }

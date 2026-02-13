@@ -2,6 +2,8 @@ use super::Serialize;
 use crate::graphics::ansi::ANSI;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
 use crate::graphics::screen::{Screen, ScreenPosition};
+use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
+use crate::inputs::inputs_task::InputMode;
 use crate::{error, info, inputs, success};
 use crate::{
     infra::{
@@ -180,7 +182,7 @@ impl GraphicsTask {
                 matches!(serial_shared.mode, SerialMode::Connected),
             )
         };
-        let (text, cursor, history_len, current_hint) = {
+        let (text, cursor, history_len, current_hint, tag_list) = {
             let inputs_shared = inputs_shared
                 .read()
                 .expect("Cannot get inputs lock for read");
@@ -189,6 +191,7 @@ impl GraphicsTask {
                 inputs_shared.cursor as u16,
                 inputs_shared.history_len,
                 inputs_shared.current_hint.clone(),
+                inputs_shared.tag_list.clone(),
             )
         };
         let port = if port.is_empty() {
@@ -229,21 +232,25 @@ impl GraphicsTask {
             .border_type(BorderType::Thick)
             .border_style(Style::default().fg(bar_color));
 
-        let paragraph = Paragraph::new(Span::from({
-            " ".to_string()
-                + if let Some(hint) = current_hint.as_ref() {
-                    hint
-                } else {
-                    &text
-                }
-        }))
-        .style(Style::default().fg(if current_hint.is_some() {
-            Color::DarkGray
-        } else {
-            Color::Reset
-        }))
-        .block(block);
+        let hint_is_some = current_hint.is_some();
+        let hint = Span::styled(
+            current_hint.map(|s| format!(" {}", s)).unwrap_or_default(),
+            Style::default().fg(Color::DarkGray),
+        );
+        let hint = Line::from(hint);
 
+        let text = format!(" {}", text)
+            .to_special_char(|string| tag_list.tag_filter(string))
+            .map(|item| match item {
+                SpecialCharItem::Plain(s) => Span::from(s),
+                SpecialCharItem::Special(s, _column) => {
+                    Span::styled(s, Style::default().fg(Color::Cyan))
+                }
+            })
+            .collect::<Vec<_>>();
+        let text = Line::from(text);
+
+        let paragraph = Paragraph::new(if hint_is_some { hint } else { text }).block(block);
         frame.render_widget(paragraph, rect);
         frame.set_cursor(cursor.0, cursor.1);
     }
@@ -339,18 +346,21 @@ impl GraphicsTask {
         frame: &mut Frame,
         command_bar_y: u16,
     ) {
-        let (autocomplete_list, pattern) = {
+        let (autocomplete_list, pattern, input_mode, cursor, command) = {
             let inputs_shared = inputs_shared
                 .read()
                 .expect("Cannot get inputs lock for read");
 
             (
-                inputs_shared.autocomplete_list.clone(),
-                inputs_shared.pattern.clone(),
+                inputs_shared.tag_list.autocomplete_list(),
+                inputs_shared.tag_list.pattern(),
+                inputs_shared.mode,
+                inputs_shared.cursor,
+                inputs_shared.command_line.clone(),
             )
         };
 
-        if autocomplete_list.is_empty() {
+        if autocomplete_list.is_empty() || pattern.is_empty() || input_mode != InputMode::Normal {
             return;
         }
 
@@ -364,17 +374,28 @@ impl GraphicsTask {
             .iter()
             .fold(0u16, |len, x| max(len, x.chars().count() as u16));
         let area_size = (longest_entry_len + 5, entries.len() as u16 + 2);
-        let area = Rect::new(
-            frame.size().x + 2,
-            command_bar_y - area_size.1,
-            area_size.0,
-            area_size.1,
-        );
+        let max_x = frame.size().x
+            + frame
+                .size()
+                .width
+                .saturating_sub(area_size.0)
+                .saturating_sub(2);
+        let latest_at = command
+            .chars()
+            .take(cursor)
+            .enumerate()
+            .filter(|(_, c)| *c == '@')
+            .map(|(i, _)| i)
+            .last()
+            .unwrap_or(0);
+        let area_x = latest_at.clamp(2, max_x as usize);
+        let area_y = command_bar_y.saturating_sub(area_size.1);
+        let area = Rect::new(area_x as u16, area_y, area_size.0, area_size.1);
 
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
-            .style(Style::default().fg(Color::Magenta));
+            .style(Style::default().fg(Color::Cyan));
         let text = entries
             .iter()
             .map(|x| {
@@ -384,10 +405,15 @@ impl GraphicsTask {
                 Line::from(vec![
                     Span::styled(
                         format!(" {}", if !is_last { &pattern } else { "" }),
-                        Style::default().fg(Color::Magenta),
+                        Style::default().fg(Color::Cyan),
                     ),
                     Span::styled(
-                        x[pattern.len() - 1..].to_string(),
+                        if x.as_str() == "..." {
+                            x.to_string()
+                        } else {
+                            let skip_chars = pattern.chars().count().saturating_sub(1);
+                            x.as_str().chars().skip(skip_chars).collect::<String>()
+                        },
                         Style::default().fg(Color::DarkGray),
                     ),
                 ])
@@ -766,7 +792,7 @@ impl GraphicsTask {
         let mode = private.screen.mode_mut();
 
         let pattern = if !is_case_sensitive {
-            pattern.to_lowercase()
+            pattern.to_ascii_lowercase()
         } else {
             pattern
         };
@@ -782,20 +808,23 @@ impl GraphicsTask {
             let message = message.decode(decoder).message;
             let message = ANSI::remove_encoding(message);
 
-            let mut message = if !is_case_sensitive {
-                message.to_lowercase()
+            let message = if !is_case_sensitive {
+                message.to_ascii_lowercase()
             } else {
                 message
             };
 
-            let mut offset_x = 0;
-            while let Some(column) = message.find(&pattern) {
+            let mut search_start_byte = 0;
+            while let Some(rel_byte) = message[search_start_byte..].find(&pattern) {
+                let abs_byte = search_start_byte + rel_byte;
+
+                let column_chars = message[..abs_byte].chars().count();
                 mode.add_entry(BufferPosition {
                     line,
-                    column: column + offset_x,
+                    column: column_chars,
                 });
-                let remaining = message.drain(..column + pattern.len()).collect::<String>();
-                offset_x += remaining.len();
+
+                search_start_byte = abs_byte + pattern.len();
             }
         }
 

@@ -9,6 +9,7 @@ mod list;
 mod plugin;
 mod serial;
 
+use crate::infra::tags::TagList;
 use chrono::Local;
 use clap::{Parser, Subcommand};
 use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
@@ -19,6 +20,7 @@ use list::list_serial_ports;
 use plugin::engine::{PluginEngine, PluginEngineConnections};
 use serial::serial_if::{SerialConnections, SerialInterface, SerialSetup};
 use std::path::PathBuf;
+use std::process::exit;
 use std::sync::Arc;
 use std::sync::mpsc::channel;
 
@@ -61,6 +63,14 @@ fn app(
     baudrate: Option<u32>,
     latency: u64,
 ) -> Result<(), String> {
+    let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
+        format!(
+            "Failed to read or parse tag file at {}: {}",
+            tag_file.display(),
+            err
+        )
+    })?;
+
     let (logger, logger_receiver) = Logger::new("main".to_string());
     let mut tx_channel = Channel::default();
     let mut rx_channel = Channel::default();
@@ -99,7 +109,6 @@ fn app(
         graphics_cmd_sender.clone(),
         serial_if_cmd_sender.clone(),
         plugin_engine_cmd_sender.clone(),
-        tag_file,
         rx_channel.clone().new_producer(),
     );
 
@@ -120,8 +129,12 @@ fn app(
         latency,
     );
 
-    let inputs_task =
-        InputsTask::spawn_inputs_task(inputs_connections, inputs_cmd_sender, inputs_cmd_receiver);
+    let inputs_task = InputsTask::spawn_inputs_task(
+        inputs_connections,
+        inputs_cmd_sender,
+        inputs_cmd_receiver,
+        tag_list,
+    );
 
     let inputs_shared = inputs_task.shared_ref();
     let serial_shared = serial_if.shared_ref();
@@ -168,10 +181,6 @@ fn main() -> Result<(), String> {
 
     let cli = Cli::parse();
 
-    if cli.tag_file.is_some() {
-        return Err("Sorry! We're developing tag files and it's not available yet".to_string());
-    }
-
     let (port, baudrate) = match cli.command {
         Commands::Serial { port, baudrate } => (port, baudrate),
         Commands::Ble { .. } => {
@@ -194,7 +203,8 @@ fn main() -> Result<(), String> {
         baudrate,
         cli.latency.unwrap_or(500).clamp(0, 100_000),
     ) {
-        return Err(format!("[\x1b[31mERR\x1b[0m] {}", err));
+        eprintln!("[\x1b[31mERR\x1b[0m] {}", err);
+        exit(1);
     }
 
     println!("See you later ^^");

@@ -3,6 +3,7 @@ pub mod logger;
 pub mod messages;
 pub mod mpmc;
 pub mod recorder;
+pub mod tags;
 pub mod task;
 pub mod timer;
 pub mod typewriter;
