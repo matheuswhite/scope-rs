@@ -12,7 +12,7 @@ jobs:
     name: Check on Ubuntu
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Install libudev-sys
         run: |
           sudo apt-get install -y libudev-dev
@@ -24,7 +24,7 @@ jobs:
     name: Check on Windows
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Build
         run: |
           cargo build --release --verbose
@@ -33,7 +33,7 @@ jobs:
     name: Check on MacOS
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Build
         run: |
           cargo build --release --verbose

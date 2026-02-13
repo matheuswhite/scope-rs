@@ -24,15 +24,10 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
       - name: Extract Version
         id: check_ver
         run: |
-          VERSION=$(python -c "import tomllib; print(tomllib.load(open('Cargo.toml', 'rb'))['package']['version'])")
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')
           echo "Detected version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 

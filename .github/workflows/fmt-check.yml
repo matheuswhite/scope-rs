@@ -9,7 +9,7 @@ jobs:
     name: Check code style
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
       - name: Run rustfmt
         run: |
           cargo fmt --all -- --check
