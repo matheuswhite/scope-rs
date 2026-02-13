@@ -63,9 +63,13 @@ fn app(
     baudrate: Option<u32>,
     latency: u64,
 ) -> Result<(), String> {
-    let Ok(tag_list) = TagList::new(tag_file.clone()) else {
-        return Err(format!("Failed to load tag file at {}", tag_file.display()));
-    };
+    let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
+        format!(
+            "Failed to read or parse tag file at {}: {}",
+            tag_file.display(),
+            err
+        )
+    })?;
 
     let (logger, logger_receiver) = Logger::new("main".to_string());
     let mut tx_channel = Channel::default();
