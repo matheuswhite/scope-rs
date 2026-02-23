@@ -700,9 +700,17 @@ impl InputsTask {
                             .interface_cmd_sender
                             .send(InterfaceCommand::Serial(SerialCommand::Disconnect));
                     }
-                    "flow" => {
-                        Self::handle_flow_command(command_line_split[1..].to_vec(), private);
-                    }
+                    "flow" => match private.if_type {
+                        InterfaceType::Serial => {
+                            Self::handle_flow_command(command_line_split, private);
+                        }
+                        InterfaceType::Rtt => {
+                            error!(
+                                private.logger,
+                                "Flow control is only available for serial interfaces"
+                            );
+                        }
+                    },
                     _ => {
                         error!(private.logger, "Invalid subcommand for serial");
                     }

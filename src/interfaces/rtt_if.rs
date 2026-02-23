@@ -65,14 +65,17 @@ pub struct RttInterface;
 
 impl RttShared {
     pub fn new(setup: RttSetup) -> Self {
+        let target = setup.target.unwrap_or_default();
+        let mode = if !target.is_empty() {
+            RttMode::Reconnecting
+        } else {
+            RttMode::DoNotConnect
+        };
+
         Self {
-            target: setup.target.clone().unwrap_or("".to_string()),
+            target,
             channel: setup.channel.unwrap_or(0),
-            mode: if !setup.target.unwrap_or("".to_string()).is_empty() {
-                RttMode::Reconnecting
-            } else {
-                RttMode::DoNotConnect
-            },
+            mode,
         }
     }
 }
@@ -233,12 +236,10 @@ impl RttInterface {
                                 let mut part = part.to_vec();
                                 part.push(b'\n');
 
-                                if part.len() > 0 {
-                                    rx.produce(Arc::new(TimedBytes {
-                                        timestamp: Local::now(),
-                                        message: part,
-                                    }));
-                                }
+                                rx.produce(Arc::new(TimedBytes {
+                                    timestamp: Local::now(),
+                                    message: part,
+                                }));
 
                                 now = Instant::now();
                             }
@@ -323,6 +324,12 @@ impl RttInterface {
                 Some(rtt)
             }
             Err(probe_rs::rtt::Error::MultipleControlBlocksFound(instances)) => {
+                warning!(
+                    logger,
+                    "Multiple RTT control blocks found ({}); selecting first at address {:#010X}",
+                    instances.len(),
+                    instances[0]
+                );
                 let res = Rtt::attach_at(core, instances[0]).ok();
                 *last_address = Some(instances[0]);
                 res

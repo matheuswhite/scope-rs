@@ -8,7 +8,7 @@ impl ANSI {
     const PATTERNS: &[(&str, Color)] = &[
         ("\\x1b[0m", Color::Reset),
         ("\\x1b[30m", Color::Black),
-        ("\\x1b[1;30m", Color::Red),
+        ("\\x1b[1;30m", Color::Black),
         ("\\x1b[31m", Color::Red),
         ("\\x1b[1;31m", Color::Red),
         ("\\x1b[32m", Color::Green),
@@ -16,13 +16,13 @@ impl ANSI {
         ("\\x1b[33m", Color::Yellow),
         ("\\x1b[1;33m", Color::Yellow),
         ("\\x1b[34m", Color::Blue),
-        ("\\x1b[1;34m", Color::Yellow),
+        ("\\x1b[1;34m", Color::Blue),
         ("\\x1b[35m", Color::Magenta),
-        ("\\x1b[1;35m", Color::Yellow),
+        ("\\x1b[1;35m", Color::Magenta),
         ("\\x1b[36m", Color::Cyan),
-        ("\\x1b[1;36m", Color::Yellow),
+        ("\\x1b[1;36m", Color::Cyan),
         ("\\x1b[37m", Color::White),
-        ("\\x1b[1;37m", Color::Yellow),
+        ("\\x1b[1;37m", Color::White),
         ("\\x1b[m", Color::Reset),
         ("\\x1b[J", Color::Reset),
         ("\\x1b[A", Color::Reset),
@@ -53,6 +53,7 @@ impl ANSI {
                 && let Some(letter_pos) = string[start..]
                     .find(|c| matches!(c, 'A' | 'B' | 'C' | 'D'))
                     .map(|pos| start + pos)
+                && letter_pos > start + 5
                 && string[start + 5..letter_pos].parse::<u32>().is_ok()
             {
                 least_pos = start;
@@ -105,6 +106,7 @@ impl ANSI {
                 && let Some(letter_pos) = string[start..]
                     .find(|c| matches!(c, 'A' | 'B' | 'C' | 'D'))
                     .map(|pos| start + pos)
+                && letter_pos > start + 5
                 && string[start + 5..letter_pos].parse::<u32>().is_ok()
             {
                 least_pos = start;
