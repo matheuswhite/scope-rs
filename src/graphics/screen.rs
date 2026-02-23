@@ -861,7 +861,10 @@ impl ScreenDecoder {
                     }
                 }
 
-                result.replace("\n", "\\n").replace("\r", "\\r")
+                result
+                    .replace("\n", "\\n")
+                    .replace("\r", "\\r")
+                    .replace("\t", "    ")
             }
         }
     }
