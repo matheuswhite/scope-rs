@@ -817,6 +817,7 @@ impl ScreenDecoder {
                 .map(|&b| match b {
                     b'\n' => "\\n".to_string(),
                     b'\r' => "\\r".to_string(),
+                    b'\x09' => "    ".to_string(),
                     b if (0x20..=0x7e).contains(&b) => (b as char).to_string(),
                     _ => format!("\\x{:02x}", b),
                 })
