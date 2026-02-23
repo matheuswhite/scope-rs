@@ -702,7 +702,7 @@ impl InputsTask {
                     }
                     "flow" => match private.if_type {
                         InterfaceType::Serial => {
-                            Self::handle_flow_command(command_line_split, private);
+                            Self::handle_flow_command(command_line_split[1..].to_vec(), private);
                         }
                         InterfaceType::Rtt => {
                             error!(
@@ -734,9 +734,17 @@ impl InputsTask {
 
                 let _ = private.interface_cmd_sender.send(disconn_cmd);
             }
-            "flow" => {
-                Self::handle_flow_command(command_line_split, private);
-            }
+            "flow" => match private.if_type {
+                InterfaceType::Serial => {
+                    Self::handle_flow_command(command_line_split, private);
+                }
+                InterfaceType::Rtt => {
+                    error!(
+                        private.logger,
+                        "Flow control is only available for serial interfaces"
+                    );
+                }
+            },
             "log" => {
                 if command_line_split.len() < 3 {
                     error!(

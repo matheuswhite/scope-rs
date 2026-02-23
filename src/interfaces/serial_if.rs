@@ -253,7 +253,7 @@ impl SerialInterface {
     ) -> Option<SerialMode> {
         let sr = shared
             .read()
-            .expect("Cannot get serial share lock for write");
+            .expect("Cannot get serial share lock for read");
         let sr = match sr.deref() {
             InterfaceShared::Serial(sr) => sr,
             _ => unreachable!(),

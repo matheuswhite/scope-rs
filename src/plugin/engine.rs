@@ -272,7 +272,13 @@ impl PluginEngine {
                                 InterfaceShared::Serial(serial_shared) => {
                                     (serial_shared.port.clone(), serial_shared.baudrate)
                                 }
-                                _ => ("".to_string(), 0),
+                                _ => {
+                                    warning!(
+                                        private.logger,
+                                        "Plugin requested :serial.info but the active interface is not Serial; returning empty port and baudrate 0"
+                                    );
+                                    ("".to_string(), 0)
+                                }
                             }
                         };
 
