@@ -20,6 +20,7 @@ use chrono::Local;
 use core::panic;
 use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton};
 use lipsum::lipsum;
+use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use rand::{Rng, seq::SliceRandom};
 use serialport::FlowControl;
 use std::ops::Range;
@@ -63,6 +64,8 @@ pub struct InputsConnections {
     rx_channel: Producer<Arc<TimedBytes>>,
     has_tag_failed: bool,
     if_type: InterfaceType,
+    matcher: nucleo_matcher::Matcher,
+    fuzzy_history: Vec<String>,
 }
 
 enum LoopStatus {
@@ -409,16 +412,39 @@ impl InputsTask {
 
                         match &mut private.history_index {
                             None => {
-                                private.history_index = Some(private.history.len() - 1);
                                 private.backup_command_line.clone_from(&sw.command_line);
+                                private.history_index = {
+                                    // History needs to be reversed for the fuzzy match, because
+                                    // the most recent commands are at the end of the vector
+                                    let hist = private.history.iter().rev();
+
+                                    let fuzzy_history: Vec<String> = Pattern::parse(
+                                        private.backup_command_line.as_str(),
+                                        CaseMatching::Ignore,
+                                        Normalization::Never,
+                                    )
+                                    .match_list(hist, &mut private.matcher)
+                                    .iter()
+                                    .rev()
+                                    .map(|&(item, _)| item.clone())
+                                    .collect();
+
+                                    private.fuzzy_history.clone_from(&fuzzy_history);
+
+                                    if private.fuzzy_history.is_empty() {
+                                        return LoopStatus::Continue;
+                                    }
+                                    Some(private.fuzzy_history.len() - 1)
+                                };
                             }
-                            Some(0) => {}
+
+                            Some(0) => return LoopStatus::Continue,
                             Some(idx) => *idx -= 1,
                         }
 
                         sw.current_hint = None;
                         sw.command_line
-                            .clone_from(&private.history[private.history_index.unwrap()]);
+                            .clone_from(&private.fuzzy_history[private.history_index.unwrap()]);
                         sw.cursor = sw.command_line.chars().count();
                         Self::update_tag_list(&mut sw, private);
                     }
@@ -439,8 +465,8 @@ impl InputsTask {
                         }
 
                         match &mut private.history_index {
-                            None => {}
-                            Some(idx) if *idx == (private.history.len() - 1) => {
+                            None => return LoopStatus::Continue,
+                            Some(idx) if *idx == (private.fuzzy_history.len() - 1) => {
                                 private.history_index = None;
                                 sw.command_line.clone_from(&private.backup_command_line);
                                 if sw.command_line.is_empty() {
@@ -449,7 +475,7 @@ impl InputsTask {
                             }
                             Some(idx) => {
                                 *idx += 1;
-                                sw.command_line.clone_from(&private.history[*idx]);
+                                sw.command_line.clone_from(&private.fuzzy_history[*idx]);
                             }
                         }
 
@@ -1195,6 +1221,8 @@ impl InputsConnections {
             rx_channel,
             has_tag_failed: false,
             if_type,
+            matcher: nucleo_matcher::Matcher::new(nucleo_matcher::Config::DEFAULT),
+            fuzzy_history: vec![],
         }
     }
 }

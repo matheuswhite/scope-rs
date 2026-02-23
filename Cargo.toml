@@ -47,6 +47,7 @@ regex = "1.10.5"
 lipsum = "0.9.1"
 arboard = "3.6.1"
 probe-rs = "0.31.0"
+nucleo-matcher = "0.3.1"
 
 [target.'cfg(windows)'.dependencies]
 ctrlc = "3.4.3"
