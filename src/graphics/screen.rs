@@ -646,15 +646,15 @@ impl ScreenMode {
             unreachable!();
         };
 
-        let disable_style = Style::default().bg(Color::Black).fg(Color::DarkGray);
+        let disable_style = Style::default().bg(Color::Reset).fg(Color::DarkGray);
         let message = ANSI::remove_encoding(line.message);
 
         if query.is_empty() {
             return vec![Span::styled(message, disable_style)];
         }
 
-        let highlighted_style = Style::default().bg(Color::Black).fg(Color::Yellow);
-        let chosen_style = Style::default().bg(Color::Yellow).fg(Color::Black);
+        let highlighted_style = Style::default().bg(Color::Reset).fg(Color::Yellow);
+        let chosen_style = Style::default().bg(Color::Yellow).fg(Color::DarkGray);
         let query = if *is_case_sensitive {
             query.to_string()
         } else {
@@ -704,7 +704,7 @@ impl ScreenMode {
     }
 
     fn rx_line(&self, line: BufferLine<String>) -> Span<'static> {
-        let style = Style::default().bg(Color::Black).fg(Color::White);
+        let style = Style::default().bg(Color::Reset).fg(Color::White);
         Span::styled(line.message, style)
     }
 
