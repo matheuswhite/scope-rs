@@ -163,11 +163,11 @@ impl SerialInterface {
 
             {
                 let sr = shared.read().expect("Cannot get serial shared for read");
-                let sr = match sr.deref() {
-                    InterfaceShared::Serial(sr) => sr,
+                let sr_ref = match sr.deref() {
+                    InterfaceShared::Serial(sr_ref) => sr_ref,
                     _ => unreachable!(),
                 };
-                let mode = sr.mode;
+                let mode = sr_ref.mode;
 
                 match mode {
                     SerialMode::DoNotConnect => {
@@ -181,6 +181,7 @@ impl SerialInterface {
                             &logger,
                             &plugin_engine_cmd_sender,
                         );
+                        drop(sr);
                         Self::set_mode(shared.clone(), new_mode);
                     }
                     SerialMode::Connected => { /* Do nothing. It's already connected. */ }
