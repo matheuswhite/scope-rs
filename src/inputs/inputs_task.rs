@@ -727,6 +727,10 @@ impl InputsTask {
                     );
                     return;
                 };
+                if size == 0 {
+                    error!(logger, "Size argument must be greater than 0: {}", size);
+                    return;
+                }
 
                 (address, size)
             }
@@ -831,7 +835,7 @@ impl InputsTask {
                 if command_line_split.len() < 2 {
                     error!(
                         private.logger,
-                        "Please, use \"connect\" or \"disconnect\" subcommands"
+                        "Please, use \"connect\", \"disconnect\" or \"read\" subcommands"
                     );
                     return;
                 }

@@ -516,7 +516,7 @@ impl RttInterface {
             }
         };
 
-        let mut buffer = vec![0u8; size];
+        let mut buffer = vec![0u8; size.min(1024)];
         if let Err(e) = core.read(address, &mut buffer) {
             error!(logger, "Failed to read memory at {:#010X}: {}", address, e);
             return;
