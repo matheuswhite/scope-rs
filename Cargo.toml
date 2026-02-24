@@ -2,7 +2,7 @@
 name = "scope-monitor"
 description = "A multi-platform serial monitor with user-extensible features"
 authors = ["Matheus T. dos Santos <matheuswhite1@protonmail.com>"]
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 rust-version = "1.92.0"
 license-file = "LICENSE"
@@ -46,6 +46,7 @@ tokio = { version = "1.43.1", features = ["full"] }
 regex = "1.10.5"
 lipsum = "0.9.1"
 arboard = "3.6.1"
+probe-rs = "0.31.0"
 
 [target.'cfg(windows)'.dependencies]
 ctrlc = "3.4.3"

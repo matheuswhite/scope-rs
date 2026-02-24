@@ -5,19 +5,30 @@ use ratatui::{style::Color, text::Span};
 pub struct ANSI;
 
 impl ANSI {
-    const PATTERNS: [(&str, Color); 12] = [
+    const PATTERNS: &[(&str, Color)] = &[
         ("\\x1b[0m", Color::Reset),
         ("\\x1b[30m", Color::Black),
-        ("\\x1b[32m", Color::Green),
-        ("\\x1b[1;32m", Color::Green),
+        ("\\x1b[1;30m", Color::Black),
         ("\\x1b[31m", Color::Red),
         ("\\x1b[1;31m", Color::Red),
+        ("\\x1b[32m", Color::Green),
+        ("\\x1b[1;32m", Color::Green),
         ("\\x1b[33m", Color::Yellow),
         ("\\x1b[1;33m", Color::Yellow),
         ("\\x1b[34m", Color::Blue),
+        ("\\x1b[1;34m", Color::Blue),
         ("\\x1b[35m", Color::Magenta),
+        ("\\x1b[1;35m", Color::Magenta),
         ("\\x1b[36m", Color::Cyan),
+        ("\\x1b[1;36m", Color::Cyan),
         ("\\x1b[37m", Color::White),
+        ("\\x1b[1;37m", Color::White),
+        ("\\x1b[m", Color::Reset),
+        ("\\x1b[J", Color::Reset),
+        ("\\x1b[A", Color::Reset),
+        ("\\x1b[B", Color::Reset),
+        ("\\x1b[C", Color::Reset),
+        ("\\x1b[D", Color::Reset),
     ];
 
     pub fn decode(input: Span) -> Vec<Span> {
@@ -33,8 +44,20 @@ impl ANSI {
                     && start < least_pos
                 {
                     least_pos = start;
-                    found_pattern = Some(pattern);
+                    found_pattern = Some(*pattern);
                 }
+            }
+
+            if let Some(start) = string.find("\\x1b[")
+                && start < least_pos
+                && let Some(letter_pos) = string[start..]
+                    .find(|c| matches!(c, 'A' | 'B' | 'C' | 'D'))
+                    .map(|pos| start + pos)
+                && letter_pos > start + 5
+                && string[start + 5..letter_pos].parse::<u32>().is_ok()
+            {
+                least_pos = start;
+                found_pattern = Some(&string[start..=letter_pos]);
             }
 
             found_pattern.map(|found_pattern| {
@@ -51,8 +74,8 @@ impl ANSI {
                 }
                 SpecialCharItem::Special(special, _) => {
                     'pattern_loop: for (pattern, new_fg) in Self::PATTERNS {
-                        if special == pattern {
-                            color = new_fg;
+                        if &special == pattern {
+                            color = *new_fg;
                             break 'pattern_loop;
                         }
                     }
@@ -74,8 +97,20 @@ impl ANSI {
                     && start < least_pos
                 {
                     least_pos = start;
-                    found_pattern = Some(pattern);
+                    found_pattern = Some(*pattern);
                 }
+            }
+
+            if let Some(start) = string.find("\\x1b[")
+                && start < least_pos
+                && let Some(letter_pos) = string[start..]
+                    .find(|c| matches!(c, 'A' | 'B' | 'C' | 'D'))
+                    .map(|pos| start + pos)
+                && letter_pos > start + 5
+                && string[start + 5..letter_pos].parse::<u32>().is_ok()
+            {
+                least_pos = start;
+                found_pattern = Some(&string[start..=letter_pos]);
             }
 
             found_pattern.map(|found_pattern| {
@@ -121,5 +156,27 @@ mod tests {
         let output = ANSI::remove_encoding(input);
 
         assert_eq!(output, "Hello Red World");
+    }
+
+    #[test]
+    fn test_decode_dyn() {
+        let input = Span::raw("Hello \\x1b[15CRed Wo\\x1b[Crld\\x1b[");
+        let spans = ANSI::decode(input);
+
+        assert_eq!(spans.len(), 3);
+        assert_eq!(spans[0].content, "Hello ");
+        assert_eq!(spans[0].style.fg, Some(Color::Reset));
+        assert_eq!(spans[1].content, "Red Wo");
+        assert_eq!(spans[1].style.fg, Some(Color::Reset));
+        assert_eq!(spans[2].content, "rld\\x1b[");
+        assert_eq!(spans[2].style.fg, Some(Color::Reset));
+    }
+
+    #[test]
+    fn test_remove_dyn() {
+        let input = "Hello \\x1b[15CRed Wo\\x1b[Crld\\x1b[".to_string();
+        let output = ANSI::remove_encoding(input);
+
+        assert_eq!(output, "Hello Red World\\x1b[");
     }
 }

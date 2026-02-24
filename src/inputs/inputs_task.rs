@@ -1,5 +1,7 @@
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::infra::tags::TagList;
+use crate::interfaces::rtt_if::RttCommand;
+use crate::interfaces::{InterfaceCommand, InterfaceType};
 use crate::{
     debug, error,
     graphics::{graphics_task::GraphicsCommand, screen::ScreenPosition},
@@ -10,8 +12,8 @@ use crate::{
         mpmc::Producer,
         task::Task,
     },
+    interfaces::serial_if::{SerialCommand, SerialSetup},
     plugin::engine::PluginEngineCommand,
-    serial::serial_if::{SerialCommand, SerialSetup},
     success, warning,
 };
 use chrono::Local;
@@ -52,7 +54,7 @@ pub struct InputsConnections {
     logger: Logger,
     tx: Producer<Arc<TimedBytes>>,
     graphics_cmd_sender: Sender<GraphicsCommand>,
-    serial_if_cmd_sender: Sender<SerialCommand>,
+    interface_cmd_sender: Sender<InterfaceCommand>,
     plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
     hints: Vec<&'static str>,
     history_index: Option<usize>,
@@ -60,6 +62,7 @@ pub struct InputsConnections {
     backup_command_line: String,
     rx_channel: Producer<Arc<TimedBytes>>,
     has_tag_failed: bool,
+    if_type: InterfaceType,
 }
 
 enum LoopStatus {
@@ -606,19 +609,23 @@ impl InputsTask {
 
         match command_line_split.len() {
             x if x < 2 => {
-                let _ = private.serial_if_cmd_sender.send(SerialCommand::Connect);
+                let _ = private
+                    .interface_cmd_sender
+                    .send(InterfaceCommand::Serial(SerialCommand::Connect));
             }
             2 => {
                 let setup = SerialCommand::Setup(mount_setup(&command_line_split[1], None));
-                let _ = private.serial_if_cmd_sender.send(setup);
+                let _ = private
+                    .interface_cmd_sender
+                    .send(InterfaceCommand::Serial(setup));
             }
             _ => {
                 let setup = mount_setup(&command_line_split[1], None);
                 let setup = mount_setup(&command_line_split[2], Some(setup));
 
                 let _ = private
-                    .serial_if_cmd_sender
-                    .send(SerialCommand::Setup(setup));
+                    .interface_cmd_sender
+                    .send(InterfaceCommand::Serial(SerialCommand::Setup(setup)));
             }
         }
     }
@@ -645,12 +652,15 @@ impl InputsTask {
             }
         };
 
-        let res = private
-            .serial_if_cmd_sender
-            .send(SerialCommand::Setup(SerialSetup {
-                flow_control: Some(flow_control),
-                ..SerialSetup::default()
-            }));
+        let res =
+            private
+                .interface_cmd_sender
+                .send(InterfaceCommand::Serial(SerialCommand::Setup(
+                    SerialSetup {
+                        flow_control: Some(flow_control),
+                        ..SerialSetup::default()
+                    },
+                )));
 
         match res {
             Ok(_) => success!(
@@ -686,11 +696,21 @@ impl InputsTask {
                         Self::handle_connect_command(command_line_split[1..].to_vec(), private);
                     }
                     "disconnect" => {
-                        let _ = private.serial_if_cmd_sender.send(SerialCommand::Disconnect);
+                        let _ = private
+                            .interface_cmd_sender
+                            .send(InterfaceCommand::Serial(SerialCommand::Disconnect));
                     }
-                    "flow" => {
-                        Self::handle_flow_command(command_line_split[1..].to_vec(), private);
-                    }
+                    "flow" => match private.if_type {
+                        InterfaceType::Serial => {
+                            Self::handle_flow_command(command_line_split[1..].to_vec(), private);
+                        }
+                        InterfaceType::Rtt => {
+                            error!(
+                                private.logger,
+                                "Flow control is only available for serial interfaces"
+                            );
+                        }
+                    },
                     _ => {
                         error!(private.logger, "Invalid subcommand for serial");
                     }
@@ -700,14 +720,31 @@ impl InputsTask {
                 Self::handle_ipsum_command(command_line_split, private);
             }
             "connect" => {
+                /* FIXME: It need to check which interface is active, and call
+                the correct handler. Currently, it is calling the serial handler
+                by default, but it can cause problems if the active interface is
+                RTT. */
                 Self::handle_connect_command(command_line_split, private);
             }
             "disconnect" => {
-                let _ = private.serial_if_cmd_sender.send(SerialCommand::Disconnect);
+                let disconn_cmd = match private.if_type {
+                    InterfaceType::Serial => InterfaceCommand::Serial(SerialCommand::Disconnect),
+                    InterfaceType::Rtt => InterfaceCommand::Rtt(RttCommand::Disconnect),
+                };
+
+                let _ = private.interface_cmd_sender.send(disconn_cmd);
             }
-            "flow" => {
-                Self::handle_flow_command(command_line_split, private);
-            }
+            "flow" => match private.if_type {
+                InterfaceType::Serial => {
+                    Self::handle_flow_command(command_line_split, private);
+                }
+                InterfaceType::Rtt => {
+                    error!(
+                        private.logger,
+                        "Flow control is only available for serial interfaces"
+                    );
+                }
+            },
             "log" => {
                 if command_line_split.len() < 3 {
                     error!(
@@ -963,7 +1000,11 @@ impl InputsTask {
                         let _ = private
                             .plugin_engine_cmd_sender
                             .send(PluginEngineCommand::Exit);
-                        let _ = private.serial_if_cmd_sender.send(SerialCommand::Exit);
+                        let exit_cmd = match private.if_type {
+                            InterfaceType::Serial => InterfaceCommand::Serial(SerialCommand::Exit),
+                            InterfaceType::Rtt => InterfaceCommand::Rtt(RttCommand::Exit),
+                        };
+                        let _ = private.interface_cmd_sender.send(exit_cmd);
                         let _ = private.graphics_cmd_sender.send(GraphicsCommand::Exit);
                         break 'input_loop;
                     }
@@ -1132,15 +1173,16 @@ impl InputsConnections {
         logger: Logger,
         tx: Producer<Arc<TimedBytes>>,
         graphics_cmd_sender: Sender<GraphicsCommand>,
-        serial_if_cmd_sender: Sender<SerialCommand>,
+        interface_cmd_sender: Sender<InterfaceCommand>,
         plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
         rx_channel: Producer<Arc<TimedBytes>>,
+        if_type: InterfaceType,
     ) -> Self {
         Self {
             logger,
             tx,
             graphics_cmd_sender,
-            serial_if_cmd_sender,
+            interface_cmd_sender,
             plugin_engine_cmd_sender,
             history_index: None,
             hints: vec![
@@ -1152,6 +1194,7 @@ impl InputsConnections {
             backup_command_line: String::new(),
             rx_channel,
             has_tag_failed: false,
+            if_type,
         }
     }
 }

@@ -4,8 +4,8 @@ use crate::{
         logger::{LogLevel, Logger},
         messages::TimedBytes,
         mpmc::{Consumer, Producer},
-        task::Task,
     },
+    interfaces::{InterfaceCommand, InterfaceShared},
     plugin::engine::PluginEngineCommand,
     success, warning,
 };
@@ -13,6 +13,7 @@ use chrono::Local;
 use serialport::{DataBits, FlowControl, Parity, StopBits};
 use std::{
     io::{self, Read, Write},
+    ops::{Deref, DerefMut},
     sync::{
         Arc, RwLock,
         mpsc::{Receiver, Sender},
@@ -20,8 +21,6 @@ use std::{
     thread::{sleep, yield_now},
     time::{Duration, Instant},
 };
-
-pub type SerialInterface = Task<SerialShared, SerialCommand>;
 
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 type SerialPort = serialport::TTYPort;
@@ -70,45 +69,43 @@ pub enum SerialMode {
     Connected,
 }
 
+pub struct SerialInterface;
+
+impl SerialShared {
+    pub fn new(setup: SerialSetup) -> Self {
+        Self {
+            port: setup.port.clone().unwrap_or("".to_string()),
+            baudrate: setup.baudrate.unwrap_or(0),
+            data_bits: setup.data_bits.unwrap_or(DataBits::Eight),
+            flow_control: setup.flow_control.unwrap_or(FlowControl::None),
+            parity: setup.parity.unwrap_or(Parity::None),
+            stop_bits: setup.stop_bits.unwrap_or(StopBits::One),
+            mode: if !setup.port.unwrap_or("".to_string()).is_empty()
+                && setup.baudrate.unwrap_or(0) != 0
+            {
+                SerialMode::Reconnecting
+            } else {
+                SerialMode::DoNotConnect
+            },
+        }
+    }
+}
+
 impl SerialInterface {
     const NEW_LINE_TIMEOUT_MS: u128 = 1_000;
     const SERIAL_TIMEOUT_MS: u64 = 100;
 
-    pub fn spawn_serial_interface(
-        connections: SerialConnections,
-        cmd_sender: Sender<SerialCommand>,
-        cmd_receiver: Receiver<SerialCommand>,
-        setup: SerialSetup,
-    ) -> Self {
-        Self::new(
-            SerialShared {
-                port: setup.port.clone().unwrap_or("".to_string()),
-                baudrate: setup.baudrate.unwrap_or(0),
-                data_bits: setup.data_bits.unwrap_or(DataBits::Eight),
-                flow_control: setup.flow_control.unwrap_or(FlowControl::None),
-                parity: setup.parity.unwrap_or(Parity::None),
-                stop_bits: setup.stop_bits.unwrap_or(StopBits::One),
-                mode: if !setup.port.unwrap_or("".to_string()).is_empty()
-                    && setup.baudrate.unwrap_or(0) != 0
-                {
-                    SerialMode::Reconnecting
-                } else {
-                    SerialMode::DoNotConnect
-                },
-            },
-            connections,
-            Self::task,
-            cmd_sender,
-            cmd_receiver,
-        )
-    }
-
-    fn set_mode(shared: Arc<RwLock<SerialShared>>, mode: Option<SerialMode>) {
+    fn set_mode(shared: Arc<RwLock<InterfaceShared>>, mode: Option<SerialMode>) {
         let Some(mode) = mode else {
             return;
         };
 
         let mut sw = shared.write().expect("Cannot get serial lock for write");
+        let sw = match sw.deref_mut() {
+            InterfaceShared::Serial(sw) => sw,
+            _ => unreachable!(),
+        };
+
         sw.mode = mode;
     }
 
@@ -120,10 +117,10 @@ impl SerialInterface {
         }
     }
 
-    fn task(
-        shared: Arc<RwLock<SerialShared>>,
+    pub fn task(
+        shared: Arc<RwLock<InterfaceShared>>,
         connections: SerialConnections,
-        cmd_receiver: Receiver<SerialCommand>,
+        cmd_receiver: Receiver<InterfaceCommand>,
     ) {
         let SerialConnections {
             logger,
@@ -138,7 +135,7 @@ impl SerialInterface {
         let mut now = Instant::now();
 
         'task_loop: loop {
-            if let Ok(cmd) = cmd_receiver.try_recv() {
+            if let Ok(InterfaceCommand::Serial(cmd)) = cmd_receiver.try_recv() {
                 let new_mode = match cmd {
                     SerialCommand::Connect => Self::connect(
                         shared.clone(),
@@ -165,10 +162,12 @@ impl SerialInterface {
             }
 
             {
-                let mode = shared
-                    .read()
-                    .expect("Cannot get serial shared for read")
-                    .mode;
+                let sr = shared.read().expect("Cannot get serial shared for read");
+                let sr = match sr.deref() {
+                    InterfaceShared::Serial(sr) => sr,
+                    _ => unreachable!(),
+                };
+                let mode = sr.mode;
 
                 match mode {
                     SerialMode::DoNotConnect => {
@@ -247,24 +246,28 @@ impl SerialInterface {
     }
 
     fn connect(
-        shared: Arc<RwLock<SerialShared>>,
+        shared: Arc<RwLock<InterfaceShared>>,
         serial: &mut Option<SerialPort>,
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
     ) -> Option<SerialMode> {
-        let sw = shared
+        let sr = shared
             .read()
-            .expect("Cannot get serial share lock for write");
+            .expect("Cannot get serial share lock for read");
+        let sr = match sr.deref() {
+            InterfaceShared::Serial(sr) => sr,
+            _ => unreachable!(),
+        };
 
-        if let SerialMode::Connected = sw.mode {
+        if let SerialMode::Connected = sr.mode {
             return None;
         }
 
-        let connect_res = serialport::new(sw.port.clone(), sw.baudrate)
-            .data_bits(sw.data_bits)
-            .flow_control(sw.flow_control)
-            .parity(sw.parity)
-            .stop_bits(sw.stop_bits)
+        let connect_res = serialport::new(sr.port.clone(), sr.baudrate)
+            .data_bits(sr.data_bits)
+            .flow_control(sr.flow_control)
+            .parity(sr.parity)
+            .stop_bits(sr.stop_bits)
             .timeout(Duration::from_millis(Self::SERIAL_TIMEOUT_MS))
             .open_native();
 
@@ -274,18 +277,18 @@ impl SerialInterface {
                 success!(
                     logger,
                     "Connected at \"{}\" with {}bps",
-                    sw.port,
-                    sw.baudrate
+                    sr.port,
+                    sr.baudrate
                 );
                 let _ = plugin_engine_cmd_sender.send(PluginEngineCommand::SerialConnected {
-                    port: sw.port.clone(),
-                    baudrate: sw.baudrate,
+                    port: sr.port.clone(),
+                    baudrate: sr.baudrate,
                 });
                 Some(SerialMode::Connected)
             }
             Err(_) => {
                 let _ = serial.take();
-                match sw.mode {
+                match sr.mode {
                     SerialMode::Reconnecting => None,
                     _ => Some(SerialMode::Reconnecting),
                 }
@@ -294,34 +297,39 @@ impl SerialInterface {
     }
 
     fn disconnect(
-        shared: Arc<RwLock<SerialShared>>,
+        shared: Arc<RwLock<InterfaceShared>>,
         serial: &mut Option<SerialPort>,
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
     ) -> Option<SerialMode> {
         let _ = serial.take();
-        let sw = shared.read().expect("Cannot get serial lock for read");
-        if let SerialMode::Connected = sw.mode {
+        let sr = shared.read().expect("Cannot get serial lock for read");
+        let sr = match sr.deref() {
+            InterfaceShared::Serial(sr) => sr,
+            _ => unreachable!(),
+        };
+
+        if let SerialMode::Connected = sr.mode {
             warning!(
                 logger,
                 "Disconnected from \"{}\" with {}bps",
-                sw.port,
-                sw.baudrate
+                sr.port,
+                sr.baudrate
             );
             let _ = plugin_engine_cmd_sender.send(PluginEngineCommand::SerialDisconnected {
-                port: sw.port.clone(),
-                baudrate: sw.baudrate,
+                port: sr.port.clone(),
+                baudrate: sr.baudrate,
             });
         }
 
-        match sw.mode {
+        match sr.mode {
             SerialMode::DoNotConnect => None,
             _ => Some(SerialMode::DoNotConnect),
         }
     }
 
     fn setup(
-        shared: Arc<RwLock<SerialShared>>,
+        shared: Arc<RwLock<InterfaceShared>>,
         setup: SerialSetup,
         serial: &mut Option<SerialPort>,
         logger: &Logger,
@@ -331,38 +339,42 @@ impl SerialInterface {
         let mut sw = shared
             .write()
             .expect("Cannot get serial shared lock for write");
+        let sw_ref = match sw.deref_mut() {
+            InterfaceShared::Serial(sw) => sw,
+            _ => unreachable!(),
+        };
 
         if let Some(port) = setup.port {
-            sw.port = port;
+            sw_ref.port = port;
             has_changes = true;
         }
 
         if let Some(baudrate) = setup.baudrate {
-            sw.baudrate = baudrate;
+            sw_ref.baudrate = baudrate;
             has_changes = true;
         }
 
         if let Some(databits) = setup.data_bits {
-            sw.data_bits = databits;
+            sw_ref.data_bits = databits;
             has_changes = true;
         }
 
         if let Some(flow_control) = setup.flow_control {
-            sw.flow_control = flow_control;
+            sw_ref.flow_control = flow_control;
             has_changes = true;
         }
 
         if let Some(parity) = setup.parity {
-            sw.parity = parity;
+            sw_ref.parity = parity;
             has_changes = true;
         }
 
         if let Some(stop_bits) = setup.stop_bits {
-            sw.stop_bits = stop_bits;
+            sw_ref.stop_bits = stop_bits;
             has_changes = true;
         }
 
-        let last_mode = sw.mode;
+        let last_mode = sw_ref.mode;
         if has_changes {
             drop(sw);
             let _ = Self::disconnect(shared.clone(), serial, logger, plugin_engine_cmd_sender);

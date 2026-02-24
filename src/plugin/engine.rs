@@ -11,13 +11,14 @@ use crate::{
         mpmc::{Consumer, Producer},
         task::{Shared, Task},
     },
-    serial::serial_if::SerialShared,
+    interfaces::InterfaceShared,
     success, warning,
 };
 use chrono::Local;
 use regex::Regex;
 use std::{
     collections::HashMap,
+    ops::Deref,
     path::PathBuf,
     str::FromStr,
     sync::{Arc, RwLock},
@@ -55,6 +56,14 @@ pub enum PluginEngineCommand {
         port: String,
         baudrate: u32,
     },
+    RttConnected {
+        target: String,
+        channel: usize,
+    },
+    RttDisconnected {
+        target: String,
+        channel: usize,
+    },
     Exit,
 }
 
@@ -63,7 +72,7 @@ pub struct PluginEngineConnections {
     tx_producer: Producer<Arc<TimedBytes>>,
     tx_consumer: Consumer<Arc<TimedBytes>>,
     rx: Consumer<Arc<TimedBytes>>,
-    serial_shared: Shared<SerialShared>,
+    interface_shared: Shared<InterfaceShared>,
     latency: u64,
 }
 
@@ -219,6 +228,26 @@ impl PluginEngine {
                             );
                         }
                     }
+                    PluginEngineCommand::RttConnected { target, channel } => {
+                        for plugin in plugin_list.values_mut() {
+                            plugin.spawn_method_call(
+                                engine_gate.new_method_call_gate(),
+                                "on_rtt_connect",
+                                [target.clone(), channel.to_string()],
+                                true,
+                            );
+                        }
+                    }
+                    PluginEngineCommand::RttDisconnected { target, channel } => {
+                        for plugin in plugin_list.values_mut() {
+                            plugin.spawn_method_call(
+                                engine_gate.new_method_call_gate(),
+                                "on_rtt_disconnect",
+                                [target.clone(), channel.to_string()],
+                                true,
+                            );
+                        }
+                    }
                 }
             }
 
@@ -235,11 +264,22 @@ impl PluginEngine {
                 let rsp = match data {
                     super::messages::PluginExternalRequest::SerialInfo => {
                         let (port, baudrate) = {
-                            let serial_shared = private
-                                .serial_shared
+                            let interface_shared = private
+                                .interface_shared
                                 .read()
-                                .expect("Cannot get serial shared for read");
-                            (serial_shared.port.clone(), serial_shared.baudrate)
+                                .expect("Cannot get interface lock for read");
+                            match interface_shared.deref() {
+                                InterfaceShared::Serial(serial_shared) => {
+                                    (serial_shared.port.clone(), serial_shared.baudrate)
+                                }
+                                _ => {
+                                    warning!(
+                                        private.logger,
+                                        "Plugin requested :serial.info but the active interface is not Serial; returning empty port and baudrate 0"
+                                    );
+                                    ("".to_string(), 0)
+                                }
+                            }
                         };
 
                         Some(PluginResponse::SerialInfo { port, baudrate })
@@ -437,7 +477,7 @@ impl PluginEngineConnections {
         tx_producer: Producer<Arc<TimedBytes>>,
         tx_consumer: Consumer<Arc<TimedBytes>>,
         rx: Consumer<Arc<TimedBytes>>,
-        serial_shared: Shared<SerialShared>,
+        interface_shared: Shared<InterfaceShared>,
         latency: u64,
     ) -> Self {
         Self {
@@ -445,7 +485,7 @@ impl PluginEngineConnections {
             tx_producer,
             tx_consumer,
             rx,
-            serial_shared,
+            interface_shared,
             latency,
         }
     }

@@ -4,6 +4,8 @@ use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
 use crate::graphics::screen::{Screen, ScreenPosition};
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::inputs::inputs_task::InputMode;
+use crate::interfaces::InterfaceShared;
+use crate::interfaces::rtt_if::RttMode;
 use crate::{error, info, inputs, success};
 use crate::{
     infra::{
@@ -16,7 +18,7 @@ use crate::{
         typewriter::TypeWriter,
     },
     inputs::inputs_task::InputsShared,
-    serial::serial_if::{SerialMode, SerialShared},
+    interfaces::serial_if::SerialMode,
     warning,
 };
 use arboard::Clipboard;
@@ -33,6 +35,7 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
+use std::ops::Deref;
 use std::thread::{sleep, yield_now};
 use std::{
     cmp::{max, min},
@@ -61,7 +64,7 @@ pub struct GraphicsConnections {
     tx: Consumer<Arc<TimedBytes>>,
     rx: Consumer<Arc<TimedBytes>>,
     inputs_shared: Shared<InputsShared>,
-    serial_shared: Shared<SerialShared>,
+    interface_shared: Shared<InterfaceShared>,
     typewriter: TypeWriter,
     recorder: Recorder,
     latency: u64,
@@ -166,22 +169,53 @@ impl GraphicsTask {
 
     pub fn draw_command_bar_normal_mode(
         inputs_shared: &Shared<InputsShared>,
-        serial_shared: &Shared<SerialShared>,
+        interface_shared: &Shared<InterfaceShared>,
         frame: &mut Frame,
         rect: Rect,
         latency: u64,
     ) {
-        let (port, baudrate, flow_control, is_connected) = {
-            let serial_shared = serial_shared
+        let (title, is_connected) = {
+            let interface_shared = interface_shared
                 .read()
-                .expect("Cannot get serial lock for read");
-            (
-                serial_shared.port.clone(),
-                serial_shared.baudrate,
-                serial_shared.flow_control,
-                matches!(serial_shared.mode, SerialMode::Connected),
-            )
+                .expect("Cannot get interface lock for read");
+
+            match interface_shared.deref() {
+                InterfaceShared::Rtt(rtt_shared) => {
+                    let target = if rtt_shared.target.is_empty() {
+                        "\"\"".to_string()
+                    } else {
+                        rtt_shared.target.clone()
+                    };
+
+                    (
+                        format!("RTT {} [{}]", target, rtt_shared.channel),
+                        matches!(rtt_shared.mode, RttMode::Connected),
+                    )
+                }
+                InterfaceShared::Serial(serial_shared) => {
+                    let port = if serial_shared.port.is_empty() {
+                        "\"\"".to_string()
+                    } else {
+                        serial_shared.port.clone()
+                    };
+
+                    (
+                        format!(
+                            "Serial {}:{:04}bps{}",
+                            port,
+                            serial_shared.baudrate,
+                            match serial_shared.flow_control {
+                                serialport::FlowControl::None => "",
+                                serialport::FlowControl::Software => ":SW",
+                                serialport::FlowControl::Hardware => ":HW",
+                            }
+                        ),
+                        matches!(serial_shared.mode, SerialMode::Connected),
+                    )
+                }
+            }
         };
+
         let (text, cursor, history_len, current_hint, tag_list) = {
             let inputs_shared = inputs_shared
                 .read()
@@ -193,11 +227,6 @@ impl GraphicsTask {
                 inputs_shared.current_hint.clone(),
                 inputs_shared.tag_list.clone(),
             )
-        };
-        let port = if port.is_empty() {
-            "\"\"".to_string()
-        } else {
-            port
         };
 
         let cursor = (rect.x + cursor + 2, rect.y + 1);
@@ -216,18 +245,7 @@ impl GraphicsTask {
         };
 
         let block = Block::default()
-            .title(format!(
-                "[{:03}][{}] Serial {}:{:04}bps{}",
-                history_len,
-                latency,
-                port,
-                baudrate,
-                match flow_control {
-                    serialport::FlowControl::None => "",
-                    serialport::FlowControl::Software => ":SW",
-                    serialport::FlowControl::Hardware => ":HW",
-                }
-            ))
+            .title(format!("[{:03}][{}] {}", history_len, latency, title))
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
             .border_style(Style::default().fg(bar_color));
@@ -310,7 +328,7 @@ impl GraphicsTask {
 
     pub fn draw_command_bar(
         inputs_shared: &Shared<InputsShared>,
-        serial_shared: &Shared<SerialShared>,
+        interface_shared: &Shared<InterfaceShared>,
         frame: &mut Frame,
         rect: Rect,
         latency: u64,
@@ -326,7 +344,7 @@ impl GraphicsTask {
         match input_mode {
             inputs::inputs_task::InputMode::Normal => Self::draw_command_bar_normal_mode(
                 inputs_shared,
-                serial_shared,
+                interface_shared,
                 frame,
                 rect,
                 latency,
@@ -754,7 +772,7 @@ impl GraphicsTask {
                         );
                         Self::draw_command_bar(
                             &private.inputs_shared,
-                            &private.serial_shared,
+                            &private.interface_shared,
                             f,
                             chunks[1],
                             private.latency,
@@ -851,7 +869,7 @@ impl GraphicsConnections {
         tx: Consumer<Arc<TimedBytes>>,
         rx: Consumer<Arc<TimedBytes>>,
         inputs_shared: Shared<InputsShared>,
-        serial_shared: Shared<SerialShared>,
+        interface_shared: Shared<InterfaceShared>,
         config: GraphicsConfig,
     ) -> Self {
         Self {
@@ -860,7 +878,7 @@ impl GraphicsConnections {
             tx,
             rx,
             inputs_shared,
-            serial_shared,
+            interface_shared,
             buffer: Buffer::new(config.capacity),
             screen: Screen::default(),
             typewriter: TypeWriter::new(config.storage_base_filename.clone()),
