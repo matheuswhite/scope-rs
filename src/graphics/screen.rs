@@ -654,7 +654,7 @@ impl ScreenMode {
         }
 
         let highlighted_style = Style::default().bg(Color::Reset).fg(Color::Yellow);
-        let chosen_style = Style::default().bg(Color::Yellow).fg(Color::DarkGray);
+        let chosen_style = Style::default().bg(Color::Yellow).fg(Color::Black);
         let query = if *is_case_sensitive {
             query.to_string()
         } else {
@@ -704,7 +704,7 @@ impl ScreenMode {
     }
 
     fn rx_line(&self, line: BufferLine<String>) -> Span<'static> {
-        let style = Style::default().bg(Color::Reset).fg(Color::White);
+        let style = Style::default().bg(Color::Reset).fg(Color::Reset);
         Span::styled(line.message, style)
     }
 
