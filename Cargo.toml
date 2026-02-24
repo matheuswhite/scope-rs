@@ -2,7 +2,7 @@
 name = "scope-monitor"
 description = "A multi-platform serial monitor with user-extensible features"
 authors = ["Matheus T. dos Santos <matheuswhite1@protonmail.com>"]
-version = "0.4.1"
+version = "0.4.2"
 edition = "2024"
 rust-version = "1.92.0"
 license-file = "LICENSE"
