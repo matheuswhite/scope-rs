@@ -1,5 +1,5 @@
 use crate::{
-    debug, error,
+    debug, error, info,
     infra::{
         logger::{LogLevel, Logger},
         messages::TimedBytes,
@@ -11,7 +11,7 @@ use crate::{
 };
 use chrono::Local;
 use probe_rs::{
-    Core, Permissions, Session,
+    Core, MemoryInterface, Permissions, Session,
     probe::list::Lister,
     rtt::{Rtt, ScanRegion},
 };
@@ -47,11 +47,11 @@ pub struct RttSetup {
 }
 
 pub enum RttCommand {
-    #[allow(unused)]
     Connect,
     Disconnect,
     Exit,
     Setup(RttSetup),
+    Read { address: u64, size: usize },
 }
 
 #[derive(Clone, Copy)]
@@ -128,6 +128,10 @@ impl RttInterface {
                         &logger,
                         &plugin_engine_cmd_sender,
                     ),
+                    RttCommand::Read { address, size } => {
+                        Self::read_memory(session.as_mut(), &logger, address, size);
+                        None
+                    }
                     RttCommand::Exit => break 'task_loop,
                 };
                 Self::set_mode(shared.clone(), new_mode);
@@ -496,6 +500,37 @@ impl RttInterface {
         } else {
             None
         }
+    }
+
+    fn read_memory(session: Option<&mut Session>, logger: &Logger, address: u64, size: usize) {
+        let Some(session) = session else {
+            error!(logger, "Cannot read memory: not connected");
+            return;
+        };
+
+        let mut core = match session.core(0) {
+            Ok(core) => core,
+            Err(e) => {
+                error!(logger, "Failed to get core: {}", e);
+                return;
+            }
+        };
+
+        if size > 1024 {
+            warning!(
+                logger,
+                "Requested read size {} exceeds maximum of 1024; truncating...",
+                size
+            );
+        }
+
+        let mut buffer = vec![0u8; size.min(1024)];
+        if let Err(e) = core.read(address, &mut buffer) {
+            error!(logger, "Failed to read memory at {:#010X}: {}", address, e);
+            return;
+        }
+
+        info!(logger, "Read memory at {:#010X}: {:02X?}", address, buffer);
     }
 }
 

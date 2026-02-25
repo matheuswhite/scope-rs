@@ -1,6 +1,6 @@
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::infra::tags::TagList;
-use crate::interfaces::rtt_if::RttCommand;
+use crate::interfaces::rtt_if::{RttCommand, RttSetup};
 use crate::interfaces::{InterfaceCommand, InterfaceType};
 use crate::{
     debug, error,
@@ -22,6 +22,7 @@ use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, Mous
 use lipsum::lipsum;
 use rand::{Rng, seq::SliceRandom};
 use serialport::FlowControl;
+use std::num::ParseIntError;
 use std::ops::Range;
 use std::sync::{
     Arc, RwLock,
@@ -592,7 +593,7 @@ impl InputsTask {
         Self::update_tag_list(&mut sw, private);
     }
 
-    fn handle_connect_command(command_line_split: Vec<String>, private: &InputsConnections) {
+    fn handle_serial_connect_command(command_line_split: Vec<String>, private: &InputsConnections) {
         fn mount_setup(option: &str, setup: Option<SerialSetup>) -> SerialSetup {
             if option.chars().all(|x| x.is_ascii_digit()) {
                 SerialSetup {
@@ -628,6 +629,122 @@ impl InputsTask {
                     .send(InterfaceCommand::Serial(SerialCommand::Setup(setup)));
             }
         }
+    }
+
+    fn handle_rtt_connect_command(command_line_split: Vec<String>, private: &InputsConnections) {
+        let mount_setup = |option: &str, setup: Option<RttSetup>| {
+            if option.chars().all(|x| x.is_ascii_digit()) {
+                RttSetup {
+                    channel: Some(option.parse::<usize>().unwrap_or_default()),
+                    ..setup.unwrap_or_default()
+                }
+            } else {
+                RttSetup {
+                    target: Some(option.to_string()),
+                    ..setup.unwrap_or_default()
+                }
+            }
+        };
+
+        match command_line_split.len() {
+            x if x < 2 => {
+                let _ = private
+                    .interface_cmd_sender
+                    .send(InterfaceCommand::Rtt(RttCommand::Connect));
+            }
+            2 => {
+                let setup = RttCommand::Setup(mount_setup(&command_line_split[1], None));
+                let _ = private
+                    .interface_cmd_sender
+                    .send(InterfaceCommand::Rtt(setup));
+            }
+            _ => {
+                let setup = mount_setup(&command_line_split[1], None);
+                let setup = mount_setup(&command_line_split[2], Some(setup));
+
+                let _ = private
+                    .interface_cmd_sender
+                    .send(InterfaceCommand::Rtt(RttCommand::Setup(setup)));
+            }
+        }
+    }
+
+    fn handle_connect_command(command_line_split: Vec<String>, private: &InputsConnections) {
+        match private.if_type {
+            InterfaceType::Rtt => Self::handle_rtt_connect_command(command_line_split, private),
+            InterfaceType::Serial => {
+                Self::handle_serial_connect_command(command_line_split, private)
+            }
+        }
+    }
+
+    fn parse_address_argument(arg: &str) -> Result<u64, ParseIntError> {
+        let cleaned = arg.chars().filter(|c| *c != '_').collect::<String>();
+
+        if cleaned.starts_with("0x") || cleaned.starts_with("0X") {
+            u64::from_str_radix(&cleaned[2..], 16)
+        } else {
+            cleaned.parse::<u64>()
+        }
+    }
+
+    fn handle_rtt_read_command(
+        mut command_line_split: Vec<String>,
+        private: &InputsConnections,
+        logger: &Logger,
+    ) {
+        command_line_split.remove(0);
+
+        let (address, size) = match command_line_split.len() {
+            0 => {
+                error!(logger, "Please, specify the address to read from");
+                return;
+            }
+            1 => {
+                let Ok(address) = Self::parse_address_argument(&command_line_split[0]) else {
+                    error!(
+                        logger,
+                        "Invalid address argument. Please, specify a valid hexadecimal or decimal number: {}",
+                        command_line_split[0]
+                    );
+                    return;
+                };
+
+                (address, 4usize)
+            }
+            2 => {
+                let Ok(address) = Self::parse_address_argument(&command_line_split[0]) else {
+                    error!(
+                        logger,
+                        "Invalid address argument. Please, specify a valid hexadecimal or decimal number: {}",
+                        command_line_split[0]
+                    );
+                    return;
+                };
+                let Ok(size) = command_line_split[1].parse::<usize>() else {
+                    error!(
+                        logger,
+                        "Invalid size argument. Please, specify a valid decimal number: {}",
+                        command_line_split[1]
+                    );
+                    return;
+                };
+                if size == 0 {
+                    error!(logger, "Size argument must be greater than 0: {}", size);
+                    return;
+                }
+
+                (address, size)
+            }
+            _ => {
+                error!(logger, "Too many arguments for RTT read command");
+                return;
+            }
+        };
+
+        let _ = private
+            .interface_cmd_sender
+            .send(InterfaceCommand::Rtt(RttCommand::Read { address, size }));
     }
 
     fn handle_flow_command(command_line_split: Vec<String>, private: &InputsConnections) {
@@ -693,7 +810,10 @@ impl InputsTask {
 
                 match command_line_split.get(1).unwrap().as_str() {
                     "connect" => {
-                        Self::handle_connect_command(command_line_split[1..].to_vec(), private);
+                        Self::handle_serial_connect_command(
+                            command_line_split[1..].to_vec(),
+                            private,
+                        );
                     }
                     "disconnect" => {
                         let _ = private
@@ -716,14 +836,40 @@ impl InputsTask {
                     }
                 }
             }
+            "rtt" => {
+                if command_line_split.len() < 2 {
+                    error!(
+                        private.logger,
+                        "Please, use \"connect\", \"disconnect\" or \"read\" subcommands"
+                    );
+                    return;
+                }
+
+                match command_line_split.get(1).unwrap().as_str() {
+                    "connect" => {
+                        Self::handle_rtt_connect_command(command_line_split[1..].to_vec(), private);
+                    }
+                    "disconnect" => {
+                        let _ = private
+                            .interface_cmd_sender
+                            .send(InterfaceCommand::Rtt(RttCommand::Disconnect));
+                    }
+                    "read" => {
+                        Self::handle_rtt_read_command(
+                            command_line_split[1..].to_vec(),
+                            private,
+                            &private.logger,
+                        );
+                    }
+                    _ => {
+                        error!(private.logger, "Invalid subcommand for rtt");
+                    }
+                }
+            }
             "ipsum" => {
                 Self::handle_ipsum_command(command_line_split, private);
             }
             "connect" => {
-                /* FIXME: It need to check which interface is active, and call
-                the correct handler. Currently, it is calling the serial handler
-                by default, but it can cause problems if the active interface is
-                RTT. */
                 Self::handle_connect_command(command_line_split, private);
             }
             "disconnect" => {
