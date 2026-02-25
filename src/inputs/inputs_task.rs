@@ -102,6 +102,11 @@ impl InputsTask {
         #[cfg(not(windows))]
         const ACTION_MODIFIER: KeyModifiers = KeyModifiers::ALT;
 
+        #[cfg(target_os = "macos")]
+        const CTRL_MODIFIER: KeyModifiers = KeyModifiers::ALT;
+        #[cfg(not(target_os = "macos"))]
+        const CTRL_MODIFIER: KeyModifiers = KeyModifiers::CONTROL;
+
         match key.code {
             KeyCode::Esc => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
@@ -156,6 +161,58 @@ impl InputsTask {
                             .send(GraphicsCommand::ChangeToNormalMode);
                     }
                 }
+            }
+
+            KeyCode::Right if key.modifiers == CTRL_MODIFIER => {
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                let (pos, buffer) = match sw.mode {
+                    InputMode::Normal => (sw.cursor, &sw.command_line),
+                    InputMode::Search => (sw.search_cursor, &sw.search_buffer),
+                };
+
+                let new_pos = buffer
+                    .chars()
+                    .skip(pos)
+                    .zip(buffer.chars().skip(pos + 1))
+                    .enumerate()
+                    .find(|(_, (prev, current))| prev.is_whitespace() && !current.is_whitespace())
+                    .map(|(i, _)| pos + i + 1)
+                    .unwrap_or(buffer.chars().count());
+
+                match sw.mode {
+                    InputMode::Normal => sw.cursor = new_pos,
+                    InputMode::Search => sw.search_cursor = new_pos,
+                };
+
+                Self::update_tag_list(&mut sw, private);
+            }
+            KeyCode::Left if key.modifiers == CTRL_MODIFIER => {
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                let (pos, buffer) = match sw.mode {
+                    InputMode::Normal => (sw.cursor, &sw.command_line),
+                    InputMode::Search => (sw.search_cursor, &sw.search_buffer),
+                };
+
+                let rev_pos = buffer.chars().count() - pos;
+
+                let new_pos = buffer
+                    .chars()
+                    .rev()
+                    .skip(rev_pos + 1)
+                    .zip(buffer.chars().rev().skip(rev_pos))
+                    .enumerate()
+                    .find(|(_, (prev, current))| prev.is_whitespace() && !current.is_whitespace())
+                    .map(|(i, _)| pos - i - 1)
+                    .unwrap_or(0);
+
+                match sw.mode {
+                    InputMode::Normal => sw.cursor = new_pos,
+                    InputMode::Search => sw.search_cursor = new_pos,
+                };
+
+                Self::update_tag_list(&mut sw, private);
             }
             KeyCode::Char('w') | KeyCode::Char('W') if key.modifiers == KeyModifiers::CONTROL => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
