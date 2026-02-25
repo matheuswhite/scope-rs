@@ -374,16 +374,28 @@ impl PluginEngine {
                         Some(PluginResponse::RttInfo { target, channel })
                     }
                     super::messages::PluginExternalRequest::RttSend { message } => {
-                        let id = private.tx_consumer.id();
-                        private.tx_producer.produce_without_loopback(
-                            Arc::new(TimedBytes {
-                                timestamp: Local::now(),
-                                message,
-                            }),
-                            id,
-                        );
+                        match private.interface_type {
+                            InterfaceType::Rtt => {
+                                let id = private.tx_consumer.id();
+                                private.tx_producer.produce_without_loopback(
+                                    Arc::new(TimedBytes {
+                                        timestamp: Local::now(),
+                                        message,
+                                    }),
+                                    id,
+                                );
 
-                        Some(PluginResponse::RttSend)
+                                Some(PluginResponse::RttSend)
+                            }
+                            _ => {
+                                warning!(
+                                    private.logger,
+                                    "Plugin requested :rtt.send but the active interface is not RTT."
+                                );
+
+                                None
+                            }
+                        }
                     }
                     super::messages::PluginExternalRequest::RttRecv { timeout } => {
                         match private.interface_type {

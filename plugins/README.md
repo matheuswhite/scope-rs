@@ -94,6 +94,7 @@ Waits for the next RTT message.
 Important:
 
 - If your plugin implements `on_rtt_recv`, it will still be called for the same incoming message that unblocks `rtt.recv`. Avoid processing the same message twice.
+- `rtt.recv` requires the active interface to be RTT. If another interface is active, this call may wait indefinitely and never complete.
 
 ### rtt.read(opts)
 
