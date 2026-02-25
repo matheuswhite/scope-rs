@@ -10,7 +10,7 @@ local status = {
 status.__index = status
 
 local function decode_float(float, pos)
-    local f = float[pos]| (float[pos + 1] << 8) | (float[pos + 2] << 16) | (float[pos + 3] << 24)
+    local f = float[pos] | (float[pos + 1] << 8) | (float[pos + 2] << 16) | (float[pos + 3] << 24)
 
     local sign = (f >> 31) & 0x1
     local exponent = (f >> 23) & 0xFF

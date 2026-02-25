@@ -324,19 +324,31 @@ impl PluginEngine {
                         Some(PluginResponse::SerialSend)
                     }
                     super::messages::PluginExternalRequest::SerialRecv { timeout } => {
-                        if Instant::now() >= timeout {
-                            Some(PluginResponse::SerialRecv {
-                                err: "timeout".to_string(),
-                                message: vec![],
-                            })
-                        } else {
-                            interface_recv_reqs.push(PluginMethodMessage {
-                                plugin_name: plugin_name.clone(),
-                                method_id,
-                                data: PluginExternalRequest::SerialRecv { timeout },
-                            });
+                        match private.interface_type {
+                            InterfaceType::Serial => {
+                                if Instant::now() >= timeout {
+                                    Some(PluginResponse::SerialRecv {
+                                        err: "timeout".to_string(),
+                                        message: vec![],
+                                    })
+                                } else {
+                                    interface_recv_reqs.push(PluginMethodMessage {
+                                        plugin_name: plugin_name.clone(),
+                                        method_id,
+                                        data: PluginExternalRequest::SerialRecv { timeout },
+                                    });
 
-                            None
+                                    None
+                                }
+                            }
+                            _ => {
+                                warning!(
+                                    private.logger,
+                                    "Plugin requested :serial.recv but the active interface is not Serial."
+                                );
+
+                                None
+                            }
                         }
                     }
                     super::messages::PluginExternalRequest::RttInfo => {
@@ -374,28 +386,36 @@ impl PluginEngine {
                         Some(PluginResponse::RttSend)
                     }
                     super::messages::PluginExternalRequest::RttRecv { timeout } => {
-                        if Instant::now() >= timeout {
-                            Some(PluginResponse::RttRecv {
-                                err: "timeout".to_string(),
-                                message: vec![],
-                            })
-                        } else {
-                            interface_recv_reqs.push(PluginMethodMessage {
-                                plugin_name: plugin_name.clone(),
-                                method_id,
-                                data: PluginExternalRequest::RttRecv { timeout },
-                            });
+                        match private.interface_type {
+                            InterfaceType::Rtt => {
+                                if Instant::now() >= timeout {
+                                    Some(PluginResponse::RttRecv {
+                                        err: "timeout".to_string(),
+                                        message: vec![],
+                                    })
+                                } else {
+                                    interface_recv_reqs.push(PluginMethodMessage {
+                                        plugin_name: plugin_name.clone(),
+                                        method_id,
+                                        data: PluginExternalRequest::RttRecv { timeout },
+                                    });
 
-                            None
+                                    None
+                                }
+                            }
+                            _ => {
+                                warning!(
+                                    private.logger,
+                                    "Plugin requested :rtt.recv but the active interface is not RTT."
+                                );
+
+                                None
+                            }
                         }
                     }
                     super::messages::PluginExternalRequest::RttRead { address, size } => {
-                        let sr = private
-                            .interface_shared
-                            .read()
-                            .expect("Cannot get interface lock for read");
-                        match sr.deref() {
-                            InterfaceShared::Rtt(_) => {
+                        match private.interface_type {
+                            InterfaceType::Rtt => {
                                 let _ = private.interface_cmd_sender.send(InterfaceCommand::Rtt(
                                     RttCommand::PluginRead { address, size },
                                 ));
