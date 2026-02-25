@@ -635,7 +635,7 @@ impl InputsTask {
         let mount_setup = |option: &str, setup: Option<RttSetup>| {
             if option.chars().all(|x| x.is_ascii_digit()) {
                 RttSetup {
-                    channel: Some(option.parse::<usize>().unwrap()),
+                    channel: Some(option.parse::<usize>().unwrap_or_default()),
                     ..setup.unwrap_or_default()
                 }
             } else {
@@ -679,10 +679,12 @@ impl InputsTask {
     }
 
     fn parse_address_argument(arg: &str) -> Result<u64, ParseIntError> {
-        if arg.starts_with("0x") {
-            u64::from_str_radix(&arg[2..], 16)
+        let cleaned = arg.chars().filter(|c| *c != '_').collect::<String>();
+
+        if cleaned.starts_with("0x") || cleaned.starts_with("0X") {
+            u64::from_str_radix(&cleaned[2..], 16)
         } else {
-            arg.parse::<u64>()
+            cleaned.parse::<u64>()
         }
     }
 
@@ -808,7 +810,10 @@ impl InputsTask {
 
                 match command_line_split.get(1).unwrap().as_str() {
                     "connect" => {
-                        Self::handle_connect_command(command_line_split[1..].to_vec(), private);
+                        Self::handle_serial_connect_command(
+                            command_line_split[1..].to_vec(),
+                            private,
+                        );
                     }
                     "disconnect" => {
                         let _ = private
@@ -842,7 +847,7 @@ impl InputsTask {
 
                 match command_line_split.get(1).unwrap().as_str() {
                     "connect" => {
-                        Self::handle_connect_command(command_line_split[1..].to_vec(), private);
+                        Self::handle_rtt_connect_command(command_line_split[1..].to_vec(), private);
                     }
                     "disconnect" => {
                         let _ = private
