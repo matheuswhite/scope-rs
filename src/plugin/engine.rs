@@ -493,12 +493,10 @@ impl PluginEngine {
                 }
             }
 
-            interface_recv_reqs.retain(|PluginMethodMessage { data, .. }| {
-                if let PluginExternalRequest::SerialRecv { timeout } = data {
-                    Instant::now() < *timeout
-                } else {
-                    false
-                }
+            interface_recv_reqs.retain(|PluginMethodMessage { data, .. }| match data {
+                PluginExternalRequest::SerialRecv { timeout } => Instant::now() < *timeout,
+                PluginExternalRequest::RttRecv { timeout } => Instant::now() < *timeout,
+                _ => false,
             });
 
             if let Ok(rx_msg) = private.rx.try_recv() {

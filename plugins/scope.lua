@@ -168,7 +168,7 @@ function M.re.matches(str, ...)
         pattern_table[args[i]] = args[i + 1]
     end
 
-    local res = coroutine.yield({ ":re.matches", str, pattern_list }))
+    local res = coroutine.yield({ ":re.matches", str, pattern_list })
     local fn_name = res.fn_name
     if fn_name ~= nil then
         local fn = pattern_table[fn_name]

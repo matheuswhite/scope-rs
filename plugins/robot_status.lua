@@ -3,7 +3,7 @@ local status = {
     b = 0,
     c = 0,
     d = 0,
-    quatertion = { w = 0, x = 0, y = 0, z = 0 },
+    quaternion = { w = 0, x = 0, y = 0, z = 0 },
     xyz = { x = 0, y = 0, z = 0 },
     pose = { w = 0, x = 0, y = 0, z = 0 },
 }
@@ -49,7 +49,7 @@ function status.decode(bytes)
     self.b = bytes[2]
     self.c = bytes[3]
     self.d = bytes[4]
-    self.quatertion = decode_quaternion(bytes, 5)
+    self.quaternion = decode_quaternion(bytes, 5)
     self.xyz = decode_xyz(bytes, 21)
     self.pose = decode_quaternion(bytes, 33)
 
@@ -62,9 +62,9 @@ end
 
 function status:__tostring()
     return string.format(
-        "a: %d, b: %d, c: %d, d: %d, quatertion: {w: %.2f, x: %.2f, y: %.2f, z: %.2f}, xyz: {x: %.2f, y: %.2f, z: %.2f}, pose: {w: %.2f, x: %.2f, y: %.2f, z: %.2f}",
+        "a: %d, b: %d, c: %d, d: %d, quaternion: {w: %.2f, x: %.2f, y: %.2f, z: %.2f}, xyz: {x: %.2f, y: %.2f, z: %.2f}, pose: {w: %.2f, x: %.2f, y: %.2f, z: %.2f}",
         self.a, self.b, self.c, self.d,
-        self.quatertion.w, self.quatertion.x, self.quatertion.y, self.quatertion.z,
+        self.quaternion.w, self.quaternion.x, self.quaternion.y, self.quaternion.z,
         self.xyz.x, self.xyz.y, self.xyz.z,
         self.pose.w, self.pose.x, self.pose.y, self.pose.z)
 end
