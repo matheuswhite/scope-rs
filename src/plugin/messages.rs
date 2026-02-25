@@ -30,6 +30,17 @@ pub enum PluginExternalRequest {
     SerialRecv {
         timeout: Instant,
     },
+    RttInfo,
+    RttSend {
+        message: Vec<u8>,
+    },
+    RttRecv {
+        timeout: Instant,
+    },
+    RttRead {
+        address: u64,
+        size: usize,
+    },
     Log {
         level: LogLevel,
         message: String,
@@ -68,6 +79,10 @@ pub enum PluginResponse {
     SerialInfo { port: String, baudrate: u32 },
     SerialSend,
     SerialRecv { err: String, message: Vec<u8> },
+    RttInfo { target: String, channel: usize },
+    RttSend,
+    RttRecv { err: String, message: Vec<u8> },
+    RttRead { err: String, data: Vec<u8> },
     SysSleep,
     ReLiteral { literal: String },
     ReMatches { pattern: Option<String> },
@@ -165,6 +180,39 @@ impl PluginRequest {
                 PluginRequest::External(PluginExternalRequest::SerialRecv {
                     timeout: Instant::now() + Duration::from_millis(timeout_ms),
                 })
+            }
+            ":rtt.info" => PluginRequest::External(PluginExternalRequest::RttInfo),
+            ":rtt.send" => {
+                let message: Vec<u8> = value
+                    .get(2)
+                    .map_err(|_| "Cannot get second table entry as String".to_string())?;
+
+                PluginRequest::External(PluginExternalRequest::RttSend { message })
+            }
+            ":rtt.recv" => {
+                let opts: Table = value
+                    .get(2)
+                    .map_err(|_| "Cannot get second table entry as Table".to_string())?;
+
+                let timeout_ms = opts.get("timeout_ms").unwrap_or(u64::MAX);
+
+                PluginRequest::External(PluginExternalRequest::RttRecv {
+                    timeout: Instant::now() + Duration::from_millis(timeout_ms),
+                })
+            }
+            ":rtt.read" => {
+                let opts: Table = value
+                    .get(2)
+                    .map_err(|_| "Cannot get second table entry as Table".to_string())?;
+
+                let address: u64 = opts
+                    .get("address")
+                    .map_err(|_| "Cannot get 'address' field as Number".to_string())?;
+                let size: usize = opts
+                    .get("size")
+                    .map_err(|_| "Cannot get 'size' field as Number".to_string())?;
+
+                PluginRequest::External(PluginExternalRequest::RttRead { address, size })
             }
             ":sys.sleep" => {
                 let time: u64 = value

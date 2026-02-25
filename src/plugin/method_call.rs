@@ -246,7 +246,10 @@ impl PluginMethodCall {
         let table = lua.create_table().map_err(|err| err.to_string())?;
 
         match rsp {
-            PluginResponse::Log | PluginResponse::SerialSend | PluginResponse::SysSleep => {}
+            PluginResponse::Log
+            | PluginResponse::SerialSend
+            | PluginResponse::RttSend
+            | PluginResponse::SysSleep => {}
             PluginResponse::ReMatches { pattern } => {
                 table
                     .push(if let Some(pattern) = pattern {
@@ -264,7 +267,11 @@ impl PluginMethodCall {
                 table.push(baudrate).map_err(|err| err.to_string())?;
             }
             PluginResponse::SerialRecv { err, message } => {
-                table.push(err).map_err(|err| err.to_string())?;
+                if err.is_empty() {
+                    table.push(Value::Nil).map_err(|err| err.to_string())?;
+                } else {
+                    table.push(err).map_err(|err| err.to_string())?;
+                }
                 table.push(message).map_err(|err| err.to_string())?;
             }
             PluginResponse::ReLiteral { literal } => {
@@ -276,6 +283,28 @@ impl PluginMethodCall {
             }
             PluginResponse::ShellExist { exist } => {
                 table.push(exist).map_err(|err| err.to_string())?;
+            }
+            PluginResponse::RttInfo { target, channel } => {
+                table.push(target).map_err(|err| err.to_string())?;
+                table.push(channel).map_err(|err| err.to_string())?;
+            }
+            PluginResponse::RttRecv { err, message } => {
+                if err.is_empty() {
+                    table.push(Value::Nil).map_err(|err| err.to_string())?;
+                } else {
+                    table.push(err).map_err(|err| err.to_string())?;
+                }
+                table.push(message).map_err(|err| err.to_string())?;
+            }
+            PluginResponse::RttRead { err, data } => {
+                table.set("data", data).map_err(|err| err.to_string())?;
+                if err.is_empty() {
+                    table
+                        .set("err", Value::Nil)
+                        .map_err(|err| err.to_string())?;
+                } else {
+                    table.set("err", err).map_err(|err| err.to_string())?;
+                }
             }
         }
 

@@ -5,6 +5,7 @@ local M = {
     ble = {},
     sys = {},
     re = {},
+    rtt = {},
 }
 
 function M.fmt.to_str(val)
@@ -68,6 +69,25 @@ function M.serial.recv(opts)
     return err, msg
 end
 
+function M.rtt.info()
+    local target, channel = table.unpack(coroutine.yield({ ":rtt.info" }))
+    return target, channel
+end
+
+function M.rtt.send(msg)
+    coroutine.yield({ ":rtt.send", msg })
+end
+
+function M.rtt.recv(opts)
+    local err, msg = table.unpack(coroutine.yield({ ":rtt.recv", opts }))
+    return err, msg
+end
+
+function M.rtt.read(opts)
+    local res = coroutine.yield({ ":rtt.read", opts })
+    return res.err, res.data
+end
+
 function M.sys.os_name()
     if os.getenv("OS") == "Windows_NT" then
         return "windows"
@@ -94,7 +114,8 @@ local function ord(idx)
 end
 
 local function parse_arg(idx, arg, ty, validate, default)
-    assert(not (ty == "nil" or ty == "function" or ty == "userdata" or ty == "thread" or ty == "table"), "Argument must not be " .. ty)
+    assert(not (ty == "nil" or ty == "function" or ty == "userdata" or ty == "thread" or ty == "table"),
+        "Argument must not be " .. ty)
 
     if not arg then
         if default then
@@ -108,6 +129,9 @@ local function parse_arg(idx, arg, ty, validate, default)
         if ty == "number" then
             arg = tonumber(arg)
             assert(arg, ord(idx) .. " argument must be a number")
+        elseif ty == "hex" then
+            arg = tonumber(arg, 16)
+            assert(arg, ord(idx) .. " argument must be a hex number")
         elseif ty == "boolean" then
             arg = arg ~= "0" and arg ~= "false"
         end

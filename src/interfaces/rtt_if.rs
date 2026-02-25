@@ -52,6 +52,7 @@ pub enum RttCommand {
     Exit,
     Setup(RttSetup),
     Read { address: u64, size: usize },
+    PluginRead { address: u64, size: usize },
 }
 
 #[derive(Clone, Copy)]
@@ -129,7 +130,31 @@ impl RttInterface {
                         &plugin_engine_cmd_sender,
                     ),
                     RttCommand::Read { address, size } => {
-                        Self::read_memory(session.as_mut(), &logger, address, size);
+                        match Self::read_memory(session.as_mut(), address, size) {
+                            Ok(data) => {
+                                info!(
+                                    logger,
+                                    "Read memory at {:#010X} ({} bytes): {:02X?}",
+                                    address,
+                                    size,
+                                    data
+                                );
+                            }
+                            Err(e) => {
+                                error!(logger, "{}", e);
+                            }
+                        }
+                        None
+                    }
+                    RttCommand::PluginRead { address, size } => {
+                        let (err, data) = match Self::read_memory(session.as_mut(), address, size) {
+                            Ok(data) => ("".to_string(), data),
+                            Err(e) => (e, vec![]),
+                        };
+
+                        let _ = plugin_engine_cmd_sender
+                            .send(PluginEngineCommand::RttReadResult { err, data });
+
                         None
                     }
                     RttCommand::Exit => break 'task_loop,
@@ -502,35 +527,35 @@ impl RttInterface {
         }
     }
 
-    fn read_memory(session: Option<&mut Session>, logger: &Logger, address: u64, size: usize) {
+    fn read_memory(
+        session: Option<&mut Session>,
+        address: u64,
+        size: usize,
+    ) -> Result<Vec<u8>, String> {
         let Some(session) = session else {
-            error!(logger, "Cannot read memory: not connected");
-            return;
+            return Err("Cannot read memory: not connected".to_string());
         };
 
         let mut core = match session.core(0) {
             Ok(core) => core,
             Err(e) => {
-                error!(logger, "Failed to get core: {}", e);
-                return;
+                return Err(format!("Failed to get core: {}", e));
             }
         };
 
         if size > 1024 {
-            warning!(
-                logger,
-                "Requested read size {} exceeds maximum of 1024; truncating...",
+            return Err(format!(
+                "Requested read size {} exceeds maximum of 1024",
                 size
-            );
+            ));
         }
 
-        let mut buffer = vec![0u8; size.min(1024)];
+        let mut buffer = vec![0u8; size];
         if let Err(e) = core.read(address, &mut buffer) {
-            error!(logger, "Failed to read memory at {:#010X}: {}", address, e);
-            return;
+            return Err(format!("Failed to read memory at {:#010X}: {}", address, e));
         }
 
-        info!(logger, "Read memory at {:#010X}: {:02X?}", address, buffer);
+        Ok(buffer)
     }
 }
 
