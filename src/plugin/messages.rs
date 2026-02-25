@@ -212,6 +212,13 @@ impl PluginRequest {
                     .get("size")
                     .map_err(|_| "Cannot get 'size' field as Number".to_string())?;
 
+                if size > 1024 {
+                    return Err(
+                        "Cannot perform ':rtt.read': 'size' field exceeds maximum of 1024 bytes"
+                            .to_string(),
+                    );
+                }
+
                 PluginRequest::External(PluginExternalRequest::RttRead { address, size })
             }
             ":sys.sleep" => {

@@ -4,7 +4,7 @@ use super::{
     messages::{self, PluginExternalRequest, PluginMethodMessage, PluginResponse},
 };
 use crate::{
-    debug, error,
+    error,
     infra::{
         logger::{LogLevel, Logger},
         messages::TimedBytes,
@@ -256,12 +256,6 @@ impl PluginEngine {
                         }
                     }
                     PluginEngineCommand::RttReadResult { err, data } => {
-                        debug!(
-                            private.logger,
-                            "Received RTT read result from interface, err: {}, data length: {}",
-                            err,
-                            data.len()
-                        );
                         for rtt_read_req in rtt_read_reqs.drain(..) {
                             let PluginMethodMessage {
                                 plugin_name,
@@ -396,25 +390,29 @@ impl PluginEngine {
                         }
                     }
                     super::messages::PluginExternalRequest::RttRead { address, size } => {
-                        let _ = private.interface_cmd_sender.send(InterfaceCommand::Rtt(
-                            RttCommand::PluginRead { address, size },
-                        ));
-                        debug!(
-                            private.logger,
-                            "Plugin requested RTT read at address {:#X} with size {}, sending command to interface",
-                            address,
-                            size
-                        );
+                        let sr = private
+                            .interface_shared
+                            .read()
+                            .expect("Cannot get interface lock for read");
+                        match sr.deref() {
+                            InterfaceShared::Rtt(_) => {
+                                let _ = private.interface_cmd_sender.send(InterfaceCommand::Rtt(
+                                    RttCommand::PluginRead { address, size },
+                                ));
 
-                        rtt_read_reqs.push(PluginMethodMessage {
-                            plugin_name: plugin_name.clone(),
-                            method_id,
-                            data: PluginExternalRequest::RttRead { address, size },
-                        });
-                        debug!(
-                            private.logger,
-                            "Plugin RTT read request queued, waiting for result from interface"
-                        );
+                                rtt_read_reqs.push(PluginMethodMessage {
+                                    plugin_name: plugin_name.clone(),
+                                    method_id,
+                                    data: PluginExternalRequest::RttRead { address, size },
+                                });
+                            }
+                            _ => {
+                                warning!(
+                                    private.logger,
+                                    "Plugin requested RTT read but the active interface is not RTT."
+                                );
+                            }
+                        };
 
                         None
                     }
@@ -493,10 +491,18 @@ impl PluginEngine {
                 }
             }
 
-            interface_recv_reqs.retain(|PluginMethodMessage { data, .. }| match data {
-                PluginExternalRequest::SerialRecv { timeout } => Instant::now() < *timeout,
-                PluginExternalRequest::RttRecv { timeout } => Instant::now() < *timeout,
-                _ => false,
+            interface_recv_reqs.retain(|PluginMethodMessage { data, .. }| {
+                if let InterfaceType::Rtt = private.interface_type
+                    && let PluginExternalRequest::RttRecv { timeout } = data
+                {
+                    Instant::now() < *timeout
+                } else if let InterfaceType::Serial = private.interface_type
+                    && let PluginExternalRequest::SerialRecv { timeout } = data
+                {
+                    Instant::now() < *timeout
+                } else {
+                    false
+                }
             });
 
             if let Ok(rx_msg) = private.rx.try_recv() {

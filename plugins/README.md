@@ -101,7 +101,7 @@ Reads raw memory from the target via the RTT backend.
 
 - `opts` (table):
     - `address` (number): memory address to read from.
-    - `size` (number): number of bytes to read.
+    - `size` (number): number of bytes to read (maximum: `1024`).
 - Returns: `err, data`
     - `err`: `nil` on success, or a string describing the failure.
     - `data`: list of bytes (table of numbers). On error, it is an empty list.
