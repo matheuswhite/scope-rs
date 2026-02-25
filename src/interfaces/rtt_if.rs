@@ -516,6 +516,14 @@ impl RttInterface {
             }
         };
 
+        if size > 1024 {
+            warning!(
+                logger,
+                "Requested read size {} exceeds maximum of 1024; truncating...",
+                size
+            );
+        }
+
         let mut buffer = vec![0u8; size.min(1024)];
         if let Err(e) = core.read(address, &mut buffer) {
             error!(logger, "Failed to read memory at {:#010X}: {}", address, e);
