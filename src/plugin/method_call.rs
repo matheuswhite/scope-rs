@@ -252,52 +252,27 @@ impl PluginMethodCall {
             | PluginResponse::SysSleep => {}
             PluginResponse::ReMatches { pattern } => {
                 table
-                    .push(if let Some(pattern) = pattern {
-                        Value::String(lua.create_string(pattern).map_err(|err| err.to_string())?)
-                    } else {
-                        Value::Nil
-                    })
+                    .set(
+                        "fn_name",
+                        match pattern {
+                            Some(pattern) => Value::String(
+                                lua.create_string(pattern).map_err(|err| err.to_string())?,
+                            ),
+                            None => Value::Nil,
+                        },
+                    )
                     .map_err(|err| err.to_string())?;
             }
-            PluginResponse::ReMatch { is_match } => {
-                table.push(is_match).map_err(|err| err.to_string())?
-            }
+            PluginResponse::ReMatch { is_match } => table
+                .set("is_match", is_match)
+                .map_err(|err| err.to_string())?,
             PluginResponse::SerialInfo { port, baudrate } => {
-                table.push(port).map_err(|err| err.to_string())?;
-                table.push(baudrate).map_err(|err| err.to_string())?;
+                table.set("port", port).map_err(|err| err.to_string())?;
+                table
+                    .set("baud_rate", baudrate)
+                    .map_err(|err| err.to_string())?;
             }
             PluginResponse::SerialRecv { err, message } => {
-                if err.is_empty() {
-                    table.push(Value::Nil).map_err(|err| err.to_string())?;
-                } else {
-                    table.push(err).map_err(|err| err.to_string())?;
-                }
-                table.push(message).map_err(|err| err.to_string())?;
-            }
-            PluginResponse::ReLiteral { literal } => {
-                table.push(literal).map_err(|err| err.to_string())?;
-            }
-            PluginResponse::ShellRun { stdout, stderr } => {
-                table.push(stdout).map_err(|err| err.to_string())?;
-                table.push(stderr).map_err(|err| err.to_string())?;
-            }
-            PluginResponse::ShellExist { exist } => {
-                table.push(exist).map_err(|err| err.to_string())?;
-            }
-            PluginResponse::RttInfo { target, channel } => {
-                table.push(target).map_err(|err| err.to_string())?;
-                table.push(channel).map_err(|err| err.to_string())?;
-            }
-            PluginResponse::RttRecv { err, message } => {
-                if err.is_empty() {
-                    table.push(Value::Nil).map_err(|err| err.to_string())?;
-                } else {
-                    table.push(err).map_err(|err| err.to_string())?;
-                }
-                table.push(message).map_err(|err| err.to_string())?;
-            }
-            PluginResponse::RttRead { err, data } => {
-                table.set("data", data).map_err(|err| err.to_string())?;
                 if err.is_empty() {
                     table
                         .set("err", Value::Nil)
@@ -305,6 +280,45 @@ impl PluginMethodCall {
                 } else {
                     table.set("err", err).map_err(|err| err.to_string())?;
                 }
+                table.set("data", message).map_err(|err| err.to_string())?;
+            }
+            PluginResponse::ReLiteral { literal } => {
+                table
+                    .set("literal", literal)
+                    .map_err(|err| err.to_string())?;
+            }
+            PluginResponse::ShellRun { stdout, stderr } => {
+                table.set("stdout", stdout).map_err(|err| err.to_string())?;
+                table.set("stderr", stderr).map_err(|err| err.to_string())?;
+            }
+            PluginResponse::ShellExist { exist } => {
+                table.set("exist", exist).map_err(|err| err.to_string())?;
+            }
+            PluginResponse::RttInfo { target, channel } => {
+                table.set("target", target).map_err(|err| err.to_string())?;
+                table
+                    .set("channel", channel)
+                    .map_err(|err| err.to_string())?;
+            }
+            PluginResponse::RttRecv { err, message } => {
+                if err.is_empty() {
+                    table
+                        .set("err", Value::Nil)
+                        .map_err(|err| err.to_string())?;
+                } else {
+                    table.set("err", err).map_err(|err| err.to_string())?;
+                }
+                table.set("data", message).map_err(|err| err.to_string())?;
+            }
+            PluginResponse::RttRead { err, data } => {
+                if err.is_empty() {
+                    table
+                        .set("err", Value::Nil)
+                        .map_err(|err| err.to_string())?;
+                } else {
+                    table.set("err", err).map_err(|err| err.to_string())?;
+                }
+                table.set("data", data).map_err(|err| err.to_string())?;
             }
         }
 
