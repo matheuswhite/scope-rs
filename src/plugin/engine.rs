@@ -355,7 +355,7 @@ impl PluginEngine {
                     super::messages::PluginExternalRequest::SerialRecv { timeout } => {
                         match private.interface_type {
                             InterfaceType::Serial => {
-                                if Instant::now() >= timeout {
+                                if timeout.is_some_and(|t| Instant::now() >= t) {
                                     Some(PluginResponse::SerialRecv {
                                         err: "timeout".to_string(),
                                         message: vec![],
@@ -430,7 +430,7 @@ impl PluginEngine {
                     super::messages::PluginExternalRequest::RttRecv { timeout } => {
                         match private.interface_type {
                             InterfaceType::Rtt => {
-                                if Instant::now() >= timeout {
+                                if timeout.is_some_and(|t| Instant::now() >= t) {
                                     Some(PluginResponse::RttRecv {
                                         err: "timeout".to_string(),
                                         message: vec![],
@@ -459,6 +459,7 @@ impl PluginEngine {
                         }
                     }
                     super::messages::PluginExternalRequest::RttRead {
+                        timeout,
                         plugin_name,
                         method_id,
                         address,
@@ -477,18 +478,26 @@ impl PluginEngine {
 
                                 match res {
                                     Ok(_) => {
-                                        rtt_read_reqs.push(PluginMethodMessage {
-                                            plugin_name: plugin_name.clone(),
-                                            method_id,
-                                            data: PluginExternalRequest::RttRead {
-                                                plugin_name,
+                                        if timeout.is_some_and(|t| Instant::now() >= t) {
+                                            Some(PluginResponse::RttRecv {
+                                                err: "timeout".to_string(),
+                                                message: vec![],
+                                            })
+                                        } else {
+                                            rtt_read_reqs.push(PluginMethodMessage {
+                                                plugin_name: plugin_name.clone(),
                                                 method_id,
-                                                address,
-                                                size,
-                                            },
-                                        });
+                                                data: PluginExternalRequest::RttRead {
+                                                    timeout,
+                                                    plugin_name,
+                                                    method_id,
+                                                    address,
+                                                    size,
+                                                },
+                                            });
 
-                                        None
+                                            None
+                                        }
                                     }
                                     Err(err) => {
                                         error!(
@@ -599,11 +608,19 @@ impl PluginEngine {
                 if let InterfaceType::Rtt = private.interface_type
                     && let PluginExternalRequest::RttRecv { timeout } = data
                 {
-                    Instant::now() < *timeout
+                    timeout.is_none_or(|t| Instant::now() < t)
                 } else if let InterfaceType::Serial = private.interface_type
                     && let PluginExternalRequest::SerialRecv { timeout } = data
                 {
-                    Instant::now() < *timeout
+                    timeout.is_none_or(|t| Instant::now() < t)
+                } else {
+                    false
+                }
+            });
+
+            rtt_read_reqs.retain(|PluginMethodMessage { data, .. }| {
+                if let PluginExternalRequest::RttRead { timeout, .. } = data {
+                    timeout.is_none_or(|t| Instant::now() < t)
                 } else {
                     false
                 }
