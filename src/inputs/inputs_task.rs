@@ -1,5 +1,6 @@
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::infra::tags::TagList;
+use crate::inputs::history::{AnyHistory, History, HistoryNavResult, PersistHistory};
 use crate::interfaces::rtt_if::{RttCommand, RttSetup};
 use crate::interfaces::{InterfaceCommand, InterfaceType};
 use crate::{
@@ -58,9 +59,7 @@ pub struct InputsConnections {
     interface_cmd_sender: Sender<InterfaceCommand>,
     plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
     hints: Vec<&'static str>,
-    history_index: Option<usize>,
-    history: Vec<String>,
-    backup_command_line: String,
+    history: AnyHistory,
     rx_channel: Producer<Arc<TimedBytes>>,
     has_tag_failed: bool,
     if_type: InterfaceType,
@@ -250,7 +249,7 @@ impl InputsTask {
 
                         sw.cursor += 1;
                         Self::update_tag_list(&mut sw, private);
-                        private.history_index = None;
+                        private.history.reset_index();
                     }
                     InputMode::Search => {
                         if sw.search_cursor >= sw.search_buffer.chars().count() {
@@ -461,24 +460,14 @@ impl InputsTask {
 
                 match sw.mode {
                     InputMode::Normal => {
-                        if private.history.is_empty() {
-                            return LoopStatus::Continue;
+                        if let HistoryNavResult::Entry(entry) =
+                            private.history.navigate_up(&sw.command_line)
+                        {
+                            sw.current_hint = None;
+                            sw.command_line = entry.to_owned();
+                            sw.cursor = sw.command_line.chars().count();
+                            Self::update_tag_list(&mut sw, private);
                         }
-
-                        match &mut private.history_index {
-                            None => {
-                                private.history_index = Some(private.history.len() - 1);
-                                private.backup_command_line.clone_from(&sw.command_line);
-                            }
-                            Some(0) => {}
-                            Some(idx) => *idx -= 1,
-                        }
-
-                        sw.current_hint = None;
-                        sw.command_line
-                            .clone_from(&private.history[private.history_index.unwrap()]);
-                        sw.cursor = sw.command_line.chars().count();
-                        Self::update_tag_list(&mut sw, private);
                     }
                     InputMode::Search => {
                         let _ = private
@@ -496,19 +485,17 @@ impl InputsTask {
                             return LoopStatus::Continue;
                         }
 
-                        match &mut private.history_index {
-                            None => {}
-                            Some(idx) if *idx == (private.history.len() - 1) => {
-                                private.history_index = None;
-                                sw.command_line.clone_from(&private.backup_command_line);
+                        match private.history.navigate_down() {
+                            HistoryNavResult::Entry(entry) => {
+                                sw.command_line = entry.to_owned();
+                            }
+                            HistoryNavResult::RestoreBackup => {
+                                sw.command_line = private.history.backup().to_owned();
                                 if sw.command_line.is_empty() {
                                     Self::set_hint(&mut sw.current_hint, &private.hints);
                                 }
                             }
-                            Some(idx) => {
-                                *idx += 1;
-                                sw.command_line.clone_from(&private.history[*idx]);
-                            }
+                            HistoryNavResult::Empty => {}
                         }
 
                         sw.cursor = sw.command_line.chars().count();
@@ -552,14 +539,16 @@ impl InputsTask {
                         let command_line = sw.command_line.drain(..).collect::<String>();
                         Self::set_hint(&mut sw.current_hint, &private.hints);
 
-                        let empty_string = "".to_string();
-                        let last_command = private.history.last().unwrap_or(&empty_string);
-                        if last_command != &command_line {
-                            private.history.push(command_line.clone());
-                        }
+                        if let Err(err) = private.history.push(&command_line) {
+                            warning!(
+                                private.logger,
+                                "Failed to push input to history file [{}]",
+                                err
+                            );
+                        };
 
                         sw.tag_list.clear();
-                        private.history_index = None;
+                        private.history.reset_index();
                         sw.cursor = 0;
 
                         if command_line.starts_with("!") {
@@ -1381,20 +1370,29 @@ impl InputsConnections {
         rx_channel: Producer<Arc<TimedBytes>>,
         if_type: InterfaceType,
     ) -> Self {
+        let history = match PersistHistory::new(".scope_history") {
+            Ok(h) => AnyHistory::Persist(h),
+            Err(err) => {
+                warning!(
+                    logger,
+                    "History persistence failed. Using in-memory fallback [{}]",
+                    err
+                );
+                AnyHistory::Base(History::new())
+            }
+        };
         Self {
             logger,
             tx,
             graphics_cmd_sender,
             interface_cmd_sender,
             plugin_engine_cmd_sender,
-            history_index: None,
             hints: vec![
                 "Type @ to place a tag",
                 "Type $ to start a hex sequence",
                 "Type here and hit <Enter> to send the text",
             ],
-            history: vec![],
-            backup_command_line: String::new(),
+            history,
             rx_channel,
             has_tag_failed: false,
             if_type,
