@@ -65,6 +65,8 @@ pub enum PluginEngineCommand {
         channel: usize,
     },
     RttReadResult {
+        plugin_name: Arc<String>,
+        method_id: u64,
         err: String,
         data: Vec<u8>,
     },
@@ -255,14 +257,31 @@ impl PluginEngine {
                             );
                         }
                     }
-                    PluginEngineCommand::RttReadResult { err, data } => {
-                        for rtt_read_req in rtt_read_reqs.drain(..) {
-                            let PluginMethodMessage {
-                                plugin_name,
-                                method_id,
-                                ..
-                            } = rtt_read_req;
+                    PluginEngineCommand::RttReadResult {
+                        plugin_name,
+                        method_id,
+                        err,
+                        data,
+                    } => {
+                        let rtt_read_reqs_filtered = rtt_read_reqs
+                            .extract_if(
+                                ..,
+                                |PluginMethodMessage {
+                                     plugin_name: req_plugin_name,
+                                     method_id: req_method_id,
+                                     ..
+                                 }| {
+                                    plugin_name == *req_plugin_name && method_id == *req_method_id
+                                },
+                            )
+                            .collect::<Vec<_>>();
 
+                        for PluginMethodMessage {
+                            plugin_name,
+                            method_id,
+                            ..
+                        } in rtt_read_reqs_filtered
+                        {
                             let rsp = PluginResponse::RttRead {
                                 err: err.clone(),
                                 data: data.clone(),
@@ -312,14 +331,24 @@ impl PluginEngine {
                         Some(PluginResponse::SerialInfo { port, baudrate })
                     }
                     super::messages::PluginExternalRequest::SerialSend { message } => {
-                        let id = private.tx_consumer.id();
-                        private.tx_producer.produce_without_loopback(
-                            Arc::new(TimedBytes {
-                                timestamp: Local::now(),
-                                message,
-                            }),
-                            id,
-                        );
+                        match private.interface_type {
+                            InterfaceType::Serial => {
+                                let id = private.tx_consumer.id();
+                                private.tx_producer.produce_without_loopback(
+                                    Arc::new(TimedBytes {
+                                        timestamp: Local::now(),
+                                        message,
+                                    }),
+                                    id,
+                                );
+                            }
+                            _ => {
+                                warning!(
+                                    private.logger,
+                                    "Plugin requested :serial.send but the active interface is not Serial."
+                                );
+                            }
+                        }
 
                         Some(PluginResponse::SerialSend)
                     }
@@ -347,7 +376,10 @@ impl PluginEngine {
                                     "Plugin requested :serial.recv but the active interface is not Serial."
                                 );
 
-                                None
+                                Some(PluginResponse::SerialRecv {
+                                    err: "Plugin requested :serial.recv but the active interface is not Serial.".to_string(),
+                                    message: vec![],
+                                })
                             }
                         }
                     }
@@ -384,18 +416,16 @@ impl PluginEngine {
                                     }),
                                     id,
                                 );
-
-                                Some(PluginResponse::RttSend)
                             }
                             _ => {
                                 warning!(
                                     private.logger,
                                     "Plugin requested :rtt.send but the active interface is not RTT."
                                 );
-
-                                None
                             }
                         }
+
+                        Some(PluginResponse::RttSend)
                     }
                     super::messages::PluginExternalRequest::RttRecv { timeout } => {
                         match private.interface_type {
@@ -421,15 +451,28 @@ impl PluginEngine {
                                     "Plugin requested :rtt.recv but the active interface is not RTT."
                                 );
 
-                                None
+                                Some(PluginResponse::RttRecv {
+                                    err: "Plugin requested :rtt.recv but the active interface is not RTT.".to_string(),
+                                    message: vec![],
+                                })
                             }
                         }
                     }
-                    super::messages::PluginExternalRequest::RttRead { address, size } => {
+                    super::messages::PluginExternalRequest::RttRead {
+                        plugin_name,
+                        method_id,
+                        address,
+                        size,
+                    } => {
                         match private.interface_type {
                             InterfaceType::Rtt => {
                                 let res = private.interface_cmd_sender.send(InterfaceCommand::Rtt(
-                                    RttCommand::PluginRead { address, size },
+                                    RttCommand::PluginRead {
+                                        plugin_name: plugin_name.clone(),
+                                        method_id,
+                                        address,
+                                        size,
+                                    },
                                 ));
 
                                 match res {
@@ -437,7 +480,12 @@ impl PluginEngine {
                                         rtt_read_reqs.push(PluginMethodMessage {
                                             plugin_name: plugin_name.clone(),
                                             method_id,
-                                            data: PluginExternalRequest::RttRead { address, size },
+                                            data: PluginExternalRequest::RttRead {
+                                                plugin_name,
+                                                method_id,
+                                                address,
+                                                size,
+                                            },
                                         });
 
                                         None
@@ -461,7 +509,10 @@ impl PluginEngine {
                                     "Plugin requested RTT read but the active interface is not RTT."
                                 );
 
-                                None
+                                Some(PluginResponse::RttRead {
+                                    err: "Plugin requested RTT read but the active interface is not RTT.".to_string(),
+                                    data: vec![],
+                                })
                             }
                         }
                     }

@@ -51,8 +51,16 @@ pub enum RttCommand {
     Disconnect,
     Exit,
     Setup(RttSetup),
-    Read { address: u64, size: usize },
-    PluginRead { address: u64, size: usize },
+    Read {
+        address: u64,
+        size: usize,
+    },
+    PluginRead {
+        plugin_name: Arc<String>,
+        method_id: u64,
+        address: u64,
+        size: usize,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -146,14 +154,23 @@ impl RttInterface {
                         }
                         None
                     }
-                    RttCommand::PluginRead { address, size } => {
+                    RttCommand::PluginRead {
+                        plugin_name,
+                        method_id,
+                        address,
+                        size,
+                    } => {
                         let (err, data) = match Self::read_memory(session.as_mut(), address, size) {
                             Ok(data) => ("".to_string(), data),
                             Err(e) => (e, vec![]),
                         };
 
-                        let _ = plugin_engine_cmd_sender
-                            .send(PluginEngineCommand::RttReadResult { err, data });
+                        let _ = plugin_engine_cmd_sender.send(PluginEngineCommand::RttReadResult {
+                            plugin_name,
+                            method_id,
+                            err,
+                            data,
+                        });
 
                         None
                     }

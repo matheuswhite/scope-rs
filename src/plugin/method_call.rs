@@ -139,6 +139,7 @@ impl PluginMethodCall {
             plugin_req,
             (*self.plugin_name).clone(),
             (*self.fn_name).clone(),
+            self.id,
         )
         .map_err(|err: String| err.to_string())?;
 

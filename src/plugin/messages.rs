@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant};
+use std::{sync::Arc, time::Instant, u64};
 
 use mlua::Table;
 use std::time::Duration;
@@ -38,6 +38,8 @@ pub enum PluginExternalRequest {
         timeout: Instant,
     },
     RttRead {
+        plugin_name: Arc<String>,
+        method_id: u64,
         address: u64,
         size: usize,
     },
@@ -96,6 +98,7 @@ impl PluginRequest {
         value: Table<'lua>,
         plugin_name: String,
         id: String,
+        method_id: u64,
     ) -> Result<Self, String> {
         let req_id: String = value
             .get(1)
@@ -194,7 +197,7 @@ impl PluginRequest {
                     .get(2)
                     .map_err(|_| "Cannot get second table entry as Table".to_string())?;
 
-                let timeout_ms = opts.get("timeout_ms").unwrap_or(1000);
+                let timeout_ms = opts.get("timeout_ms").unwrap_or(u64::MAX);
 
                 PluginRequest::External(PluginExternalRequest::RttRecv {
                     timeout: Instant::now() + Duration::from_millis(timeout_ms),
@@ -219,7 +222,12 @@ impl PluginRequest {
                     );
                 }
 
-                PluginRequest::External(PluginExternalRequest::RttRead { address, size })
+                PluginRequest::External(PluginExternalRequest::RttRead {
+                    plugin_name: Arc::new(plugin_name),
+                    method_id,
+                    address,
+                    size,
+                })
             }
             ":sys.sleep" => {
                 let time: u64 = value
