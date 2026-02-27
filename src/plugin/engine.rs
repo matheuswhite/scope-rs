@@ -602,27 +602,120 @@ impl PluginEngine {
                 }
             }
 
-            interface_recv_reqs.retain(|PluginMethodMessage { data, .. }| {
-                if let InterfaceType::Rtt = private.interface_type
-                    && let PluginExternalRequest::RttRecv { timeout } = data
-                {
-                    timeout.is_none_or(|t| Instant::now() < t)
-                } else if let InterfaceType::Serial = private.interface_type
-                    && let PluginExternalRequest::SerialRecv { timeout } = data
-                {
-                    timeout.is_none_or(|t| Instant::now() < t)
-                } else {
-                    false
-                }
-            });
+            interface_recv_reqs.retain(
+                |PluginMethodMessage {
+                     data,
+                     plugin_name,
+                     method_id,
+                 }| {
+                    match data {
+                        PluginExternalRequest::RttRecv { timeout } => {
+                            let InterfaceType::Rtt = private.interface_type else {
+                                let _ = engine_gate.sender.send(PluginMethodMessage {
+                                    plugin_name: plugin_name.clone(),
+                                    method_id: *method_id,
+                                    data: PluginResponse::RttRecv {
+                                        err: "wrong interface".to_string(),
+                                        message: vec![],
+                                    },
+                                });
+                                return false;
+                            };
 
-            rtt_read_reqs.retain(|PluginMethodMessage { data, .. }| {
-                if let PluginExternalRequest::RttRead { timeout, .. } = data {
-                    timeout.is_none_or(|t| Instant::now() < t)
-                } else {
-                    false
-                }
-            });
+                            if let Some(t) = timeout
+                                && Instant::now() >= *t
+                            {
+                                let _ = engine_gate.sender.send(PluginMethodMessage {
+                                    plugin_name: plugin_name.clone(),
+                                    method_id: *method_id,
+                                    data: PluginResponse::RttRecv {
+                                        err: "timeout".to_string(),
+                                        message: vec![],
+                                    },
+                                });
+
+                                return false;
+                            }
+
+                            true
+                        }
+                        PluginExternalRequest::SerialRecv { timeout } => {
+                            let InterfaceType::Serial = private.interface_type else {
+                                let rsp = PluginResponse::SerialRecv {
+                                    err: "wrong interface".to_string(),
+                                    message: vec![],
+                                };
+                                let _ = engine_gate.sender.send(PluginMethodMessage {
+                                    plugin_name: plugin_name.clone(),
+                                    method_id: *method_id,
+                                    data: rsp,
+                                });
+                                return false;
+                            };
+
+                            if let Some(t) = timeout
+                                && Instant::now() >= *t
+                            {
+                                let _ = engine_gate.sender.send(PluginMethodMessage {
+                                    plugin_name: plugin_name.clone(),
+                                    method_id: *method_id,
+                                    data: PluginResponse::SerialRecv {
+                                        err: "timeout".to_string(),
+                                        message: vec![],
+                                    },
+                                });
+
+                                return false;
+                            }
+
+                            true
+                        }
+                        _ => unreachable!(),
+                    }
+                },
+            );
+
+            rtt_read_reqs.retain(
+                |PluginMethodMessage {
+                     plugin_name,
+                     method_id,
+                     data,
+                     ..
+                 }| {
+                    let PluginExternalRequest::RttRead { timeout, .. } = data else {
+                        unreachable!();
+                    };
+
+                    let InterfaceType::Rtt = private.interface_type else {
+                        let _ = engine_gate.sender.send(PluginMethodMessage {
+                            plugin_name: plugin_name.clone(),
+                            method_id: *method_id,
+                            data: PluginResponse::RttRead {
+                                err: "wrong interface".to_string(),
+                                data: vec![],
+                            },
+                        });
+                        return false;
+                    };
+
+                    if let Some(t) = timeout
+                        && Instant::now() >= *t
+                    {
+                        let _ = engine_gate.sender.send(PluginMethodMessage {
+                            plugin_name: plugin_name.clone(),
+                            method_id: *method_id,
+                            data: PluginResponse::RttRead {
+                                err: "timeout".to_string(),
+                                data: vec![],
+                            },
+                        });
+
+                        return false;
+                    }
+
+                    true
+                },
+            );
 
             if let Ok(rx_msg) = private.rx.try_recv() {
                 let fn_name = match private.interface_type {
