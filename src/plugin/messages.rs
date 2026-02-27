@@ -236,7 +236,7 @@ impl PluginRequest {
                 }
 
                 PluginRequest::External(PluginExternalRequest::RttRead {
-                    timeout: Instant::now().checked_add(Duration::from_secs(1000)),
+                    timeout: Instant::now().checked_add(Duration::from_millis(1000)),
                     plugin_name: Arc::new(plugin_name),
                     method_id,
                     address,

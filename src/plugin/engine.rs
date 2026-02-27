@@ -464,67 +464,65 @@ impl PluginEngine {
                         method_id,
                         address,
                         size,
-                    } => {
-                        match private.interface_type {
-                            InterfaceType::Rtt => {
-                                let res = private.interface_cmd_sender.send(InterfaceCommand::Rtt(
-                                    RttCommand::PluginRead {
-                                        plugin_name: plugin_name.clone(),
-                                        method_id,
-                                        address,
-                                        size,
-                                    },
-                                ));
+                    } => match private.interface_type {
+                        InterfaceType::Rtt => {
+                            let res = private.interface_cmd_sender.send(InterfaceCommand::Rtt(
+                                RttCommand::PluginRead {
+                                    plugin_name: plugin_name.clone(),
+                                    method_id,
+                                    address,
+                                    size,
+                                },
+                            ));
 
-                                match res {
-                                    Ok(_) => {
-                                        if timeout.is_some_and(|t| Instant::now() >= t) {
-                                            Some(PluginResponse::RttRecv {
-                                                err: "timeout".to_string(),
-                                                message: vec![],
-                                            })
-                                        } else {
-                                            rtt_read_reqs.push(PluginMethodMessage {
-                                                plugin_name: plugin_name.clone(),
-                                                method_id,
-                                                data: PluginExternalRequest::RttRead {
-                                                    timeout,
-                                                    plugin_name,
-                                                    method_id,
-                                                    address,
-                                                    size,
-                                                },
-                                            });
-
-                                            None
-                                        }
-                                    }
-                                    Err(err) => {
-                                        error!(
-                                            private.logger,
-                                            "Failed to send RTT read command to interface: {}", err
-                                        );
+                            match res {
+                                Ok(_) => {
+                                    if timeout.is_some_and(|t| Instant::now() >= t) {
                                         Some(PluginResponse::RttRead {
-                                            err: "Failed to send RTT read command to interface"
-                                                .to_string(),
+                                            err: "timeout".to_string(),
                                             data: vec![],
                                         })
+                                    } else {
+                                        rtt_read_reqs.push(PluginMethodMessage {
+                                            plugin_name: plugin_name.clone(),
+                                            method_id,
+                                            data: PluginExternalRequest::RttRead {
+                                                timeout,
+                                                plugin_name,
+                                                method_id,
+                                                address,
+                                                size,
+                                            },
+                                        });
+
+                                        None
                                     }
                                 }
-                            }
-                            _ => {
-                                warning!(
-                                    private.logger,
-                                    "Plugin requested RTT read but the active interface is not RTT."
-                                );
-
-                                Some(PluginResponse::RttRead {
-                                    err: "Plugin requested RTT read but the active interface is not RTT.".to_string(),
-                                    data: vec![],
-                                })
+                                Err(err) => {
+                                    error!(
+                                        private.logger,
+                                        "Failed to send RTT read command to interface: {}", err
+                                    );
+                                    Some(PluginResponse::RttRead {
+                                        err: "Failed to send RTT read command to interface"
+                                            .to_string(),
+                                        data: vec![],
+                                    })
+                                }
                             }
                         }
-                    }
+                        _ => {
+                            warning!(
+                                private.logger,
+                                "Plugin requested :rrt.read but the active interface is not RTT."
+                            );
+
+                            Some(PluginResponse::RttRead {
+                                    err: "Plugin requested :rtt.read but the active interface is not RTT.".to_string(),
+                                    data: vec![],
+                                })
+                        }
+                    },
                     super::messages::PluginExternalRequest::Log {
                         level,
                         message,
