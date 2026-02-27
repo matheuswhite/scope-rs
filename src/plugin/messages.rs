@@ -185,7 +185,7 @@ impl PluginRequest {
             ":rtt.send" => {
                 let message: Vec<u8> = value
                     .get(2)
-                    .map_err(|_| "Cannot get second table entry as String".to_string())?;
+                    .map_err(|_| "Cannot get second table entry as bytes".to_string())?;
 
                 PluginRequest::External(PluginExternalRequest::RttSend { message })
             }
@@ -194,7 +194,7 @@ impl PluginRequest {
                     .get(2)
                     .map_err(|_| "Cannot get second table entry as Table".to_string())?;
 
-                let timeout_ms = opts.get("timeout_ms").unwrap_or(u64::MAX);
+                let timeout_ms = opts.get("timeout_ms").unwrap_or(1000);
 
                 PluginRequest::External(PluginExternalRequest::RttRecv {
                     timeout: Instant::now() + Duration::from_millis(timeout_ms),

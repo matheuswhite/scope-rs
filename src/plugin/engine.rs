@@ -428,25 +428,42 @@ impl PluginEngine {
                     super::messages::PluginExternalRequest::RttRead { address, size } => {
                         match private.interface_type {
                             InterfaceType::Rtt => {
-                                let _ = private.interface_cmd_sender.send(InterfaceCommand::Rtt(
+                                let res = private.interface_cmd_sender.send(InterfaceCommand::Rtt(
                                     RttCommand::PluginRead { address, size },
                                 ));
 
-                                rtt_read_reqs.push(PluginMethodMessage {
-                                    plugin_name: plugin_name.clone(),
-                                    method_id,
-                                    data: PluginExternalRequest::RttRead { address, size },
-                                });
+                                match res {
+                                    Ok(_) => {
+                                        rtt_read_reqs.push(PluginMethodMessage {
+                                            plugin_name: plugin_name.clone(),
+                                            method_id,
+                                            data: PluginExternalRequest::RttRead { address, size },
+                                        });
+
+                                        None
+                                    }
+                                    Err(err) => {
+                                        error!(
+                                            private.logger,
+                                            "Failed to send RTT read command to interface: {}", err
+                                        );
+                                        Some(PluginResponse::RttRead {
+                                            err: "Failed to send RTT read command to interface"
+                                                .to_string(),
+                                            data: vec![],
+                                        })
+                                    }
+                                }
                             }
                             _ => {
                                 warning!(
                                     private.logger,
                                     "Plugin requested RTT read but the active interface is not RTT."
                                 );
-                            }
-                        };
 
-                        None
+                                None
+                            }
+                        }
                     }
                     super::messages::PluginExternalRequest::Log {
                         level,
@@ -514,9 +531,13 @@ impl PluginEngine {
 
             if let Ok(tx_msg) = private.tx_consumer.try_recv() {
                 for plugin in plugin_list.values_mut() {
+                    let fn_name = match private.interface_type {
+                        InterfaceType::Rtt => "on_rtt_send",
+                        InterfaceType::Serial => "on_serial_send",
+                    };
                     plugin.spawn_method_call(
                         engine_gate.new_method_call_gate(),
-                        "on_serial_send",
+                        fn_name,
                         tx_msg.message.clone(),
                         false,
                     );
