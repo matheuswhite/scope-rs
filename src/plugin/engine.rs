@@ -514,7 +514,7 @@ impl PluginEngine {
                         _ => {
                             warning!(
                                 private.logger,
-                                "Plugin requested :rrt.read but the active interface is not RTT."
+                                "Plugin requested :rtt.read but the active interface is not RTT."
                             );
 
                             Some(PluginResponse::RttRead {
