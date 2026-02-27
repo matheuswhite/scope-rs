@@ -28,7 +28,21 @@ pub enum PluginExternalRequest {
         message: Vec<u8>,
     },
     SerialRecv {
-        timeout: Instant,
+        timeout: Option<Instant>,
+    },
+    RttInfo,
+    RttSend {
+        message: Vec<u8>,
+    },
+    RttRecv {
+        timeout: Option<Instant>,
+    },
+    RttRead {
+        timeout: Option<Instant>,
+        plugin_name: Arc<String>,
+        method_id: u64,
+        address: u64,
+        size: usize,
     },
     Log {
         level: LogLevel,
@@ -68,6 +82,10 @@ pub enum PluginResponse {
     SerialInfo { port: String, baudrate: u32 },
     SerialSend,
     SerialRecv { err: String, message: Vec<u8> },
+    RttInfo { target: String, channel: usize },
+    RttSend,
+    RttRecv { err: String, message: Vec<u8> },
+    RttRead { err: String, data: Vec<u8> },
     SysSleep,
     ReLiteral { literal: String },
     ReMatches { pattern: Option<String> },
@@ -77,10 +95,23 @@ pub enum PluginResponse {
 }
 
 impl PluginRequest {
+    fn deadline_from_timeout_ms(timeout_ms: Option<u64>) -> Option<Instant> {
+        // None (or a very large sentinel) means “no timeout”.
+        let Some(timeout_ms) = timeout_ms else {
+            return None;
+        };
+        if timeout_ms == u64::MAX {
+            return None;
+        }
+
+        Instant::now().checked_add(Duration::from_millis(timeout_ms))
+    }
+
     pub fn from_table<'lua>(
         value: Table<'lua>,
         plugin_name: String,
         id: String,
+        method_id: u64,
     ) -> Result<Self, String> {
         let req_id: String = value
             .get(1)
@@ -160,10 +191,56 @@ impl PluginRequest {
                     .get(2)
                     .map_err(|_| "Cannot get second table entry as Table".to_string())?;
 
-                let timeout_ms = opts.get("timeout_ms").unwrap_or(u64::MAX);
+                let timeout_ms: Option<u64> = opts.get("timeout_ms").ok();
 
                 PluginRequest::External(PluginExternalRequest::SerialRecv {
-                    timeout: Instant::now() + Duration::from_millis(timeout_ms),
+                    timeout: Self::deadline_from_timeout_ms(timeout_ms),
+                })
+            }
+            ":rtt.info" => PluginRequest::External(PluginExternalRequest::RttInfo),
+            ":rtt.send" => {
+                let message: Vec<u8> = value
+                    .get(2)
+                    .map_err(|_| "Cannot get second table entry as bytes".to_string())?;
+
+                PluginRequest::External(PluginExternalRequest::RttSend { message })
+            }
+            ":rtt.recv" => {
+                let opts: Table = value
+                    .get(2)
+                    .map_err(|_| "Cannot get second table entry as Table".to_string())?;
+
+                let timeout_ms: Option<u64> = opts.get("timeout_ms").ok();
+
+                PluginRequest::External(PluginExternalRequest::RttRecv {
+                    timeout: Self::deadline_from_timeout_ms(timeout_ms),
+                })
+            }
+            ":rtt.read" => {
+                let opts: Table = value
+                    .get(2)
+                    .map_err(|_| "Cannot get second table entry as Table".to_string())?;
+
+                let address: u64 = opts
+                    .get("address")
+                    .map_err(|_| "Cannot get 'address' field as Number".to_string())?;
+                let size: usize = opts
+                    .get("size")
+                    .map_err(|_| "Cannot get 'size' field as Number".to_string())?;
+
+                if size > 1024 {
+                    return Err(
+                        "Cannot perform ':rtt.read': 'size' field exceeds maximum of 1024 bytes"
+                            .to_string(),
+                    );
+                }
+
+                PluginRequest::External(PluginExternalRequest::RttRead {
+                    timeout: Instant::now().checked_add(Duration::from_millis(1000)),
+                    plugin_name: Arc::new(plugin_name),
+                    method_id,
+                    address,
+                    size,
                 })
             }
             ":sys.sleep" => {

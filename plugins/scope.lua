@@ -5,6 +5,7 @@ local M = {
     ble = {},
     sys = {},
     re = {},
+    rtt = {},
 }
 
 function M.fmt.to_str(val)
@@ -55,8 +56,8 @@ function M.log.error(msg)
 end
 
 function M.serial.info()
-    local port, baud_rate = table.unpack(coroutine.yield({ ":serial.info" }))
-    return port, baud_rate
+    local res = coroutine.yield({ ":serial.info" })
+    return res.port, res.baud_rate
 end
 
 function M.serial.send(msg)
@@ -64,8 +65,27 @@ function M.serial.send(msg)
 end
 
 function M.serial.recv(opts)
-    local err, msg = table.unpack(coroutine.yield({ ":serial.recv", opts }))
-    return err, msg
+    local res = coroutine.yield({ ":serial.recv", opts })
+    return res.err, res.data
+end
+
+function M.rtt.info()
+    local res = coroutine.yield({ ":rtt.info" })
+    return res.target, res.channel
+end
+
+function M.rtt.send(msg)
+    coroutine.yield({ ":rtt.send", msg })
+end
+
+function M.rtt.recv(opts)
+    local res = coroutine.yield({ ":rtt.recv", opts })
+    return res.err, res.data
+end
+
+function M.rtt.read(opts)
+    local res = coroutine.yield({ ":rtt.read", opts })
+    return res.err, res.data
 end
 
 function M.sys.os_name()
@@ -94,7 +114,8 @@ local function ord(idx)
 end
 
 local function parse_arg(idx, arg, ty, validate, default)
-    assert(not (ty == "nil" or ty == "function" or ty == "userdata" or ty == "thread" or ty == "table"), "Argument must not be " .. ty)
+    assert(not (ty == "nil" or ty == "function" or ty == "userdata" or ty == "thread" or ty == "table"),
+        "Argument must not be " .. ty)
 
     if not arg then
         if default then
@@ -108,6 +129,9 @@ local function parse_arg(idx, arg, ty, validate, default)
         if ty == "number" then
             arg = tonumber(arg)
             assert(arg, ord(idx) .. " argument must be a number")
+        elseif ty == "hex" then
+            arg = tonumber(arg, 16)
+            assert(arg, ord(idx) .. " argument must be a hex number")
         elseif ty == "boolean" then
             arg = arg ~= "0" and arg ~= "false"
         end
@@ -129,7 +153,8 @@ function M.sys.parse_args(args)
 end
 
 function M.re.literal(str)
-    return table.unpack(coroutine.yield({ ":re.literal", str }))
+    local res = coroutine.yield({ ":re.literal", str })
+    return res.literal
 end
 
 function M.re.matches(str, ...)
@@ -143,7 +168,8 @@ function M.re.matches(str, ...)
         pattern_table[args[i]] = args[i + 1]
     end
 
-    local fn_name = table.unpack(coroutine.yield({ ":re.matches", str, pattern_list }))
+    local res = coroutine.yield({ ":re.matches", str, pattern_list })
+    local fn_name = res.fn_name
     if fn_name ~= nil then
         local fn = pattern_table[fn_name]
         fn(str)
@@ -151,7 +177,8 @@ function M.re.matches(str, ...)
 end
 
 function M.re.match(str, pattern)
-    return table.unpack(coroutine.yield({ ":re.match", str, pattern }))
+    local res = coroutine.yield({ ":re.match", str, pattern })
+    return res.is_match
 end
 
 return M

@@ -42,6 +42,120 @@ Through line 5 to 7 we write a function and there are two notes about this funct
 
 The last line is already explained: it returns our plugin table. Without this line, anything inside our plugin will have effect.
 
+## RTT
+
+Scope can also operate using **RTT** (Real-Time Transfer). When the active interface is RTT, plugins can interact with it through the `rtt` module from the Scope standard library.
+
+Import it like this:
+
+```lua
+local rtt = require("scope").rtt
+```
+
+As with the serial APIs, RTT messages are byte-oriented. Depending on the call site, data may arrive as a Lua string or as a list of bytes (a table of numbers). If you need to convert between them, first import the Scope standard library with `require("scope")`, then use the `fmt` helpers:
+
+```lua
+local scope = require("scope")
+local fmt = scope.fmt
+
+local as_string = fmt.to_str(msg)
+local as_bytes = fmt.to_bytes("hello")
+```
+
+### rtt.info()
+
+Returns information about the current RTT session.
+
+- Returns: `target, channel`
+    - `target` (string): RTT target name.
+    - `channel` (number): active RTT channel.
+
+Notes:
+
+- If the active interface is **not** RTT, Scope returns an empty target (`""`) and channel `0`.
+
+### rtt.send(msg)
+
+Sends a message through the RTT interface.
+
+- `msg`: string or list of bytes (table of numbers).
+- Returns: nothing.
+
+### rtt.recv(opts)
+
+Waits for the next RTT message.
+
+- `opts` (table):
+    - `timeout_ms` (number, optional): how long to wait in milliseconds. If omitted, it waits indefinitely.
+- Returns: `err, data`
+    - `err`: `nil` on success, or a string on error (currently the most common value is `"timeout"`).
+    - `data`: list of bytes (table of numbers). On timeout, it is an empty list.
+
+Important:
+
+- If your plugin implements `on_rtt_recv`, it will still be called for the same incoming message that unblocks `rtt.recv`. Avoid processing the same message twice.
+- `rtt.recv` requires the active interface to be RTT. If another interface is active, this call may wait indefinitely and never complete.
+
+### rtt.read(opts)
+
+Reads raw memory from the target via the RTT backend.
+
+- `opts` (table):
+    - `address` (number): memory address to read from.
+    - `size` (number): number of bytes to read (maximum: `1024`).
+- Returns: `err, data`
+    - `err`: `nil` on success, or a string describing the failure.
+    - `data`: list of bytes (table of numbers). On error, it is an empty list.
+
+Notes:
+
+- This call requires the active interface to be **RTT**. If Scope is running with another interface selected, the request will immediately fail with an error indicating that RTT is not the active interface. Use `rtt.info()` to detect whether RTT is active.
+- Lua numbers are typically floating-point; very large addresses may lose precision. In practice, this works best for 32-bit addresses.
+
+### Callback: on_rtt_recv(msg)
+
+If your plugin table defines `on_rtt_recv`, Scope will call it automatically every time a message is received from RTT **while the active interface is RTT**.
+
+```lua
+local scope = require("scope")
+local fmt = scope.fmt
+local log = scope.log
+
+local M = {}
+
+function M.on_rtt_recv(msg)
+        log.info("RTT: " .. fmt.to_str(msg))
+end
+
+return M
+```
+
+Notes:
+
+- When the active interface is RTT, `on_serial_recv` is not called; RTT uses `on_rtt_recv` instead.
+
+### Callback: on_rtt_send(msg)
+
+If your plugin table defines `on_rtt_send`, Scope will call it automatically every time a message is sent to RTT **while the active interface is RTT**.
+
+```lua
+local scope = require("scope")
+local fmt = scope.fmt
+local log = scope.log
+
+local M = {}
+
+function M.on_rtt_send(msg)
+        log.info("RTT sent: " .. fmt.to_str(msg))
+end
+
+return M
+```
+
+Notes:
+
+- When the active interface is RTT, `on_serial_send` is not called; RTT uses `on_rtt_send` instead.
+
 ## Analytics Plugin
 
 After understand the basic plugin sample shown above, let's move on to a more complex and functional sample. Let's build an analytics plugin. You can use the code of `hello.lua` as base and edit the same file or duplicate the file and rename it to `analytics.lua`. This plugin is going to count the number of times we receive and send a message through the serial port. We already use `on_serial_recv` on the previous sample to get the received messages. To get the messages sent we're going to use `on_serial_send` function. See the snippet below:

@@ -139,6 +139,7 @@ impl PluginMethodCall {
             plugin_req,
             (*self.plugin_name).clone(),
             (*self.fn_name).clone(),
+            self.id,
         )
         .map_err(|err: String| err.to_string())?;
 
@@ -246,36 +247,79 @@ impl PluginMethodCall {
         let table = lua.create_table().map_err(|err| err.to_string())?;
 
         match rsp {
-            PluginResponse::Log | PluginResponse::SerialSend | PluginResponse::SysSleep => {}
+            PluginResponse::Log
+            | PluginResponse::SerialSend
+            | PluginResponse::RttSend
+            | PluginResponse::SysSleep => {}
             PluginResponse::ReMatches { pattern } => {
                 table
-                    .push(if let Some(pattern) = pattern {
-                        Value::String(lua.create_string(pattern).map_err(|err| err.to_string())?)
-                    } else {
-                        Value::Nil
-                    })
+                    .set(
+                        "fn_name",
+                        match pattern {
+                            Some(pattern) => Value::String(
+                                lua.create_string(pattern).map_err(|err| err.to_string())?,
+                            ),
+                            None => Value::Nil,
+                        },
+                    )
                     .map_err(|err| err.to_string())?;
             }
-            PluginResponse::ReMatch { is_match } => {
-                table.push(is_match).map_err(|err| err.to_string())?
-            }
+            PluginResponse::ReMatch { is_match } => table
+                .set("is_match", is_match)
+                .map_err(|err| err.to_string())?,
             PluginResponse::SerialInfo { port, baudrate } => {
-                table.push(port).map_err(|err| err.to_string())?;
-                table.push(baudrate).map_err(|err| err.to_string())?;
+                table.set("port", port).map_err(|err| err.to_string())?;
+                table
+                    .set("baud_rate", baudrate)
+                    .map_err(|err| err.to_string())?;
             }
             PluginResponse::SerialRecv { err, message } => {
-                table.push(err).map_err(|err| err.to_string())?;
-                table.push(message).map_err(|err| err.to_string())?;
+                if err.is_empty() {
+                    table
+                        .set("err", Value::Nil)
+                        .map_err(|err| err.to_string())?;
+                } else {
+                    table.set("err", err).map_err(|err| err.to_string())?;
+                }
+                table.set("data", message).map_err(|err| err.to_string())?;
             }
             PluginResponse::ReLiteral { literal } => {
-                table.push(literal).map_err(|err| err.to_string())?;
+                table
+                    .set("literal", literal)
+                    .map_err(|err| err.to_string())?;
             }
             PluginResponse::ShellRun { stdout, stderr } => {
-                table.push(stdout).map_err(|err| err.to_string())?;
-                table.push(stderr).map_err(|err| err.to_string())?;
+                table.set("stdout", stdout).map_err(|err| err.to_string())?;
+                table.set("stderr", stderr).map_err(|err| err.to_string())?;
             }
             PluginResponse::ShellExist { exist } => {
-                table.push(exist).map_err(|err| err.to_string())?;
+                table.set("exist", exist).map_err(|err| err.to_string())?;
+            }
+            PluginResponse::RttInfo { target, channel } => {
+                table.set("target", target).map_err(|err| err.to_string())?;
+                table
+                    .set("channel", channel)
+                    .map_err(|err| err.to_string())?;
+            }
+            PluginResponse::RttRecv { err, message } => {
+                if err.is_empty() {
+                    table
+                        .set("err", Value::Nil)
+                        .map_err(|err| err.to_string())?;
+                } else {
+                    table.set("err", err).map_err(|err| err.to_string())?;
+                }
+                table.set("data", message).map_err(|err| err.to_string())?;
+            }
+            PluginResponse::RttRead { err, data } => {
+                if err.is_empty() {
+                    table
+                        .set("err", Value::Nil)
+                        .map_err(|err| err.to_string())?;
+                } else {
+                    table.set("err", err).map_err(|err| err.to_string())?;
+                }
+                table.set("data", data).map_err(|err| err.to_string())?;
             }
         }
 

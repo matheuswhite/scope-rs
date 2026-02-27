@@ -11,7 +11,7 @@ use crate::{
         mpmc::{Consumer, Producer},
         task::{Shared, Task},
     },
-    interfaces::InterfaceShared,
+    interfaces::{InterfaceCommand, InterfaceShared, InterfaceType, rtt_if::RttCommand},
     success, warning,
 };
 use chrono::Local;
@@ -21,7 +21,7 @@ use std::{
     ops::Deref,
     path::PathBuf,
     str::FromStr,
-    sync::{Arc, RwLock},
+    sync::{Arc, RwLock, mpsc::Sender},
     time::{Duration, Instant},
 };
 use std::{path::Path, sync::mpsc::Receiver};
@@ -64,6 +64,12 @@ pub enum PluginEngineCommand {
         target: String,
         channel: usize,
     },
+    RttReadResult {
+        plugin_name: Arc<String>,
+        method_id: u64,
+        err: String,
+        data: Vec<u8>,
+    },
     Exit,
 }
 
@@ -74,6 +80,8 @@ pub struct PluginEngineConnections {
     rx: Consumer<Arc<TimedBytes>>,
     interface_shared: Shared<InterfaceShared>,
     latency: u64,
+    interface_type: InterfaceType,
+    interface_cmd_sender: Sender<InterfaceCommand>,
 }
 
 impl PluginEngine {
@@ -110,7 +118,8 @@ impl PluginEngine {
     ) {
         let mut plugin_list: HashMap<Arc<String>, Plugin> = HashMap::new();
         let mut engine_gate = PluginEngineGate::new(32);
-        let mut serial_recv_reqs = vec![];
+        let mut interface_recv_reqs = vec![];
+        let mut rtt_read_reqs = vec![];
         let err_regex = Regex::new(r#".*: \[string ".*"]:"#).unwrap();
 
         'plugin_engine_loop: loop {
@@ -248,6 +257,43 @@ impl PluginEngine {
                             );
                         }
                     }
+                    PluginEngineCommand::RttReadResult {
+                        plugin_name,
+                        method_id,
+                        err,
+                        data,
+                    } => {
+                        let rtt_read_reqs_filtered = rtt_read_reqs
+                            .extract_if(
+                                ..,
+                                |PluginMethodMessage {
+                                     plugin_name: req_plugin_name,
+                                     method_id: req_method_id,
+                                     ..
+                                 }| {
+                                    plugin_name == *req_plugin_name && method_id == *req_method_id
+                                },
+                            )
+                            .collect::<Vec<_>>();
+
+                        for PluginMethodMessage {
+                            plugin_name,
+                            method_id,
+                            ..
+                        } in rtt_read_reqs_filtered
+                        {
+                            let rsp = PluginResponse::RttRead {
+                                err: err.clone(),
+                                data: data.clone(),
+                            };
+
+                            let _ = engine_gate.sender.send(PluginMethodMessage {
+                                plugin_name,
+                                method_id,
+                                data: rsp,
+                            });
+                        }
+                    }
                 }
             }
 
@@ -285,33 +331,198 @@ impl PluginEngine {
                         Some(PluginResponse::SerialInfo { port, baudrate })
                     }
                     super::messages::PluginExternalRequest::SerialSend { message } => {
-                        let id = private.tx_consumer.id();
-                        private.tx_producer.produce_without_loopback(
-                            Arc::new(TimedBytes {
-                                timestamp: Local::now(),
-                                message,
-                            }),
-                            id,
-                        );
+                        match private.interface_type {
+                            InterfaceType::Serial => {
+                                let id = private.tx_consumer.id();
+                                private.tx_producer.produce_without_loopback(
+                                    Arc::new(TimedBytes {
+                                        timestamp: Local::now(),
+                                        message,
+                                    }),
+                                    id,
+                                );
+                            }
+                            _ => {
+                                warning!(
+                                    private.logger,
+                                    "Plugin requested :serial.send but the active interface is not Serial."
+                                );
+                            }
+                        }
 
                         Some(PluginResponse::SerialSend)
                     }
                     super::messages::PluginExternalRequest::SerialRecv { timeout } => {
-                        if Instant::now() >= timeout {
-                            Some(PluginResponse::SerialRecv {
-                                err: "timeout".to_string(),
-                                message: vec![],
-                            })
-                        } else {
-                            serial_recv_reqs.push(PluginMethodMessage {
-                                plugin_name: plugin_name.clone(),
-                                method_id,
-                                data: PluginExternalRequest::SerialRecv { timeout },
-                            });
+                        match private.interface_type {
+                            InterfaceType::Serial => {
+                                if timeout.is_some_and(|t| Instant::now() >= t) {
+                                    Some(PluginResponse::SerialRecv {
+                                        err: "timeout".to_string(),
+                                        message: vec![],
+                                    })
+                                } else {
+                                    interface_recv_reqs.push(PluginMethodMessage {
+                                        plugin_name: plugin_name.clone(),
+                                        method_id,
+                                        data: PluginExternalRequest::SerialRecv { timeout },
+                                    });
 
-                            None
+                                    None
+                                }
+                            }
+                            _ => {
+                                warning!(
+                                    private.logger,
+                                    "Plugin requested :serial.recv but the active interface is not Serial."
+                                );
+
+                                Some(PluginResponse::SerialRecv {
+                                    err: "Plugin requested :serial.recv but the active interface is not Serial.".to_string(),
+                                    message: vec![],
+                                })
+                            }
                         }
                     }
+                    super::messages::PluginExternalRequest::RttInfo => {
+                        let (target, channel) = {
+                            let interface_shared = private
+                                .interface_shared
+                                .read()
+                                .expect("Cannot get interface lock for read");
+                            match interface_shared.deref() {
+                                InterfaceShared::Rtt(rtt_shared) => {
+                                    (rtt_shared.target.clone(), rtt_shared.channel)
+                                }
+                                _ => {
+                                    warning!(
+                                        private.logger,
+                                        "Plugin requested :rtt.info but the active interface is not RTT; returning empty target and channel 0"
+                                    );
+                                    ("".to_string(), 0)
+                                }
+                            }
+                        };
+
+                        Some(PluginResponse::RttInfo { target, channel })
+                    }
+                    super::messages::PluginExternalRequest::RttSend { message } => {
+                        match private.interface_type {
+                            InterfaceType::Rtt => {
+                                let id = private.tx_consumer.id();
+                                private.tx_producer.produce_without_loopback(
+                                    Arc::new(TimedBytes {
+                                        timestamp: Local::now(),
+                                        message,
+                                    }),
+                                    id,
+                                );
+                            }
+                            _ => {
+                                warning!(
+                                    private.logger,
+                                    "Plugin requested :rtt.send but the active interface is not RTT."
+                                );
+                            }
+                        }
+
+                        Some(PluginResponse::RttSend)
+                    }
+                    super::messages::PluginExternalRequest::RttRecv { timeout } => {
+                        match private.interface_type {
+                            InterfaceType::Rtt => {
+                                if timeout.is_some_and(|t| Instant::now() >= t) {
+                                    Some(PluginResponse::RttRecv {
+                                        err: "timeout".to_string(),
+                                        message: vec![],
+                                    })
+                                } else {
+                                    interface_recv_reqs.push(PluginMethodMessage {
+                                        plugin_name: plugin_name.clone(),
+                                        method_id,
+                                        data: PluginExternalRequest::RttRecv { timeout },
+                                    });
+
+                                    None
+                                }
+                            }
+                            _ => {
+                                warning!(
+                                    private.logger,
+                                    "Plugin requested :rtt.recv but the active interface is not RTT."
+                                );
+
+                                Some(PluginResponse::RttRecv {
+                                    err: "Plugin requested :rtt.recv but the active interface is not RTT.".to_string(),
+                                    message: vec![],
+                                })
+                            }
+                        }
+                    }
+                    super::messages::PluginExternalRequest::RttRead {
+                        timeout,
+                        plugin_name,
+                        method_id,
+                        address,
+                        size,
+                    } => match private.interface_type {
+                        InterfaceType::Rtt => {
+                            let res = private.interface_cmd_sender.send(InterfaceCommand::Rtt(
+                                RttCommand::PluginRead {
+                                    plugin_name: plugin_name.clone(),
+                                    method_id,
+                                    address,
+                                    size,
+                                },
+                            ));
+
+                            match res {
+                                Ok(_) => {
+                                    if timeout.is_some_and(|t| Instant::now() >= t) {
+                                        Some(PluginResponse::RttRead {
+                                            err: "timeout".to_string(),
+                                            data: vec![],
+                                        })
+                                    } else {
+                                        rtt_read_reqs.push(PluginMethodMessage {
+                                            plugin_name: plugin_name.clone(),
+                                            method_id,
+                                            data: PluginExternalRequest::RttRead {
+                                                timeout,
+                                                plugin_name,
+                                                method_id,
+                                                address,
+                                                size,
+                                            },
+                                        });
+
+                                        None
+                                    }
+                                }
+                                Err(err) => {
+                                    error!(
+                                        private.logger,
+                                        "Failed to send RTT read command to interface: {}", err
+                                    );
+                                    Some(PluginResponse::RttRead {
+                                        err: "Failed to send RTT read command to interface"
+                                            .to_string(),
+                                        data: vec![],
+                                    })
+                                }
+                            }
+                        }
+                        _ => {
+                            warning!(
+                                private.logger,
+                                "Plugin requested :rtt.read but the active interface is not RTT."
+                            );
+
+                            Some(PluginResponse::RttRead {
+                                    err: "Plugin requested :rtt.read but the active interface is not RTT.".to_string(),
+                                    data: vec![],
+                                })
+                        }
+                    },
                     super::messages::PluginExternalRequest::Log {
                         level,
                         message,
@@ -378,47 +589,171 @@ impl PluginEngine {
 
             if let Ok(tx_msg) = private.tx_consumer.try_recv() {
                 for plugin in plugin_list.values_mut() {
+                    let fn_name = match private.interface_type {
+                        InterfaceType::Rtt => "on_rtt_send",
+                        InterfaceType::Serial => "on_serial_send",
+                    };
                     plugin.spawn_method_call(
                         engine_gate.new_method_call_gate(),
-                        "on_serial_send",
+                        fn_name,
                         tx_msg.message.clone(),
                         false,
                     );
                 }
             }
 
-            serial_recv_reqs.retain(|PluginMethodMessage { data, .. }| {
-                if let PluginExternalRequest::SerialRecv { timeout } = data {
-                    Instant::now() < *timeout
-                } else {
-                    false
-                }
-            });
+            interface_recv_reqs.retain(
+                |PluginMethodMessage {
+                     data,
+                     plugin_name,
+                     method_id,
+                 }| {
+                    match data {
+                        PluginExternalRequest::RttRecv { timeout } => {
+                            let InterfaceType::Rtt = private.interface_type else {
+                                let _ = engine_gate.sender.send(PluginMethodMessage {
+                                    plugin_name: plugin_name.clone(),
+                                    method_id: *method_id,
+                                    data: PluginResponse::RttRecv {
+                                        err: "wrong interface".to_string(),
+                                        message: vec![],
+                                    },
+                                });
+                                return false;
+                            };
+
+                            if let Some(t) = timeout
+                                && Instant::now() >= *t
+                            {
+                                let _ = engine_gate.sender.send(PluginMethodMessage {
+                                    plugin_name: plugin_name.clone(),
+                                    method_id: *method_id,
+                                    data: PluginResponse::RttRecv {
+                                        err: "timeout".to_string(),
+                                        message: vec![],
+                                    },
+                                });
+
+                                return false;
+                            }
+
+                            true
+                        }
+                        PluginExternalRequest::SerialRecv { timeout } => {
+                            let InterfaceType::Serial = private.interface_type else {
+                                let rsp = PluginResponse::SerialRecv {
+                                    err: "wrong interface".to_string(),
+                                    message: vec![],
+                                };
+                                let _ = engine_gate.sender.send(PluginMethodMessage {
+                                    plugin_name: plugin_name.clone(),
+                                    method_id: *method_id,
+                                    data: rsp,
+                                });
+                                return false;
+                            };
+
+                            if let Some(t) = timeout
+                                && Instant::now() >= *t
+                            {
+                                let _ = engine_gate.sender.send(PluginMethodMessage {
+                                    plugin_name: plugin_name.clone(),
+                                    method_id: *method_id,
+                                    data: PluginResponse::SerialRecv {
+                                        err: "timeout".to_string(),
+                                        message: vec![],
+                                    },
+                                });
+
+                                return false;
+                            }
+
+                            true
+                        }
+                        _ => unreachable!(),
+                    }
+                },
+            );
+
+            rtt_read_reqs.retain(
+                |PluginMethodMessage {
+                     plugin_name,
+                     method_id,
+                     data,
+                     ..
+                 }| {
+                    let PluginExternalRequest::RttRead { timeout, .. } = data else {
+                        unreachable!();
+                    };
+
+                    let InterfaceType::Rtt = private.interface_type else {
+                        let _ = engine_gate.sender.send(PluginMethodMessage {
+                            plugin_name: plugin_name.clone(),
+                            method_id: *method_id,
+                            data: PluginResponse::RttRead {
+                                err: "wrong interface".to_string(),
+                                data: vec![],
+                            },
+                        });
+                        return false;
+                    };
+
+                    if let Some(t) = timeout
+                        && Instant::now() >= *t
+                    {
+                        let _ = engine_gate.sender.send(PluginMethodMessage {
+                            plugin_name: plugin_name.clone(),
+                            method_id: *method_id,
+                            data: PluginResponse::RttRead {
+                                err: "timeout".to_string(),
+                                data: vec![],
+                            },
+                        });
+
+                        return false;
+                    }
+
+                    true
+                },
+            );
 
             if let Ok(rx_msg) = private.rx.try_recv() {
+                let fn_name = match private.interface_type {
+                    InterfaceType::Serial => "on_serial_recv",
+                    InterfaceType::Rtt => "on_rtt_recv",
+                };
+
                 for plugin in plugin_list.values_mut() {
                     plugin.spawn_method_call(
                         engine_gate.new_method_call_gate(),
-                        "on_serial_recv",
+                        fn_name,
                         rx_msg.message.clone(),
                         false,
                     );
                 }
 
-                for serial_recv_req in serial_recv_reqs.drain(..) {
+                for interface_recv_req in interface_recv_reqs.drain(..) {
                     let PluginMethodMessage {
                         plugin_name,
                         method_id,
                         ..
-                    } = serial_recv_req;
+                    } = interface_recv_req;
+
+                    let rsp = match private.interface_type {
+                        InterfaceType::Serial => PluginResponse::SerialRecv {
+                            err: "".to_string(),
+                            message: rx_msg.message.clone(),
+                        },
+                        InterfaceType::Rtt => PluginResponse::RttRecv {
+                            err: "".to_string(),
+                            message: rx_msg.message.clone(),
+                        },
+                    };
 
                     let _ = engine_gate.sender.send(PluginMethodMessage {
                         plugin_name,
                         method_id,
-                        data: PluginResponse::SerialRecv {
-                            err: "".to_string(),
-                            message: rx_msg.message.clone(),
-                        },
+                        data: rsp,
                     });
                 }
             }
@@ -479,6 +814,8 @@ impl PluginEngineConnections {
         rx: Consumer<Arc<TimedBytes>>,
         interface_shared: Shared<InterfaceShared>,
         latency: u64,
+        interface_type: InterfaceType,
+        interface_cmd_sender: Sender<InterfaceCommand>,
     ) -> Self {
         Self {
             logger,
@@ -487,6 +824,8 @@ impl PluginEngineConnections {
             rx,
             interface_shared,
             latency,
+            interface_type,
+            interface_cmd_sender,
         }
     }
 }

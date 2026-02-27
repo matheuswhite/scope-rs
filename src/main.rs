@@ -124,7 +124,7 @@ fn app_serial(
 
     let serial_if = InterfaceTask::spawn_serial_interface(
         serial_connections,
-        serial_if_cmd_sender,
+        serial_if_cmd_sender.clone(),
         serial_if_cmd_receiver,
         SerialSetup::default(),
     );
@@ -137,6 +137,8 @@ fn app_serial(
         rx_channel_consumers.pop().unwrap(),
         serial_shared,
         latency,
+        InterfaceType::Serial,
+        serial_if_cmd_sender,
     );
 
     let inputs_task = InputsTask::spawn_inputs_task(
@@ -243,7 +245,7 @@ fn app_rtt(
 
     let rtt_if = InterfaceTask::spawn_rtt_interface(
         rtt_connections,
-        rtt_if_cmd_sender,
+        rtt_if_cmd_sender.clone(),
         rtt_if_cmd_receiver,
         RttSetup::default(),
     );
@@ -256,6 +258,8 @@ fn app_rtt(
         rx_channel_consumers.pop().unwrap(),
         rtt_shared,
         latency,
+        InterfaceType::Rtt,
+        rtt_if_cmd_sender,
     );
 
     let inputs_task = InputsTask::spawn_inputs_task(
