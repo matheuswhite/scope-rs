@@ -109,7 +109,7 @@ Reads raw memory from the target via the RTT backend.
 
 Notes:
 
-- This call requires the active interface to be **RTT**. If Scope is running with another interface selected, the request may never complete. Use `rtt.info()` to detect whether RTT is active.
+- This call requires the active interface to be **RTT**. If Scope is running with another interface selected, the request will immediately fail with an error indicating that RTT is not the active interface. Use `rtt.info()` to detect whether RTT is active.
 - Lua numbers are typically floating-point; very large addresses may lose precision. In practice, this works best for 32-bit addresses.
 
 ### Callback: on_rtt_recv(msg)
@@ -133,6 +133,28 @@ return M
 Notes:
 
 - When the active interface is RTT, `on_serial_recv` is not called; RTT uses `on_rtt_recv` instead.
+
+### Callback: on_rtt_send(msg)
+
+If your plugin table defines `on_rtt_send`, Scope will call it automatically every time a message is sent to RTT **while the active interface is RTT**.
+
+```lua
+local scope = require("scope")
+local fmt = scope.fmt
+local log = scope.log
+
+local M = {}
+
+function M.on_rtt_send(msg)
+        log.info("RTT sent: " .. fmt.to_str(msg))
+end
+
+return M
+```
+
+Notes:
+
+- When the active interface is RTT, `on_serial_send` is not called; RTT uses `on_rtt_send` instead.
 
 ## Analytics Plugin
 

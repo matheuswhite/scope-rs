@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Instant, u64};
+use std::{sync::Arc, time::Instant};
 
 use mlua::Table;
 use std::time::Duration;
