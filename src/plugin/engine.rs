@@ -670,7 +670,7 @@ impl PluginEngine {
 
                             true
                         }
-                        _ => unreachable!(),
+                        _ => unreachable!("Only recv requests should be in interface_recv_reqs. This is a bug. Please, report it."),
                     }
                 },
             );
@@ -683,7 +683,7 @@ impl PluginEngine {
                      ..
                  }| {
                     let PluginExternalRequest::RttRead { timeout, .. } = data else {
-                        unreachable!();
+                        unreachable!("RttRead requests should be the only ones in rtt_read_reqs. This is a bug. Please, report it.");
                     };
 
                     let InterfaceType::Rtt = private.interface_type else {

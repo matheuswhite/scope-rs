@@ -38,6 +38,8 @@ pub struct RttConnections {
     plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
     latency: u64,
     last_address: Option<u64>,
+    probe_speed_message: Option<String>,
+    fail_to_attach_message: Option<String>,
 }
 
 #[derive(Default)]
@@ -104,6 +106,8 @@ impl RttInterface {
             plugin_engine_cmd_sender,
             latency,
             mut last_address,
+            mut probe_speed_message,
+            mut fail_to_attach_message,
         } = connections;
         let mut line = vec![];
         let mut buffer = [0u8; 1024];
@@ -121,6 +125,8 @@ impl RttInterface {
                         &logger,
                         &plugin_engine_cmd_sender,
                         &mut last_address,
+                        &mut probe_speed_message,
+                        &mut fail_to_attach_message,
                     ),
                     RttCommand::Disconnect => Self::disconnect(
                         shared.clone(),
@@ -128,6 +134,8 @@ impl RttInterface {
                         &mut rtt,
                         &logger,
                         &plugin_engine_cmd_sender,
+                        &mut probe_speed_message,
+                        &mut fail_to_attach_message,
                     ),
                     RttCommand::Setup(setup) => Self::setup(
                         shared.clone(),
@@ -136,6 +144,8 @@ impl RttInterface {
                         &mut rtt,
                         &logger,
                         &plugin_engine_cmd_sender,
+                        &mut probe_speed_message,
+                        &mut fail_to_attach_message,
                     ),
                     RttCommand::Read { address, size } => {
                         match Self::read_memory(session.as_mut(), address, size) {
@@ -185,7 +195,9 @@ impl RttInterface {
                     .expect("Failed to acquire read lock on RTT shared state");
                 let sr_ref = match sr.deref() {
                     InterfaceShared::Rtt(sr) => sr,
-                    _ => unreachable!(),
+                    _ => unreachable!(
+                        "RttInterface should only be used with Rtt shared. This is a bug. Please, report it."
+                    ),
                 };
                 let mode = sr_ref.mode;
 
@@ -202,6 +214,8 @@ impl RttInterface {
                             &logger,
                             &plugin_engine_cmd_sender,
                             &mut last_address,
+                            &mut probe_speed_message,
+                            &mut fail_to_attach_message,
                         );
                         drop(sr);
                         Self::set_mode(shared.clone(), new_mode);
@@ -226,7 +240,9 @@ impl RttInterface {
                     .expect("Failed to acquire read lock on RTT shared state");
                 let sr = match sr.deref() {
                     InterfaceShared::Rtt(sr) => sr,
-                    _ => unreachable!(),
+                    _ => unreachable!(
+                        "RttInterface should only be used with Rtt shared. This is a bug. Please, report it."
+                    ),
                 };
                 sr.channel
             };
@@ -241,6 +257,8 @@ impl RttInterface {
                         &mut Some(rtt_if),
                         &logger,
                         &plugin_engine_cmd_sender,
+                        &mut probe_speed_message,
+                        &mut fail_to_attach_message,
                     );
                     Self::set_mode(shared.clone(), Some(RttMode::Reconnecting));
                     Self::wait(latency);
@@ -264,6 +282,8 @@ impl RttInterface {
                         &mut Some(rtt_if),
                         &logger,
                         &plugin_engine_cmd_sender,
+                        &mut probe_speed_message,
+                        &mut fail_to_attach_message,
                     );
                     Self::set_mode(shared.clone(), Some(RttMode::Reconnecting));
                     Self::wait(latency);
@@ -332,7 +352,9 @@ impl RttInterface {
             .expect("Failed to acquire write lock on RTT shared state");
         let sw = match sw.deref_mut() {
             InterfaceShared::Rtt(sw) => sw,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "RttInterface should only be used with Rtt shared. This is a bug. Please, report it."
+            ),
         };
         sw.mode = mode;
     }
@@ -356,7 +378,7 @@ impl RttInterface {
             {
                 debug!(
                     logger,
-                    "Failed to search at first 32KB of RAM: {}, trying to scan entire RAM...", err
+                    "Failed to search at first 32KB of RAM, trying to scan entire RAM..."
                 );
                 Rtt::attach(core)
             } else {
@@ -384,6 +406,28 @@ impl RttInterface {
         }
     }
 
+    fn log_probe_speed(logger: &Logger, probe_speed_message: &mut Option<String>, speed: u32) {
+        let message = format!("Probe speed: {} kHz", speed);
+        if probe_speed_message.as_ref() != Some(&message) {
+            debug!(logger, "{}", message);
+            *probe_speed_message = Some(message);
+        }
+    }
+
+    fn log_fail_to_attach(
+        logger: &Logger,
+        fail_to_attach_message: &mut Option<String>,
+        res: &Result<Session, probe_rs::Error>,
+    ) {
+        if let Err(err) = res {
+            let message = format!("Failed to attach to target: {}", err);
+            if fail_to_attach_message.as_ref() != Some(&message) {
+                error!(logger, "{}", message);
+                *fail_to_attach_message = Some(message);
+            }
+        }
+    }
+
     fn connect(
         shared: Arc<RwLock<InterfaceShared>>,
         session: &mut Option<Session>,
@@ -391,13 +435,17 @@ impl RttInterface {
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
         last_address: &mut Option<u64>,
+        probe_speed_message: &mut Option<String>,
+        fail_to_attach_message: &mut Option<String>,
     ) -> Option<RttMode> {
         let sr = shared
             .read()
             .expect("Failed to acquire read lock on RTT shared state");
         let sr = match sr.deref() {
             InterfaceShared::Rtt(sr) => sr,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "RttInterface::connect should only be called with Rtt shared. This is a bug. Please, report it."
+            ),
         };
 
         if let RttMode::Connected = sr.mode {
@@ -417,8 +465,10 @@ impl RttInterface {
                         error!(logger, "Failed to set probe speed");
                         return None;
                     };
-                    debug!(logger, "Probe speed: {} kHz", speed);
-                    probe.attach(&target, Permissions::default()).ok()
+                    Self::log_probe_speed(logger, probe_speed_message, speed);
+                    let res = probe.attach(&target, Permissions::default());
+                    Self::log_fail_to_attach(logger, fail_to_attach_message, &res);
+                    res.ok()
                 })
         else {
             let _ = rtt.take();
@@ -467,7 +517,11 @@ impl RttInterface {
         rtt: &mut Option<Rtt>,
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
+        probe_speed_message: &mut Option<String>,
+        fail_to_attach_message: &mut Option<String>,
     ) -> Option<RttMode> {
+        let _ = fail_to_attach_message.take();
+        let _ = probe_speed_message.take();
         let _ = session.take();
         let _ = rtt.take();
         let sr = shared
@@ -475,7 +529,9 @@ impl RttInterface {
             .expect("Failed to acquire read lock on RTT shared state");
         let sr = match sr.deref() {
             InterfaceShared::Rtt(sr) => sr,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "RttInterface::disconnect should only be called with Rtt shared. This is a bug. Please, report it."
+            ),
         };
 
         if let RttMode::Connected = sr.mode {
@@ -504,6 +560,8 @@ impl RttInterface {
         rtt: &mut Option<Rtt>,
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
+        probe_speed_message: &mut Option<String>,
+        fail_to_attach_message: &mut Option<String>,
     ) -> Option<RttMode> {
         let mut has_changes = false;
         let mut sw = shared
@@ -511,7 +569,9 @@ impl RttInterface {
             .expect("Failed to acquire write lock on RTT shared state");
         let sw_ref = match sw.deref_mut() {
             InterfaceShared::Rtt(sw) => sw,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "RttInterface::setup should only be called with Rtt shared. This is a bug. Please, report it."
+            ),
         };
 
         if let Some(target) = setup.target {
@@ -533,6 +593,8 @@ impl RttInterface {
                 rtt,
                 logger,
                 plugin_engine_cmd_sender,
+                probe_speed_message,
+                fail_to_attach_message,
             );
 
             match last_mode {
@@ -591,6 +653,8 @@ impl RttConnections {
             plugin_engine_cmd_sender,
             latency,
             last_address: None,
+            probe_speed_message: None,
+            fail_to_attach_message: None,
         }
     }
 }

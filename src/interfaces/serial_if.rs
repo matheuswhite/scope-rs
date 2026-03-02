@@ -103,7 +103,9 @@ impl SerialInterface {
         let mut sw = shared.write().expect("Cannot get serial lock for write");
         let sw = match sw.deref_mut() {
             InterfaceShared::Serial(sw) => sw,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "SerialInterface should only be used with Serial shared. This is a bug. Please, report it."
+            ),
         };
 
         sw.mode = mode;
@@ -165,7 +167,9 @@ impl SerialInterface {
                 let sr = shared.read().expect("Cannot get serial shared for read");
                 let sr_ref = match sr.deref() {
                     InterfaceShared::Serial(sr_ref) => sr_ref,
-                    _ => unreachable!(),
+                    _ => unreachable!(
+                        "SerialInterface should only be used with Serial shared. This is a bug. Please, report it."
+                    ),
                 };
                 let mode = sr_ref.mode;
 
@@ -257,7 +261,9 @@ impl SerialInterface {
             .expect("Cannot get serial share lock for read");
         let sr = match sr.deref() {
             InterfaceShared::Serial(sr) => sr,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "SerialInterface::connect should only be called with Serial shared. This is a bug. Please, report it."
+            ),
         };
 
         if let SerialMode::Connected = sr.mode {
@@ -307,7 +313,9 @@ impl SerialInterface {
         let sr = shared.read().expect("Cannot get serial lock for read");
         let sr = match sr.deref() {
             InterfaceShared::Serial(sr) => sr,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "SerialInterface::disconnect should only be called with Serial shared. This is a bug. Please, report it."
+            ),
         };
 
         if let SerialMode::Connected = sr.mode {
@@ -342,7 +350,9 @@ impl SerialInterface {
             .expect("Cannot get serial shared lock for write");
         let sw_ref = match sw.deref_mut() {
             InterfaceShared::Serial(sw) => sw,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "SerialInterface::setup should only be called with Serial shared. This is a bug. Please, report it."
+            ),
         };
 
         if let Some(port) = setup.port {
