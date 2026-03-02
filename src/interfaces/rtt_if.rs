@@ -185,7 +185,9 @@ impl RttInterface {
                     .expect("Failed to acquire read lock on RTT shared state");
                 let sr_ref = match sr.deref() {
                     InterfaceShared::Rtt(sr) => sr,
-                    _ => unreachable!(),
+                    _ => unreachable!(
+                        "RttInterface should only be used with Rtt shared. This is a bug. Please, report it."
+                    ),
                 };
                 let mode = sr_ref.mode;
 
@@ -226,7 +228,9 @@ impl RttInterface {
                     .expect("Failed to acquire read lock on RTT shared state");
                 let sr = match sr.deref() {
                     InterfaceShared::Rtt(sr) => sr,
-                    _ => unreachable!(),
+                    _ => unreachable!(
+                        "RttInterface should only be used with Rtt shared. This is a bug. Please, report it."
+                    ),
                 };
                 sr.channel
             };
@@ -332,7 +336,9 @@ impl RttInterface {
             .expect("Failed to acquire write lock on RTT shared state");
         let sw = match sw.deref_mut() {
             InterfaceShared::Rtt(sw) => sw,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "RttInterface should only be used with Rtt shared. This is a bug. Please, report it."
+            ),
         };
         sw.mode = mode;
     }
@@ -397,7 +403,9 @@ impl RttInterface {
             .expect("Failed to acquire read lock on RTT shared state");
         let sr = match sr.deref() {
             InterfaceShared::Rtt(sr) => sr,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "RttInterface::connect should only be called with Rtt shared. This is a bug. Please, report it."
+            ),
         };
 
         if let RttMode::Connected = sr.mode {
@@ -475,7 +483,9 @@ impl RttInterface {
             .expect("Failed to acquire read lock on RTT shared state");
         let sr = match sr.deref() {
             InterfaceShared::Rtt(sr) => sr,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "RttInterface::disconnect should only be called with Rtt shared. This is a bug. Please, report it."
+            ),
         };
 
         if let RttMode::Connected = sr.mode {
@@ -511,7 +521,9 @@ impl RttInterface {
             .expect("Failed to acquire write lock on RTT shared state");
         let sw_ref = match sw.deref_mut() {
             InterfaceShared::Rtt(sw) => sw,
-            _ => unreachable!(),
+            _ => unreachable!(
+                "RttInterface::setup should only be called with Rtt shared. This is a bug. Please, report it."
+            ),
         };
 
         if let Some(target) = setup.target {

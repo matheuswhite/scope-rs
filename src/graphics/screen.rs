@@ -643,7 +643,9 @@ impl ScreenMode {
             ..
         } = self
         else {
-            unreachable!();
+            unreachable!(
+                "search_line should only be called in Search mode. This is a bug. Please, report it."
+            );
         };
 
         let disable_style = Style::default().bg(Color::Reset).fg(Color::DarkGray);
