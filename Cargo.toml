@@ -37,7 +37,7 @@ futures = "0.3.30"
 chrono = "0.4.23"
 serde = "1.0"
 serde_yaml = "0.9"
-rand = "0.8.5"
+rand = "0.9.3"
 clap = { version = "4.1.9", features = ["derive"] }
 mlua = { version = "0.9.6", features = ["lua54", "vendored", "async", "send"] }
 anyhow = "1.0.79"
