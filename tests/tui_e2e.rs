@@ -14,9 +14,10 @@
 //! These tests are Unix-only and spawn the built binary, so they are slower than
 //! the unit tests. Run them with:
 //!   cargo test --test tui_e2e
-//! The serial-RX test is `#[ignore]`d because byte transport over a PTY-backed
-//! "serial port" is platform dependent (the `serialport` crate cannot set the
-//! baud rate via ioctl on a macOS PTY); run it explicitly with:
+//! The serial-RX test runs on Linux but is `#[ignore]`d on macOS: macOS sets the
+//! baud rate via the IOSSIOSPEED ioctl, which a PTY rejects with ENOTTY, so scope
+//! can't open the virtual serial port there. On macOS run it explicitly (it will
+//! fail to connect) with:
 //!   cargo test --test tui_e2e -- --ignored
 
 #![cfg(unix)]
@@ -253,7 +254,10 @@ fn tag_autocomplete_lists_only_matching_tags() {
 }
 
 #[test]
-#[ignore = "serial byte transport over a PTY is platform dependent (serialport baud ioctl is unsupported on macOS PTYs)"]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS sets baud via the IOSSIOSPEED ioctl, which a PTY rejects with ENOTTY, so scope can't open the virtual serial port; Linux sets baud via termios and works"
+)]
 fn received_bytes_are_displayed() {
     let mut tui = Tui::start(&[]);
     tui.wait_until_ready();

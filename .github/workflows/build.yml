@@ -20,6 +20,9 @@ jobs:
       - name: Build
         run: |
           cargo build --release --verbose
+      - name: Test
+        run: |
+          cargo test --verbose
 
   build-windows:
     name: Check on Windows
@@ -29,6 +32,9 @@ jobs:
       - name: Build
         run: |
           cargo build --release --verbose
+      - name: Test
+        run: |
+          cargo test --verbose
 
   build-macos:
     name: Check on MacOS
@@ -38,3 +44,6 @@ jobs:
       - name: Build
         run: |
           cargo build --release --verbose
+      - name: Test
+        run: |
+          cargo test --verbose
