@@ -17,33 +17,33 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libudev-dev
-      - name: Build
-        run: |
-          cargo build --locked --release --verbose
       - name: Test
         run: |
           cargo test --locked --verbose
+      - name: Build
+        run: |
+          cargo build --locked --release --verbose
 
   build-windows:
     name: Check on Windows
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        run: |
-          cargo build --locked --release --verbose
       - name: Test
         run: |
           cargo test --locked --verbose
+      - name: Build
+        run: |
+          cargo build --locked --release --verbose
 
   build-macos:
     name: Check on MacOS
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Build
-        run: |
-          cargo build --locked --release --verbose
       - name: Test
         run: |
           cargo test --locked --verbose
+      - name: Build
+        run: |
+          cargo build --locked --release --verbose
