@@ -1277,6 +1277,16 @@ impl InputsTask {
 
                 output.push(c as u8);
             } else {
+                if c == '$' {
+                    // A new hex marker while already inside a hex sequence:
+                    // flush any pending nibble and keep parsing hex.
+                    if let Some(hex) = hex_val.take() {
+                        output.push(hex);
+                    }
+                    hex_shift = 0;
+                    continue;
+                }
+
                 if !valid.contains(c) {
                     in_hex_seq = false;
                     output.push(c as u8);
@@ -1314,6 +1324,11 @@ impl InputsTask {
                     hex_shift = 0;
                 }
             }
+        }
+
+        // Flush a trailing single nibble (e.g. "$1" -> 0x01).
+        if let Some(hex) = hex_val.take() {
+            output.push(hex);
         }
 
         output
@@ -1449,5 +1464,26 @@ mod tests {
         }
 
         assert_eq!(&res, &expected);
+    }
+
+    #[test]
+    fn test_rhs_two_dollar_no_sep() {
+        let res = InputsTask::replace_hex_sequence("$01$02".to_string());
+
+        assert_eq!(&res, &[0x01, 0x02]);
+    }
+
+    #[test]
+    fn test_rhs_two_dollar_space() {
+        let res = InputsTask::replace_hex_sequence("$01 $02".to_string());
+
+        assert_eq!(&res, &[0x01, 0x02]);
+    }
+
+    #[test]
+    fn test_rhs_dollar_single_nibble() {
+        let res = InputsTask::replace_hex_sequence("$1$2".to_string());
+
+        assert_eq!(&res, &[0x01, 0x02]);
     }
 }
