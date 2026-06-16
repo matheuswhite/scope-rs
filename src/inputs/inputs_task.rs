@@ -1292,6 +1292,15 @@ impl InputsTask {
                 }
 
                 if !valid.contains(c) {
+                    // Flush a pending single nibble before the terminating char
+                    // so the bytes stay ordered (e.g. "$1x" -> 0x01 then 'x'),
+                    // and reset so the end-of-input flush won't re-emit it.
+                    if hex_shift == 4
+                        && let Some(hex) = hex_val.take()
+                    {
+                        output.push(hex);
+                    }
+                    hex_shift = 0;
                     in_hex_seq = false;
                     output.push(c as u8);
                     continue;
@@ -1527,5 +1536,20 @@ mod tests {
         let res = InputsTask::replace_hex_sequence("$ 01".to_string());
 
         assert_eq!(&res, &[0x01]);
+    }
+
+    #[test]
+    fn test_rhs_pending_nibble_before_terminator_stays_ordered() {
+        // The pending nibble must precede the terminating char, not trail it.
+        let res = InputsTask::replace_hex_sequence("$1x".to_string());
+
+        assert_eq!(&res, &[0x01, b'x']);
+    }
+
+    #[test]
+    fn test_rhs_full_byte_before_terminator() {
+        let res = InputsTask::replace_hex_sequence("$01x".to_string());
+
+        assert_eq!(&res, &[0x01, b'x']);
     }
 }
