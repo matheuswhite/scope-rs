@@ -5,6 +5,13 @@ description: Run and verify the scope serial-monitor TUI end-to-end without real
 
 # Test the scope TUI end-to-end
 
+> **Prefer the automated tests first.** Most of this procedure is encoded as Rust
+> integration tests in `tests/tui_e2e.rs` — run `cargo test --test tui_e2e`. They
+> use `openpty` for the virtual serial port, `portable-pty` to run the app in a real
+> terminal, and a `vt100` parser as the screen-capture equivalent. Use the manual
+> `socat`/`tmux` flow below for exploratory/visual debugging or when you need to *see*
+> the live TUI (e.g. colors, layout, interactive feel).
+
 `scope` is a serial-monitor TUI: it reads keystrokes in raw terminal mode and sends/receives bytes over a serial port. To test it without hardware, pair three tools:
 
 - **`socat`** — creates a virtual serial port (a PTY pair) so there is "a serial port" to connect to and a far end to read/write.

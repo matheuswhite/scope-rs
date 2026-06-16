@@ -16,11 +16,13 @@ cargo run --bin scope -- list       # list available serial ports
 cargo run --bin scope -- serial <PORT> <BAUD>   # e.g. serial /dev/ttyUSB0 115200
 cargo run --bin scope -- rtt <TARGET> <CHANNEL>  # RTT via probe-rs
 
-cargo test --bin scope              # run all tests
+cargo test --bin scope              # run unit tests
 cargo test --bin scope <substr>     # run a single test, e.g. cargo test --bin scope test_rhs
+cargo test --test tui_e2e           # run the end-to-end TUI tests (Unix only)
 ```
 
-- This is a **binary-only crate** (no lib target). Use `cargo test --bin scope` — `cargo test --lib` fails with "no library targets". Tests live in `#[cfg(test)] mod tests` blocks inside the source files they cover.
+- This is a **binary-only crate** (no lib target). Use `cargo test --bin scope` — `cargo test --lib` fails with "no library targets". Unit tests live in `#[cfg(test)] mod tests` blocks inside the source files they cover.
+- **End-to-end TUI tests** are in `tests/tui_e2e.rs` (Unix only): they spawn the real binary in a PTY (`portable-pty`), connect it to a virtual serial port (`openpty`), inject keystrokes, and assert on the screen reconstructed by a `vt100` parser. The serial-RX test is `#[ignore]`d because byte transport over a PTY-backed serial port is platform dependent (`serialport` can't set baud via ioctl on a macOS PTY); run it with `cargo test --test tui_e2e -- --ignored`.
 - `src/main.rs` has `#![deny(warnings)]`, so any compiler warning fails the build. Keep the tree warning-clean.
 - Global CLI options (before the subcommand): `-c/--capacity` (scrollback lines, default 2000), `-t/--tag-file` (default `tags.yml`), `-l/--latency` (ms, clamped 0..=100000, default 100).
 - `Ble` is declared as a subcommand but is not implemented (returns an error).
