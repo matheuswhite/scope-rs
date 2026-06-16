@@ -37,7 +37,7 @@ jobs:
           cargo build --locked --release --verbose
 
   build-macos:
-    name: Check on MacOS
+    name: Check on macOS
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
