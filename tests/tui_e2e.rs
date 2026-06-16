@@ -166,9 +166,18 @@ impl Tui {
         self.type_text("\r");
     }
 
-    /// Wait until the app reports it is connected to the serial port.
+    /// Block until the TUI has finished its first render — the precondition for
+    /// injecting keystrokes — by waiting for the configured baud in the status bar.
+    ///
+    /// We deliberately do NOT wait for the "Connected at ..." serial log: a
+    /// PTY-backed serial port never reaches the Connected state (the same
+    /// limitation that gates the ignored RX test, as `serialport` can't set the
+    /// baud via ioctl on a PTY), so that line never appears here. A live
+    /// connection isn't needed anyway — the command bar parses and echoes input
+    /// regardless of link state, and the PTY buffers keystrokes so none are lost
+    /// even if written before crossterm starts reading.
     fn wait_until_ready(&self) {
-        self.wait_for("bps", READY);
+        self.wait_for("115200bps", READY);
     }
 }
 
