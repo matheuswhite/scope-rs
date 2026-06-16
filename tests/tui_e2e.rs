@@ -139,7 +139,9 @@ impl Tui {
                 return screen;
             }
             if start.elapsed() > timeout {
-                panic!("timed out waiting for {needle:?}.\n--- screen ---\n{screen}\n--------------");
+                panic!(
+                    "timed out waiting for {needle:?}.\n--- screen ---\n{screen}\n--------------"
+                );
             }
             thread::sleep(Duration::from_millis(80));
         }
@@ -147,7 +149,9 @@ impl Tui {
 
     /// Type text into the command bar (raw bytes to the PTY).
     fn type_text(&mut self, text: &str) {
-        self.writer.write_all(text.as_bytes()).expect("write keystrokes");
+        self.writer
+            .write_all(text.as_bytes())
+            .expect("write keystrokes");
         self.writer.flush().expect("flush keystrokes");
     }
 
@@ -223,7 +227,10 @@ fn tag_autocomplete_lists_only_matching_tags() {
     tui.type_text("@ta");
 
     let screen = tui.wait_for("@tag1", SETTLE);
-    assert!(screen.contains("@tag2"), "expected @tag2 in popup.\n{screen}");
+    assert!(
+        screen.contains("@tag2"),
+        "expected @tag2 in popup.\n{screen}"
+    );
     assert!(
         !screen.contains("temperature"),
         "non-matching tag should be filtered out.\n{screen}"
@@ -236,7 +243,10 @@ fn received_bytes_are_displayed() {
     let mut tui = Tui::start(&[]);
     tui.wait_until_ready();
 
-    tui.serial.master.write_all(b"ping\r\n").expect("write to wire");
+    tui.serial
+        .master
+        .write_all(b"ping\r\n")
+        .expect("write to wire");
     tui.serial.master.flush().expect("flush wire");
 
     tui.wait_for("ping", SETTLE);

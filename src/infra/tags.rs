@@ -180,7 +180,9 @@ mod tests {
     #[test]
     fn test_tag_filter_adjacent_no_sep() {
         let tag_list = tag_list_with(&[("tag1", "v1"), ("tag2", "v2")]);
-        let pos = tag_list.tag_filter("@tag1@tag2").expect("first tag should match");
+        let pos = tag_list
+            .tag_filter("@tag1@tag2")
+            .expect("first tag should match");
         assert_eq!(pos.start, 0);
         assert_eq!(pos.length, 5);
     }
