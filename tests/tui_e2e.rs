@@ -75,7 +75,13 @@ impl Tui {
         let tmp = tempfile::tempdir().expect("tempdir");
 
         let tags_path = tmp.path().join("tags.yml");
-        let tags_yaml: String = tags.iter().map(|(k, v)| format!("{k}: {v}\n")).collect();
+        // Always write valid YAML: an empty document deserializes to null and
+        // would make TagList::new fail to build a map, so use `{}` when empty.
+        let tags_yaml: String = if tags.is_empty() {
+            "{}\n".to_string()
+        } else {
+            tags.iter().map(|(k, v)| format!("{k}: {v}\n")).collect()
+        };
         std::fs::write(&tags_path, tags_yaml).expect("write tag file");
 
         let pair = native_pty_system()

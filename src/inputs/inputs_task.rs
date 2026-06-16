@@ -1279,8 +1279,12 @@ impl InputsTask {
             } else {
                 if c == '$' {
                     // A new hex marker while already inside a hex sequence:
-                    // flush any pending nibble and keep parsing hex.
-                    if let Some(hex) = hex_val.take() {
+                    // flush a pending single nibble (if any) and keep parsing hex.
+                    // `hex_shift == 4` means exactly one nibble is buffered; a bare
+                    // `$` (hex_val still the Some(0) start sentinel) must not emit a byte.
+                    if hex_shift == 4
+                        && let Some(hex) = hex_val.take()
+                    {
                         output.push(hex);
                     }
                     hex_shift = 0;
@@ -1307,7 +1311,11 @@ impl InputsTask {
                         *hex_val.get_or_insert(0) |= c as u8 - b'A' + 0x0A;
                     }
                     _ => {
-                        if let Some(hex) = hex_val.take() {
+                        // Separator (`,_-. ` or space): flush a pending single
+                        // nibble only, never the Some(0) sequence-start sentinel.
+                        if hex_shift == 4
+                            && let Some(hex) = hex_val.take()
+                        {
                             output.push(hex);
                         }
                         hex_shift = 0;
@@ -1326,8 +1334,12 @@ impl InputsTask {
             }
         }
 
-        // Flush a trailing single nibble (e.g. "$1" -> 0x01).
-        if let Some(hex) = hex_val.take() {
+        // Flush a trailing single nibble (e.g. "$1" -> 0x01). `hex_shift == 4`
+        // guards against emitting a byte for a sequence that parsed no nibble
+        // (e.g. a trailing `$`, or `$x` where `x` terminates the sequence).
+        if hex_shift == 4
+            && let Some(hex) = hex_val.take()
+        {
             output.push(hex);
         }
 
@@ -1485,5 +1497,35 @@ mod tests {
         let res = InputsTask::replace_hex_sequence("$1$2".to_string());
 
         assert_eq!(&res, &[0x01, 0x02]);
+    }
+
+    #[test]
+    fn test_rhs_double_dollar_no_zero_byte() {
+        // A `$` right after `$` must not flush the Some(0) start sentinel.
+        let res = InputsTask::replace_hex_sequence("$$01".to_string());
+
+        assert_eq!(&res, &[0x01]);
+    }
+
+    #[test]
+    fn test_rhs_lone_dollar_emits_nothing() {
+        let res = InputsTask::replace_hex_sequence("$".to_string());
+
+        assert!(res.is_empty());
+    }
+
+    #[test]
+    fn test_rhs_dollar_then_terminator() {
+        // `x` terminates the sequence; no spurious trailing 0x00.
+        let res = InputsTask::replace_hex_sequence("$x".to_string());
+
+        assert_eq!(&res, b"x");
+    }
+
+    #[test]
+    fn test_rhs_leading_separator_no_zero_byte() {
+        let res = InputsTask::replace_hex_sequence("$ 01".to_string());
+
+        assert_eq!(&res, &[0x01]);
     }
 }
