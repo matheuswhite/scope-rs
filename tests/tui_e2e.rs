@@ -154,6 +154,16 @@ impl Tui {
         }
     }
 
+    /// Simulate the terminal emulator clearing its own grid (what Cmd+K does in
+    /// Zed): wipe the parser screen directly, as the app receives no event for it.
+    /// Returns the (blank) screen captured while holding the lock, so the reader
+    /// thread can't refill it before the caller inspects it.
+    fn simulate_external_clear(&self) -> String {
+        let mut parser = self.parser.lock().unwrap();
+        parser.process(b"\x1b[3J\x1b[2J\x1b[H");
+        parser.screen().contents()
+    }
+
     /// Type text into the command bar (raw bytes to the PTY).
     fn type_text(&mut self, text: &str) {
         self.writer
@@ -253,6 +263,26 @@ fn tag_autocomplete_lists_only_matching_tags() {
         !screen.contains("temperature"),
         "non-matching tag should be filtered out.\n{screen}"
     );
+}
+
+#[test]
+fn screen_recovers_after_external_clear() {
+    // Regression for issue #166: an external terminal clear (e.g. Cmd+K in Zed's
+    // terminal) wipes the grid without notifying the app, leaving ratatui's diff
+    // buffer stale so only changed cells repaint. The periodic full repaint must
+    // restore the screen on its own.
+    let tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    let blanked = tui.simulate_external_clear();
+    assert!(
+        !blanked.contains("115200bps"),
+        "screen should be blank right after the external clear.\n{blanked}"
+    );
+
+    // The periodic full repaint should redraw the whole status bar within a few
+    // seconds (the period is 1s) without any input from the app's user.
+    tui.wait_for("115200bps", Duration::from_secs(5));
 }
 
 #[test]
