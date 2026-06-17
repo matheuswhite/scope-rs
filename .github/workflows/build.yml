@@ -4,6 +4,9 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+
 env:
   CARGO_TERM_COLOR: always
 
@@ -17,24 +20,33 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libudev-dev
+      - name: Test
+        run: |
+          cargo test --locked --verbose
       - name: Build
         run: |
-          cargo build --release --verbose
+          cargo build --locked --release --verbose
 
   build-windows:
     name: Check on Windows
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test
+        run: |
+          cargo test --locked --verbose
       - name: Build
         run: |
-          cargo build --release --verbose
+          cargo build --locked --release --verbose
 
   build-macos:
-    name: Check on MacOS
+    name: Check on macOS
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Test
+        run: |
+          cargo test --locked --verbose
       - name: Build
         run: |
-          cargo build --release --verbose
+          cargo build --locked --release --verbose

@@ -14,9 +14,10 @@
 //! These tests are Unix-only and spawn the built binary, so they are slower than
 //! the unit tests. Run them with:
 //!   cargo test --test tui_e2e
-//! The serial-RX test is `#[ignore]`d because byte transport over a PTY-backed
-//! "serial port" is platform dependent (the `serialport` crate cannot set the
-//! baud rate via ioctl on a macOS PTY); run it explicitly with:
+//! The serial-RX test runs on Linux but is `#[ignore]`d on macOS: macOS sets the
+//! baud rate via the IOSSIOSPEED ioctl, which a PTY rejects with ENOTTY, so scope
+//! can't open the virtual serial port there. On macOS run it explicitly (it will
+//! fail to connect) with:
 //!   cargo test --test tui_e2e -- --ignored
 
 #![cfg(unix)]
@@ -169,13 +170,15 @@ impl Tui {
     /// Block until the TUI has finished its first render — the precondition for
     /// injecting keystrokes — by waiting for the configured baud in the status bar.
     ///
-    /// We deliberately do NOT wait for the "Connected at ..." serial log: a
-    /// PTY-backed serial port never reaches the Connected state (the same
-    /// limitation that gates the ignored RX test, as `serialport` can't set the
-    /// baud via ioctl on a PTY), so that line never appears here. A live
-    /// connection isn't needed anyway — the command bar parses and echoes input
-    /// regardless of link state, and the PTY buffers keystrokes so none are lost
-    /// even if written before crossterm starts reading.
+    /// We deliberately do NOT wait for the "Connected at ..." serial log,
+    /// because whether it ever appears is platform-dependent: a PTY-backed port
+    /// connects on Linux but not on macOS, where setting the baud via the
+    /// IOSSIOSPEED ioctl fails with ENOTTY (the same limitation that gates the
+    /// macOS-only ignore on the RX test). The status bar is a portable,
+    /// connection-independent render signal. A live connection isn't needed here
+    /// anyway — the command bar parses and echoes input regardless of link
+    /// state, and the PTY buffers keystrokes so none are lost even if written
+    /// before crossterm starts reading.
     fn wait_until_ready(&self) {
         self.wait_for("115200bps", READY);
     }
@@ -253,7 +256,10 @@ fn tag_autocomplete_lists_only_matching_tags() {
 }
 
 #[test]
-#[ignore = "serial byte transport over a PTY is platform dependent (serialport baud ioctl is unsupported on macOS PTYs)"]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS sets baud via the IOSSIOSPEED ioctl, which a PTY rejects with ENOTTY, so scope can't open the virtual serial port; Linux sets baud via termios and works"
+)]
 fn received_bytes_are_displayed() {
     let mut tui = Tui::start(&[]);
     tui.wait_until_ready();
