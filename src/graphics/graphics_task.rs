@@ -15,6 +15,7 @@ use crate::{
         mpmc::Consumer,
         recorder::Recorder,
         task::{Shared, Task},
+        timer::Timer,
         typewriter::TypeWriter,
     },
     inputs::inputs_task::InputsShared,
@@ -487,6 +488,13 @@ impl GraphicsTask {
         let mut copy_blink = Blink::new(Duration::from_millis(150), 2, Color::Green, Color::Black);
         let mut new_messages = vec![];
         let mut need_redraw = true;
+        // The terminal can be cleared from outside the app (e.g. Cmd+K in Zed's
+        // terminal), which leaves ratatui's diff buffer out of sync so only
+        // changed cells get repainted, blanking the rest. Periodically force a
+        // full repaint so an externally-cleared screen heals on its own.
+        let full_redraw_period = Duration::from_secs(1);
+        let mut full_redraw_timer = Timer::new(full_redraw_period);
+        full_redraw_timer.start();
         let mut save_stats = SaveStats::new(
             private.typewriter.get_size(),
             private.typewriter.get_filename(),
@@ -496,6 +504,14 @@ impl GraphicsTask {
         'draw_loop: loop {
             save_blink.tick();
             copy_blink.tick();
+
+            // When the periodic timer fires, force a full repaint (see above).
+            let mut force_full_redraw = false;
+            if full_redraw_timer.tick() {
+                full_redraw_timer.start();
+                force_full_redraw = true;
+                need_redraw = true;
+            }
 
             save_stats.is_recording = private.recorder.is_recording();
 
@@ -747,6 +763,11 @@ impl GraphicsTask {
 
             if need_redraw {
                 need_redraw = false;
+                // Reset ratatui's diff buffer so every cell is repainted, healing
+                // a screen that was cleared outside the app (e.g. Cmd+K in Zed).
+                if force_full_redraw {
+                    terminal.clear().expect("Cannot clear terminal");
+                }
                 terminal
                     .draw(|f| {
                         let size = f.size();
