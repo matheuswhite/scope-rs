@@ -10,7 +10,9 @@ use crate::{
     success, warning,
 };
 use chrono::Local;
-use serialport::{DataBits, FlowControl, Parity, SerialPortType, StopBits, UsbPortInfo};
+use serialport::{
+    DataBits, FlowControl, Parity, SerialPortInfo, SerialPortType, StopBits, UsbPortInfo,
+};
 use std::{
     io::{self, Read, Write},
     ops::{Deref, DerefMut},
@@ -375,28 +377,32 @@ impl SerialInterface {
     /// Returns `None` for non-USB ports (or if enumeration fails), in which case
     /// the device can't be tracked across renames and we keep using the path.
     fn usb_info_for(port: &str) -> Option<UsbPortInfo> {
-        serialport::available_ports()
-            .ok()?
-            .into_iter()
-            .find_map(|p| match p.port_type {
-                SerialPortType::UsbPort(info) if p.port_name == port => Some(info),
+        serialport::available_ports().ok()?.into_iter().find_map(
+            |SerialPortInfo {
+                 port_name,
+                 port_type,
+             }| match port_type {
+                SerialPortType::UsbPort(info) if port_name == port => Some(info),
                 _ => None,
-            })
+            },
+        )
     }
 
     /// Find the current path of the device identified by `usb_id`, used when the
     /// original path has disappeared. Returns the new port name if a matching
     /// device is currently present.
     fn find_renamed_port(usb_id: &UsbPortInfo) -> Option<String> {
-        serialport::available_ports()
-            .ok()?
-            .into_iter()
-            .find_map(|p| match p.port_type {
+        serialport::available_ports().ok()?.into_iter().find_map(
+            |SerialPortInfo {
+                 port_name,
+                 port_type,
+             }| match port_type {
                 SerialPortType::UsbPort(info) if Self::usb_matches(usb_id, &info) => {
-                    Some(p.port_name)
+                    Some(port_name)
                 }
                 _ => None,
-            })
+            },
+        )
     }
 
     /// Two USB identities denote the same physical device when their vendor and
@@ -466,6 +472,13 @@ impl SerialInterface {
         };
 
         if let Some(port) = setup.port {
+            // A new port may be a different physical device, so drop the learned
+            // USB identity: otherwise a reconnect from the new path could scan
+            // and re-attach to the *previous* device. It's re-learned on the
+            // next successful connection.
+            if sw_ref.port != port {
+                sw_ref.usb_id = None;
+            }
             sw_ref.port = port;
             has_changes = true;
         }
