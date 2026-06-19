@@ -113,7 +113,8 @@ mod tests {
         recorder.rename("baz.txt").unwrap();
         assert_eq!(recorder.get_filename(), "baz_rec1.txt");
 
-        // Only the trailing `.txt` is stripped, so dotted names survive.
+        // `with_extension("")` drops only the last extension, so earlier dotted
+        // segments survive (`foo.bar.txt` -> `foo.bar`).
         recorder.rename("foo.bar.txt").unwrap();
         assert_eq!(recorder.get_filename(), "foo.bar_rec1.txt");
     }

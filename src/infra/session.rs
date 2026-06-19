@@ -1,12 +1,15 @@
 use chrono::Local;
 
 /// Normalize a user-supplied session name into a bare base name (no `.txt`
-/// extension, no directory). Trims whitespace, strips a trailing `.txt` so it
-/// isn't doubled later, and rejects empty names or ones containing path
-/// components — a session must stay a single file in the working directory.
+/// extension, no directory). Trims whitespace, strips any trailing `.txt`
+/// extensions so the suffix isn't doubled later (`foo.txt.txt` -> `foo`), and
+/// rejects empty names or ones containing path components — a session must stay
+/// a single file in the working directory.
 pub fn sanitize_name(raw: &str) -> Result<String, String> {
-    let name = raw.trim();
-    let name = name.strip_suffix(".txt").unwrap_or(name);
+    let mut name = raw.trim();
+    while let Some(stripped) = name.strip_suffix(".txt") {
+        name = stripped;
+    }
 
     if name.is_empty() {
         return Err("session name cannot be empty".to_string());
@@ -36,6 +39,8 @@ mod tests {
     fn sanitize_strips_trailing_txt() {
         assert_eq!(sanitize_name("capture.txt").unwrap(), "capture");
         assert_eq!(sanitize_name("capture").unwrap(), "capture");
+        // Repeated `.txt` is fully stripped so the suffix isn't doubled later.
+        assert_eq!(sanitize_name("capture.txt.txt").unwrap(), "capture");
     }
 
     #[test]
