@@ -7,9 +7,11 @@ pub struct ANSI;
 impl ANSI {
     /// Locate the next CSI escape sequence (`\x1b[` … final byte) in the decoded
     /// text. The screen decoder renders the ESC byte as the literal characters
-    /// `\x1b`, so this works on that escaped form. A sequence runs from `\x1b[`
-    /// through its parameter bytes (digits and `;:<=>?`) up to and including the
-    /// first letter (the CSI final byte), e.g. `\x1b[1;32m` or `\x1b[15C`.
+    /// `\x1b`, so this works on that escaped form. Per the CSI grammar a sequence
+    /// runs from `\x1b[` through any parameter bytes (`0x30`..=`0x3f`) and
+    /// intermediate bytes (`0x20`..=`0x2f`) up to and including a single final
+    /// byte (`0x40`..=`0x7e`) — e.g. `\x1b[1;32m`, `\x1b[15C`, `\x1b[200~`
+    /// (bracketed paste) or `\x1b[5 q` (with a `0x20` intermediate).
     ///
     /// Recognising *any* terminated CSI sequence — not just a fixed table — is
     /// what fixes issue #119: previously unknown codes (`\x1b[39m`, `\x1b[0;32m`,
@@ -25,18 +27,20 @@ impl ANSI {
             let mut end = None;
 
             for (i, c) in string[params_start..].char_indices() {
-                // Parameter bytes: digits plus `;:<=>?`.
-                if c.is_ascii_digit() || matches!(c, ';' | ':' | '<' | '=' | '>' | '?') {
-                    continue;
+                match c {
+                    // Parameter (0x30..=0x3f) and intermediate (0x20..=0x2f) bytes.
+                    '\u{20}'..='\u{3f}' => continue,
+                    // A backslash begins the next escaped byte in this text, so it
+                    // means the current sequence was never terminated.
+                    '\\' => break,
+                    // Final byte: 0x40..=0x7e (letters, `~`, `@`, …).
+                    '\u{40}'..='\u{7e}' => {
+                        end = Some(params_start + i + c.len_utf8());
+                        break;
+                    }
+                    // Control or non-ASCII byte: not a valid CSI sequence here.
+                    _ => break,
                 }
-                // Final byte: anything in `@`..=`~` (e.g. `m`, cursor letters, or
-                // `~` as in bracketed paste `\x1b[200~`). A `\` is excluded — in
-                // the escaped text it starts the next `\xNN`, so it means this
-                // sequence was never terminated.
-                if matches!(c, '\u{40}'..='\u{7e}') && c != '\\' {
-                    end = Some(params_start + i + c.len_utf8());
-                }
-                break;
             }
 
             if let Some(end) = end {
@@ -308,5 +312,15 @@ mod tests {
             ANSI::remove_encoding("\\x1b[200~hi\\x1b[201~".to_string()),
             "hi"
         );
+    }
+
+    #[test]
+    fn test_decode_csi_with_intermediate_byte() {
+        // DECSCUSR uses a 0x20 (space) intermediate byte before the final `q`.
+        let spans = ANSI::decode(Span::raw("\\x1b[5 qtext"));
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "text");
+
+        assert_eq!(ANSI::remove_encoding("ab\\x1b[5 qcd".to_string()), "abcd");
     }
 }
