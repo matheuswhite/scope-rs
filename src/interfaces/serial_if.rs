@@ -322,23 +322,24 @@ impl SerialInterface {
             Ok(ser) => {
                 *serial = Some(ser);
 
-                // Learn the USB identity on the first connection so later
-                // reconnects can follow the device, and record any path change
-                // so the status bar reflects where we actually reconnected.
-                let learned_usb_id = if usb_id.is_none() {
-                    Self::usb_info_for(&connected_port)
-                } else {
-                    None
-                };
+                // Reconcile the stored USB identity with the device we actually
+                // opened: learn it on the first connection, refresh it if a
+                // different device now sits on this path, and clear it for a
+                // non-USB port. This keeps later rename scans pointed at the
+                // current device instead of a previously connected one.
+                let current_usb_id = Self::usb_info_for(&connected_port);
+                let usb_id_changed = current_usb_id != usb_id;
+                // Record any path change too, so the status bar reflects where
+                // we actually reconnected.
                 let renamed = connected_port != port;
-                if renamed || learned_usb_id.is_some() {
+                if renamed || usb_id_changed {
                     let mut sw = shared.write().expect("Cannot get serial lock for write");
                     if let InterfaceShared::Serial(sw) = sw.deref_mut() {
                         if renamed {
                             sw.port = connected_port.clone();
                         }
-                        if learned_usb_id.is_some() {
-                            sw.usb_id = learned_usb_id;
+                        if usb_id_changed {
+                            sw.usb_id = current_usb_id;
                         }
                     }
                 }
