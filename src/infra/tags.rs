@@ -129,7 +129,7 @@ impl TagList {
             let tag_name: String = string
                 .chars()
                 .skip(char_pos + 1)
-                .take_while(|c| !c.is_whitespace() && *c != '@')
+                .take_while(|c| !c.is_whitespace() && *c != '@' && *c != '"')
                 .collect();
 
             if tag_name.is_empty() {
@@ -199,5 +199,31 @@ mod tests {
             }
         }
         assert_eq!(resolved, "v1v2");
+    }
+
+    #[test]
+    fn test_tag_filter_closing_quote_terminates_tag() {
+        // Issue #186: a `"` right after a tag must delimit the name, so no
+        // trailing space is needed to invoke a tag inside quotes.
+        let tag_list = tag_list_with(&[("tag1", "v1")]);
+        let pos = tag_list
+            .tag_filter("\"@tag1\"")
+            .expect("tag should match before the closing quote");
+        assert_eq!(pos.start, 1);
+        assert_eq!(pos.length, 5);
+    }
+
+    #[test]
+    fn test_tag_in_quotes_resolves_without_space() {
+        let tag_list = tag_list_with(&[("tag1", "hello")]);
+        let content = "\"@tag1\"";
+        let mut resolved = String::new();
+        for item in content.to_special_char(|s| tag_list.tag_filter(s)) {
+            match item {
+                SpecialCharItem::Plain(s) => resolved.push_str(&s),
+                SpecialCharItem::Special(s, _) => resolved.push_str(&tag_list.get_tagged_key(&s)),
+            }
+        }
+        assert_eq!(resolved, "\"hello\"");
     }
 }
