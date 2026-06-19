@@ -10,7 +10,7 @@ use crate::{
     success, warning,
 };
 use chrono::Local;
-use serialport::{DataBits, FlowControl, Parity, StopBits};
+use serialport::{DataBits, FlowControl, Parity, SerialPortType, StopBits, UsbPortInfo};
 use std::{
     io::{self, Read, Write},
     ops::{Deref, DerefMut},
@@ -35,6 +35,10 @@ pub struct SerialShared {
     pub flow_control: FlowControl,
     pub parity: Parity,
     pub stop_bits: StopBits,
+    /// USB identity of the connected device, learned on the first successful
+    /// connection. Used to track the device across kernel renames on re-plug
+    /// (e.g. /dev/ttyUSB0 -> /dev/ttyUSB1 on Linux). `None` for non-USB ports.
+    pub usb_id: Option<UsbPortInfo>,
 }
 
 #[derive(Default)]
@@ -80,6 +84,7 @@ impl SerialShared {
             flow_control: setup.flow_control.unwrap_or(FlowControl::None),
             parity: setup.parity.unwrap_or(Parity::None),
             stop_bits: setup.stop_bits.unwrap_or(StopBits::One),
+            usb_id: None,
             mode: if !setup.port.unwrap_or("".to_string()).is_empty()
                 && setup.baudrate.unwrap_or(0) != 0
             {
@@ -163,33 +168,33 @@ impl SerialInterface {
                 Self::set_mode(shared.clone(), new_mode);
             }
 
-            {
+            let mode = {
                 let sr = shared.read().expect("Cannot get serial shared for read");
-                let sr_ref = match sr.deref() {
-                    InterfaceShared::Serial(sr_ref) => sr_ref,
+                match sr.deref() {
+                    InterfaceShared::Serial(sr_ref) => sr_ref.mode,
                     _ => unreachable!(
                         "SerialInterface should only be used with Serial shared. This is a bug. Please, report it."
                     ),
-                };
-                let mode = sr_ref.mode;
-
-                match mode {
-                    SerialMode::DoNotConnect => {
-                        Self::wait(latency);
-                        continue 'task_loop;
-                    }
-                    SerialMode::Reconnecting => {
-                        let new_mode = Self::connect(
-                            shared.clone(),
-                            &mut serial,
-                            &logger,
-                            &plugin_engine_cmd_sender,
-                        );
-                        drop(sr);
-                        Self::set_mode(shared.clone(), new_mode);
-                    }
-                    SerialMode::Connected => { /* Do nothing. It's already connected. */ }
                 }
+            };
+
+            match mode {
+                SerialMode::DoNotConnect => {
+                    Self::wait(latency);
+                    continue 'task_loop;
+                }
+                SerialMode::Reconnecting => {
+                    // The read lock is released above before connecting: `connect`
+                    // may take a write lock to record a renamed device path.
+                    let new_mode = Self::connect(
+                        shared.clone(),
+                        &mut serial,
+                        &logger,
+                        &plugin_engine_cmd_sender,
+                    );
+                    Self::set_mode(shared.clone(), new_mode);
+                }
+                SerialMode::Connected => { /* Do nothing. It's already connected. */ }
             }
 
             let Some(mut ser) = serial.take() else {
@@ -256,50 +261,155 @@ impl SerialInterface {
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
     ) -> Option<SerialMode> {
-        let sr = shared
-            .read()
-            .expect("Cannot get serial share lock for read");
-        let sr = match sr.deref() {
-            InterfaceShared::Serial(sr) => sr,
-            _ => unreachable!(
-                "SerialInterface::connect should only be called with Serial shared. This is a bug. Please, report it."
-            ),
+        // Snapshot the connection settings and release the lock: opening a port
+        // and enumerating devices can block, and on success `connect` takes a
+        // write lock to persist a learned USB identity or a renamed path.
+        let (mode, port, baudrate, data_bits, flow_control, parity, stop_bits, usb_id) = {
+            let sr = shared
+                .read()
+                .expect("Cannot get serial share lock for read");
+            let sr = match sr.deref() {
+                InterfaceShared::Serial(sr) => sr,
+                _ => unreachable!(
+                    "SerialInterface::connect should only be called with Serial shared. This is a bug. Please, report it."
+                ),
+            };
+            (
+                sr.mode,
+                sr.port.clone(),
+                sr.baudrate,
+                sr.data_bits,
+                sr.flow_control,
+                sr.parity,
+                sr.stop_bits,
+                sr.usb_id.clone(),
+            )
         };
 
-        if let SerialMode::Connected = sr.mode {
+        if let SerialMode::Connected = mode {
             return None;
         }
 
-        let connect_res = serialport::new(sr.port.clone(), sr.baudrate)
-            .data_bits(sr.data_bits)
-            .flow_control(sr.flow_control)
-            .parity(sr.parity)
-            .stop_bits(sr.stop_bits)
-            .timeout(Duration::from_millis(Self::SERIAL_TIMEOUT_MS))
-            .open_native();
+        let open = |port: &str| {
+            serialport::new(port, baudrate)
+                .data_bits(data_bits)
+                .flow_control(flow_control)
+                .parity(parity)
+                .stop_bits(stop_bits)
+                .timeout(Duration::from_millis(Self::SERIAL_TIMEOUT_MS))
+                .open_native()
+        };
+
+        // Try the known path first. If it's gone but we know the device's USB
+        // identity, look for the same device under a new name — the Linux
+        // re-plug rename from issue #53 (e.g. ttyUSB0 -> ttyUSB1).
+        let mut connected_port = port.clone();
+        let mut connect_res = open(&connected_port);
+        if connect_res.is_err()
+            && let Some(usb_id) = &usb_id
+            && let Some(new_port) = Self::find_renamed_port(usb_id)
+            && new_port != connected_port
+        {
+            if let Ok(ser) = open(&new_port) {
+                connected_port = new_port;
+                connect_res = Ok(ser);
+            }
+        }
 
         match connect_res {
             Ok(ser) => {
                 *serial = Some(ser);
+
+                // Learn the USB identity on the first connection so later
+                // reconnects can follow the device, and record any path change
+                // so the status bar reflects where we actually reconnected.
+                let learned_usb_id = if usb_id.is_none() {
+                    Self::usb_info_for(&connected_port)
+                } else {
+                    None
+                };
+                let renamed = connected_port != port;
+                if renamed || learned_usb_id.is_some() {
+                    let mut sw = shared.write().expect("Cannot get serial lock for write");
+                    if let InterfaceShared::Serial(sw) = sw.deref_mut() {
+                        if renamed {
+                            sw.port = connected_port.clone();
+                        }
+                        if learned_usb_id.is_some() {
+                            sw.usb_id = learned_usb_id;
+                        }
+                    }
+                }
+
+                if renamed {
+                    warning!(
+                        logger,
+                        "Serial device moved from \"{}\" to \"{}\"",
+                        port,
+                        connected_port
+                    );
+                }
                 success!(
                     logger,
                     "Connected at \"{}\" with {}bps",
-                    sr.port,
-                    sr.baudrate
+                    connected_port,
+                    baudrate
                 );
                 let _ = plugin_engine_cmd_sender.send(PluginEngineCommand::SerialConnected {
-                    port: sr.port.clone(),
-                    baudrate: sr.baudrate,
+                    port: connected_port,
+                    baudrate,
                 });
                 Some(SerialMode::Connected)
             }
             Err(_) => {
                 let _ = serial.take();
-                match sr.mode {
+                match mode {
                     SerialMode::Reconnecting => None,
                     _ => Some(SerialMode::Reconnecting),
                 }
             }
+        }
+    }
+
+    /// Look up the USB identity of the currently-available port named `port`.
+    /// Returns `None` for non-USB ports (or if enumeration fails), in which case
+    /// the device can't be tracked across renames and we keep using the path.
+    fn usb_info_for(port: &str) -> Option<UsbPortInfo> {
+        serialport::available_ports()
+            .ok()?
+            .into_iter()
+            .find_map(|p| match p.port_type {
+                SerialPortType::UsbPort(info) if p.port_name == port => Some(info),
+                _ => None,
+            })
+    }
+
+    /// Find the current path of the device identified by `usb_id`, used when the
+    /// original path has disappeared. Returns the new port name if a matching
+    /// device is currently present.
+    fn find_renamed_port(usb_id: &UsbPortInfo) -> Option<String> {
+        serialport::available_ports()
+            .ok()?
+            .into_iter()
+            .find_map(|p| match p.port_type {
+                SerialPortType::UsbPort(info) if Self::usb_matches(usb_id, &info) => {
+                    Some(p.port_name)
+                }
+                _ => None,
+            })
+    }
+
+    /// Two USB identities denote the same physical device when their vendor and
+    /// product ids match and, when both expose a serial number, those match too.
+    /// Many cheap adapters report no serial number, so vid+pid is the fallback.
+    fn usb_matches(stored: &UsbPortInfo, candidate: &UsbPortInfo) -> bool {
+        if stored.vid != candidate.vid || stored.pid != candidate.pid {
+            return false;
+        }
+
+        match (&stored.serial_number, &candidate.serial_number) {
+            (Some(a), Some(b)) => a == b,
+            _ => true,
         }
     }
 
@@ -415,5 +525,63 @@ impl SerialConnections {
             plugin_engine_cmd_sender,
             latency,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn usb(vid: u16, pid: u16, serial: Option<&str>) -> UsbPortInfo {
+        UsbPortInfo {
+            vid,
+            pid,
+            serial_number: serial.map(str::to_string),
+            manufacturer: None,
+            product: None,
+            interface: None,
+        }
+    }
+
+    #[test]
+    fn matches_same_device_by_serial_number() {
+        let a = usb(0x10c4, 0xea60, Some("ABC123"));
+        let b = usb(0x10c4, 0xea60, Some("ABC123"));
+        assert!(SerialInterface::usb_matches(&a, &b));
+    }
+
+    #[test]
+    fn rejects_different_serial_number() {
+        let a = usb(0x10c4, 0xea60, Some("ABC123"));
+        let b = usb(0x10c4, 0xea60, Some("XYZ789"));
+        assert!(!SerialInterface::usb_matches(&a, &b));
+    }
+
+    #[test]
+    fn rejects_different_vid_or_pid() {
+        let a = usb(0x10c4, 0xea60, Some("ABC123"));
+        assert!(!SerialInterface::usb_matches(
+            &a,
+            &usb(0x0403, 0xea60, Some("ABC123"))
+        ));
+        assert!(!SerialInterface::usb_matches(
+            &a,
+            &usb(0x10c4, 0x6001, Some("ABC123"))
+        ));
+    }
+
+    #[test]
+    fn falls_back_to_vid_pid_when_serial_number_absent() {
+        // Cheap adapters (e.g. CH340) report no serial number: vid+pid is then
+        // the best signal we have, so a match on those alone is accepted.
+        let stored = usb(0x1a86, 0x7523, None);
+        assert!(SerialInterface::usb_matches(
+            &stored,
+            &usb(0x1a86, 0x7523, None)
+        ));
+        assert!(SerialInterface::usb_matches(
+            &stored,
+            &usb(0x1a86, 0x7523, Some("whatever"))
+        ));
     }
 }
