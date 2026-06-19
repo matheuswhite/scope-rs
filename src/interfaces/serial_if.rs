@@ -213,7 +213,11 @@ impl SerialInterface {
                         continue 'task_loop;
                     }
                 }
-                SerialMode::Connected => { /* Do nothing. It's already connected. */ }
+                SerialMode::Connected => {
+                    // Clear the throttle so a fresh disconnect reconnects
+                    // immediately, even if it happens soon after the last attempt.
+                    last_reconnect = None;
+                }
             }
 
             let Some(mut ser) = serial.take() else {
@@ -344,19 +348,26 @@ impl SerialInterface {
                 // different device now sits on this path, and clear it for a
                 // non-USB port. This keeps later rename scans pointed at the
                 // current device instead of a previously connected one.
-                let current_usb_id = Self::usb_info_for(&connected_port);
-                let usb_id_changed = current_usb_id != usb_id;
+                //
+                // `connected_usb_id` returns `None` when enumeration *failed*
+                // (distinct from a non-USB port, which is `Some(None)`): in that
+                // case we keep what we already know rather than wiping a learned
+                // identity over a transient lookup error.
+                let usb_update = match Self::connected_usb_id(&connected_port) {
+                    Some(found) if found != usb_id => Some(found),
+                    _ => None,
+                };
                 // Record any path change too, so the status bar reflects where
                 // we actually reconnected.
                 let renamed = connected_port != port;
-                if renamed || usb_id_changed {
+                if renamed || usb_update.is_some() {
                     let mut sw = shared.write().expect("Cannot get serial lock for write");
                     if let InterfaceShared::Serial(sw) = sw.deref_mut() {
                         if renamed {
                             sw.port = connected_port.clone();
                         }
-                        if usb_id_changed {
-                            sw.usb_id = current_usb_id;
+                        if let Some(found) = usb_update {
+                            sw.usb_id = found;
                         }
                     }
                 }
@@ -392,10 +403,14 @@ impl SerialInterface {
     }
 
     /// Look up the USB identity of the currently-available port named `port`.
-    /// Returns `None` for non-USB ports (or if enumeration fails), in which case
-    /// the device can't be tracked across renames and we keep using the path.
-    fn usb_info_for(port: &str) -> Option<UsbPortInfo> {
-        serialport::available_ports().ok()?.into_iter().find_map(
+    ///
+    /// The outer `Option` distinguishes a failed enumeration (`None` — we learned
+    /// nothing, so callers should leave any stored identity untouched) from a
+    /// successful one: `Some(Some(info))` for a USB port, `Some(None)` for a
+    /// non-USB port (or one no longer listed).
+    fn connected_usb_id(port: &str) -> Option<Option<UsbPortInfo>> {
+        let ports = serialport::available_ports().ok()?;
+        Some(ports.into_iter().find_map(
             |SerialPortInfo {
                  port_name,
                  port_type,
@@ -403,7 +418,7 @@ impl SerialInterface {
                 SerialPortType::UsbPort(info) if port_name == port => Some(info),
                 _ => None,
             },
-        )
+        ))
     }
 
     /// Find where the device identified by `usb_id` moved to after its original
