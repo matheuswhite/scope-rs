@@ -75,6 +75,16 @@ pub enum SerialMode {
     Connected,
 }
 
+/// What enumerating the connected port revealed about its USB identity.
+enum PortIdentity {
+    /// Enumeration failed; nothing was learned, so leave any stored identity be.
+    Unknown,
+    /// The port enumerated but isn't a USB device (or is no longer listed).
+    NonUsb,
+    /// The port is a USB device with this identity.
+    Usb(UsbPortInfo),
+}
+
 pub struct SerialInterface;
 
 impl SerialShared {
@@ -347,27 +357,26 @@ impl SerialInterface {
                 // opened: learn it on the first connection, refresh it if a
                 // different device now sits on this path, and clear it for a
                 // non-USB port. This keeps later rename scans pointed at the
-                // current device instead of a previously connected one.
-                //
-                // `connected_usb_id` returns `None` when enumeration *failed*
-                // (distinct from a non-USB port, which is `Some(None)`): in that
-                // case we keep what we already know rather than wiping a learned
-                // identity over a transient lookup error.
-                let usb_update = match Self::connected_usb_id(&connected_port) {
-                    Some(found) if found != usb_id => Some(found),
-                    _ => None,
+                // current device instead of a previously connected one. A failed
+                // enumeration (`Unknown`) keeps the current value, so a transient
+                // lookup error never wipes a learned identity.
+                let desired_usb_id = match Self::connected_identity(&connected_port) {
+                    PortIdentity::Unknown => usb_id.clone(),
+                    PortIdentity::NonUsb => None,
+                    PortIdentity::Usb(info) => Some(info),
                 };
+                let usb_id_changed = desired_usb_id != usb_id;
                 // Record any path change too, so the status bar reflects where
                 // we actually reconnected.
                 let renamed = connected_port != port;
-                if renamed || usb_update.is_some() {
+                if renamed || usb_id_changed {
                     let mut sw = shared.write().expect("Cannot get serial lock for write");
                     if let InterfaceShared::Serial(sw) = sw.deref_mut() {
                         if renamed {
                             sw.port = connected_port.clone();
                         }
-                        if let Some(found) = usb_update {
-                            sw.usb_id = found;
+                        if usb_id_changed {
+                            sw.usb_id = desired_usb_id;
                         }
                     }
                 }
@@ -402,23 +411,26 @@ impl SerialInterface {
         }
     }
 
-    /// Look up the USB identity of the currently-available port named `port`.
-    ///
-    /// The outer `Option` distinguishes a failed enumeration (`None` — we learned
-    /// nothing, so callers should leave any stored identity untouched) from a
-    /// successful one: `Some(Some(info))` for a USB port, `Some(None)` for a
-    /// non-USB port (or one no longer listed).
-    fn connected_usb_id(port: &str) -> Option<Option<UsbPortInfo>> {
-        let ports = serialport::available_ports().ok()?;
-        Some(ports.into_iter().find_map(
-            |SerialPortInfo {
-                 port_name,
-                 port_type,
-             }| match port_type {
-                SerialPortType::UsbPort(info) if port_name == port => Some(info),
-                _ => None,
-            },
-        ))
+    /// Inspect the currently-available port named `port` to classify its USB
+    /// identity. A failed enumeration is reported as `Unknown` (distinct from a
+    /// non-USB port) so callers can avoid discarding a learned identity over a
+    /// transient lookup error.
+    fn connected_identity(port: &str) -> PortIdentity {
+        let Ok(ports) = serialport::available_ports() else {
+            return PortIdentity::Unknown;
+        };
+        ports
+            .into_iter()
+            .find_map(
+                |SerialPortInfo {
+                     port_name,
+                     port_type,
+                 }| match port_type {
+                    SerialPortType::UsbPort(info) if port_name == port => Some(info),
+                    _ => None,
+                },
+            )
+            .map_or(PortIdentity::NonUsb, PortIdentity::Usb)
     }
 
     /// Find where the device identified by `usb_id` moved to after its original
