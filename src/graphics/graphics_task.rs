@@ -570,17 +570,21 @@ impl GraphicsTask {
                     }
                     GraphicsCommand::Rename(name) => {
                         let filename = format!("{}.txt", name);
+                        // A recording in progress keeps writing to its current
+                        // file; remember it so the status bar stays accurate.
+                        let recording_file = private
+                            .recorder
+                            .is_recording()
+                            .then(|| private.recorder.get_filename());
 
                         match private.typewriter.rename(filename.clone()) {
                             Ok(_) => {
-                                // Keep the recorder's base in sync so a later
-                                // `!record` uses the new session name too.
-                                let _ = private.recorder.rename(&name);
-                                save_stats.filename = if private.recorder.is_recording() {
-                                    private.recorder.get_filename()
-                                } else {
-                                    private.typewriter.get_filename()
-                                };
+                                // Keep the recorder's base in sync (passing the
+                                // full filename preserves dotted names) so a
+                                // later `!record` uses the new session name too.
+                                let _ = private.recorder.rename(&filename);
+                                save_stats.filename = recording_file
+                                    .unwrap_or_else(|| private.typewriter.get_filename());
                                 success!(private.logger, "Session renamed to \"{}\"", filename);
                             }
                             Err(err) => {

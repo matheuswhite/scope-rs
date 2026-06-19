@@ -21,10 +21,16 @@ impl TypeWriter {
 
     /// Point the session record at `filename`. If the previous file already
     /// exists on disk (it's created lazily on the first flush), it is moved so
-    /// the accumulated session isn't left behind under the old name.
+    /// the accumulated session isn't left behind under the old name. Refuses to
+    /// overwrite an existing destination, so no other file is clobbered (and the
+    /// behavior is the same on every platform).
     pub fn rename(&mut self, filename: String) -> Result<(), String> {
         if filename == self.filename {
             return Ok(());
+        }
+
+        if Path::new(&filename).exists() {
+            return Err(format!("\"{}\" already exists", filename));
         }
 
         if Path::new(&self.filename).exists() {
@@ -105,6 +111,26 @@ mod tests {
         assert!(content.contains("hello") && content.contains("world"));
 
         let _ = std::fs::remove_file(&new);
+    }
+
+    #[test]
+    fn rename_refuses_to_overwrite_existing_destination() {
+        let old = temp_path("clobber_old.txt");
+        let dest = temp_path("clobber_dest.txt");
+        let _ = std::fs::remove_file(&old);
+
+        let mut tw = TypeWriter::new(old.clone());
+        tw += vec!["data".to_string()];
+        tw.flush().expect("flush creates the file");
+        std::fs::write(&dest, "existing").expect("seed destination");
+
+        assert!(tw.rename(dest.clone()).is_err(), "must not clobber dest");
+        assert_eq!(tw.get_filename(), old, "name unchanged on failure");
+        assert_eq!(std::fs::read_to_string(&dest).unwrap(), "existing");
+        assert!(Path::new(&old).exists(), "source kept on failure");
+
+        let _ = std::fs::remove_file(&old);
+        let _ = std::fs::remove_file(&dest);
     }
 
     #[test]

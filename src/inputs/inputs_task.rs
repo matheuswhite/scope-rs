@@ -11,6 +11,7 @@ use crate::{
         logger::{LogLevel, Logger},
         messages::TimedBytes,
         mpmc::Producer,
+        session,
         task::Task,
     },
     interfaces::serial_if::{SerialCommand, SerialSetup},
@@ -932,14 +933,14 @@ impl InputsTask {
                     return;
                 };
 
-                if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
-                    error!(private.logger, "Invalid session name \"{}\"", name);
-                    return;
+                match session::sanitize_name(name) {
+                    Ok(name) => {
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::Rename(name));
+                    }
+                    Err(err) => error!(private.logger, "Cannot rename session: {}", err),
                 }
-
-                let _ = private
-                    .graphics_cmd_sender
-                    .send(GraphicsCommand::Rename(name.clone()));
             }
             "flow" => match private.if_type {
                 InterfaceType::Serial => {

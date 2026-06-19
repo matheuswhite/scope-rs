@@ -13,11 +13,11 @@ use crate::infra::tags::TagList;
 use crate::interfaces::rtt_if::{RttCommand, RttConnections, RttSetup};
 use crate::interfaces::serial_if::SerialCommand;
 use crate::interfaces::{InterfaceCommand, InterfaceTask, InterfaceType};
-use chrono::Local;
 use clap::{Parser, Subcommand};
 use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
 use infra::logger::Logger;
 use infra::mpmc::Channel;
+use infra::session;
 use inputs::inputs_task::{InputsConnections, InputsTask};
 use interfaces::serial_if::{SerialConnections, SerialSetup};
 use list::list_serial_ports;
@@ -29,15 +29,6 @@ use std::sync::mpsc::channel;
 
 const DEFAULT_CAPACITY: usize = 2000;
 const DEFAULT_TAG_FILE: &str = "tags.yml";
-
-/// Build the session record file name: `<name>.txt` when a name is given,
-/// otherwise a timestamped name (`%Y%m%d_%H%M%S.txt`).
-fn session_filename(name: Option<&str>) -> String {
-    match name {
-        Some(name) => format!("{name}.txt"),
-        None => format!("{}.txt", Local::now().format("%Y%m%d_%H%M%S")),
-    }
-}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -164,7 +155,7 @@ fn app_serial(
     let inputs_shared = inputs_task.shared_ref();
     let serial_shared = serial_if.shared_ref();
 
-    let storage_base_filename = session_filename(name.as_deref());
+    let storage_base_filename = session::record_filename(name.as_deref());
     let graphics_config = graphics::graphics_task::GraphicsConfig {
         storage_base_filename,
         capacity,
@@ -285,7 +276,7 @@ fn app_rtt(
     let inputs_shared = inputs_task.shared_ref();
     let rtt_shared = rtt_if.shared_ref();
 
-    let storage_base_filename = session_filename(name.as_deref());
+    let storage_base_filename = session::record_filename(name.as_deref());
     let graphics_config = graphics::graphics_task::GraphicsConfig {
         storage_base_filename,
         capacity,
@@ -329,7 +320,11 @@ fn main() -> Result<(), String> {
     let capacity = cli.capacity.unwrap_or(DEFAULT_CAPACITY);
     let tag_file = cli.tag_file.unwrap_or(PathBuf::from(DEFAULT_TAG_FILE));
     let latency = cli.latency.unwrap_or(100).clamp(0, 100_000);
-    let name = cli.name;
+    let name = cli
+        .name
+        .as_deref()
+        .map(session::sanitize_name)
+        .transpose()?;
 
     let result = match cli.command {
         Commands::Serial { port, baudrate } => {
@@ -352,22 +347,4 @@ fn main() -> Result<(), String> {
 
     println!("See you later ^^");
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::session_filename;
-
-    #[test]
-    fn named_session_uses_the_given_name() {
-        assert_eq!(session_filename(Some("capture")), "capture.txt");
-    }
-
-    #[test]
-    fn unnamed_session_falls_back_to_a_timestamp() {
-        // `%Y%m%d_%H%M%S` + ".txt".
-        let filename = session_filename(None);
-        assert!(filename.ends_with(".txt"));
-        assert_eq!(filename.len(), "YYYYMMDD_HHMMSS.txt".len());
-    }
 }
