@@ -30,6 +30,15 @@ use std::sync::mpsc::channel;
 const DEFAULT_CAPACITY: usize = 2000;
 const DEFAULT_TAG_FILE: &str = "tags.yml";
 
+/// Build the session record file name: `<name>.txt` when a name is given,
+/// otherwise a timestamped name (`%Y%m%d_%H%M%S.txt`).
+fn session_filename(name: Option<&str>) -> String {
+    match name {
+        Some(name) => format!("{name}.txt"),
+        None => format!("{}.txt", Local::now().format("%Y%m%d_%H%M%S")),
+    }
+}
+
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -41,6 +50,9 @@ struct Cli {
     tag_file: Option<PathBuf>,
     #[clap(short, long)]
     latency: Option<u64>,
+    /// Base name for the session record file. Defaults to a timestamp.
+    #[clap(short, long)]
+    name: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -69,6 +81,7 @@ fn app_serial(
     port: Option<String>,
     baudrate: Option<u32>,
     latency: u64,
+    name: Option<String>,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -151,8 +164,7 @@ fn app_serial(
     let inputs_shared = inputs_task.shared_ref();
     let serial_shared = serial_if.shared_ref();
 
-    let now_str = Local::now().format("%Y%m%d_%H%M%S");
-    let storage_base_filename = format!("{}.txt", now_str);
+    let storage_base_filename = session_filename(name.as_deref());
     let graphics_config = graphics::graphics_task::GraphicsConfig {
         storage_base_filename,
         capacity,
@@ -192,6 +204,7 @@ fn app_rtt(
     target: Option<String>,
     channel_num: Option<usize>,
     latency: u64,
+    name: Option<String>,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -272,8 +285,7 @@ fn app_rtt(
     let inputs_shared = inputs_task.shared_ref();
     let rtt_shared = rtt_if.shared_ref();
 
-    let now_str = Local::now().format("%Y%m%d_%H%M%S");
-    let storage_base_filename = format!("{}.txt", now_str);
+    let storage_base_filename = session_filename(name.as_deref());
     let graphics_config = graphics::graphics_task::GraphicsConfig {
         storage_base_filename,
         capacity,
@@ -317,10 +329,11 @@ fn main() -> Result<(), String> {
     let capacity = cli.capacity.unwrap_or(DEFAULT_CAPACITY);
     let tag_file = cli.tag_file.unwrap_or(PathBuf::from(DEFAULT_TAG_FILE));
     let latency = cli.latency.unwrap_or(100).clamp(0, 100_000);
+    let name = cli.name;
 
     let result = match cli.command {
         Commands::Serial { port, baudrate } => {
-            app_serial(capacity, tag_file, port, baudrate, latency)
+            app_serial(capacity, tag_file, port, baudrate, latency, name)
         }
         Commands::Ble { .. } => {
             Err("Sorry! We're developing BLE interface and it's not available yet".to_string())
@@ -329,7 +342,7 @@ fn main() -> Result<(), String> {
         Commands::Rtt {
             target,
             channel_num,
-        } => app_rtt(capacity, tag_file, target, channel_num, latency),
+        } => app_rtt(capacity, tag_file, target, channel_num, latency, name),
     };
 
     if let Err(err) = result {
@@ -339,4 +352,22 @@ fn main() -> Result<(), String> {
 
     println!("See you later ^^");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_filename;
+
+    #[test]
+    fn named_session_uses_the_given_name() {
+        assert_eq!(session_filename(Some("capture")), "capture.txt");
+    }
+
+    #[test]
+    fn unnamed_session_falls_back_to_a_timestamp() {
+        // `%Y%m%d_%H%M%S` + ".txt".
+        let filename = session_filename(None);
+        assert!(filename.ends_with(".txt"));
+        assert_eq!(filename.len(), "YYYYMMDD_HHMMSS.txt".len());
+    }
 }

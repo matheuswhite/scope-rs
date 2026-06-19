@@ -926,6 +926,21 @@ impl InputsTask {
 
                 let _ = private.interface_cmd_sender.send(disconn_cmd);
             }
+            "rename" => {
+                let Some(name) = command_line_split.get(1) else {
+                    error!(private.logger, "Usage: !rename <name>");
+                    return;
+                };
+
+                if name.contains('/') || name.contains('\\') || name == "." || name == ".." {
+                    error!(private.logger, "Invalid session name \"{}\"", name);
+                    return;
+                }
+
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::Rename(name.clone()));
+            }
             "flow" => match private.if_type {
                 InterfaceType::Serial => {
                     Self::handle_flow_command(command_line_split, private);
@@ -1426,6 +1441,7 @@ impl InputsConnections {
             hints: vec![
                 "Type @ to place a tag",
                 "Type $ to start a hex sequence",
+                "Type !rename <name> to rename the session record",
                 "Type here and hit <Enter> to send the text",
             ],
             history,

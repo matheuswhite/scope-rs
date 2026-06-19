@@ -78,6 +78,7 @@ pub enum GraphicsCommand {
     SetLogLevel(LogLevel),
     SaveData,
     RecordData,
+    Rename(String),
     ScrollLeft,
     ScrollRight,
     ScrollUp,
@@ -564,6 +565,26 @@ impl GraphicsTask {
                             Ok(_) => success!(private.logger, "Content saved on \"{}\"", filename),
                             Err(err) => {
                                 error!(private.logger, "Cannot save on \"{}\": {}", filename, err)
+                            }
+                        }
+                    }
+                    GraphicsCommand::Rename(name) => {
+                        let filename = format!("{}.txt", name);
+
+                        match private.typewriter.rename(filename.clone()) {
+                            Ok(_) => {
+                                // Keep the recorder's base in sync so a later
+                                // `!record` uses the new session name too.
+                                let _ = private.recorder.rename(&name);
+                                save_stats.filename = if private.recorder.is_recording() {
+                                    private.recorder.get_filename()
+                                } else {
+                                    private.typewriter.get_filename()
+                                };
+                                success!(private.logger, "Session renamed to \"{}\"", filename);
+                            }
+                            Err(err) => {
+                                error!(private.logger, "Cannot rename session: {}", err)
                             }
                         }
                     }

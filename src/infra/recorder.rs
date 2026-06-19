@@ -9,20 +9,30 @@ pub struct Recorder {
 
 impl Recorder {
     pub fn new(filename: String) -> Result<Self, String> {
-        let filename = PathBuf::from(filename)
+        Ok(Self {
+            base_filename: Self::base_name(&filename)?,
+            suffix: 1,
+            file_handler: None,
+            file_size: 0,
+        })
+    }
+
+    /// Strip any directory and extension to get the bare record base name.
+    fn base_name(filename: &str) -> Result<String, String> {
+        Ok(PathBuf::from(filename)
             .with_extension("")
             .file_name()
             .ok_or("Cannot get filename to record")?
             .to_str()
             .ok_or("Cannot convert record filename to string")?
-            .to_string();
+            .to_string())
+    }
 
-        Ok(Self {
-            base_filename: filename,
-            suffix: 1,
-            file_handler: None,
-            file_size: 0,
-        })
+    /// Change the base name used for subsequent recordings. An in-progress
+    /// recording keeps writing to its already-open file under the old name.
+    pub fn rename(&mut self, filename: &str) -> Result<(), String> {
+        self.base_filename = Self::base_name(filename)?;
+        Ok(())
     }
 
     pub fn get_filename(&self) -> String {
@@ -78,5 +88,29 @@ impl Drop for Recorder {
         if let Some(file) = self.file_handler.take() {
             drop(file);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn new_strips_directory_and_extension() {
+        let recorder = Recorder::new("logs/session.txt".to_string()).unwrap();
+        assert_eq!(recorder.get_filename(), "session_rec1.txt");
+    }
+
+    #[test]
+    fn rename_changes_base_for_future_records() {
+        let mut recorder = Recorder::new("foo.txt".to_string()).unwrap();
+        assert_eq!(recorder.get_filename(), "foo_rec1.txt");
+
+        recorder.rename("bar").unwrap();
+        assert_eq!(recorder.get_filename(), "bar_rec1.txt");
+
+        // An extension on the new name is stripped just like in `new`.
+        recorder.rename("baz.txt").unwrap();
+        assert_eq!(recorder.get_filename(), "baz_rec1.txt");
     }
 }

@@ -24,7 +24,7 @@ cargo test --test tui_e2e           # run the end-to-end TUI tests (Unix only)
 - This is a **binary-only crate** (no lib target). Use `cargo test --bin scope` — `cargo test --lib` fails with "no library targets". Unit tests live in `#[cfg(test)] mod tests` blocks inside the source files they cover.
 - **End-to-end TUI tests** are in `tests/tui_e2e.rs` (Unix only): they spawn the real binary in a PTY (`portable-pty`), connect it to a virtual serial port (`openpty`), inject keystrokes, and assert on the screen reconstructed by a `vt100` parser. The serial-RX test is `#[ignore]`d because byte transport over a PTY-backed serial port is platform dependent (`serialport` can't set baud via ioctl on a macOS PTY); run it with `cargo test --test tui_e2e -- --ignored`.
 - `src/main.rs` has `#![deny(warnings)]`, so any compiler warning fails the build. Keep the tree warning-clean.
-- Global CLI options (before the subcommand): `-c/--capacity` (scrollback lines, default 2000), `-t/--tag-file` (default `tags.yml`), `-l/--latency` (ms, clamped 0..=100000, default 100).
+- Global CLI options (before the subcommand): `-c/--capacity` (scrollback lines, default 2000), `-t/--tag-file` (default `tags.yml`), `-l/--latency` (ms, clamped 0..=100000, default 100), `-n/--name` (session record base name, default a timestamp). The session can also be renamed at runtime with `!rename <name>` in the command bar.
 - `Ble` is declared as a subcommand but is not implemented (returns an error).
 
 ## Architecture
