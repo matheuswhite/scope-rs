@@ -320,24 +320,24 @@ fn main() -> Result<(), String> {
     let capacity = cli.capacity.unwrap_or(DEFAULT_CAPACITY);
     let tag_file = cli.tag_file.unwrap_or(PathBuf::from(DEFAULT_TAG_FILE));
     let latency = cli.latency.unwrap_or(100).clamp(0, 100_000);
-    let name = cli
-        .name
-        .as_deref()
-        .map(session::sanitize_name)
-        .transpose()?;
 
-    let result = match cli.command {
-        Commands::Serial { port, baudrate } => {
-            app_serial(capacity, tag_file, port, baudrate, latency, name)
-        }
-        Commands::Ble { .. } => {
-            Err("Sorry! We're developing BLE interface and it's not available yet".to_string())
-        }
-        Commands::List { verbose } => list_serial_ports(verbose),
-        Commands::Rtt {
-            target,
-            channel_num,
-        } => app_rtt(capacity, tag_file, target, channel_num, latency, name),
+    // Sanitize the session name into the same `result` flow so an invalid
+    // `--name` is reported through the shared `[ERR]` formatter below.
+    let result = match cli.name.as_deref().map(session::sanitize_name).transpose() {
+        Err(err) => Err(err),
+        Ok(name) => match cli.command {
+            Commands::Serial { port, baudrate } => {
+                app_serial(capacity, tag_file, port, baudrate, latency, name)
+            }
+            Commands::Ble { .. } => {
+                Err("Sorry! We're developing BLE interface and it's not available yet".to_string())
+            }
+            Commands::List { verbose } => list_serial_ports(verbose),
+            Commands::Rtt {
+                target,
+                channel_num,
+            } => app_rtt(capacity, tag_file, target, channel_num, latency, name),
+        },
     };
 
     if let Err(err) = result {

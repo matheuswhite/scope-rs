@@ -136,8 +136,12 @@ mod tests {
 
     #[test]
     fn rename_before_any_flush_only_updates_name() {
-        let mut tw = TypeWriter::new(temp_path("nf_old.txt"));
+        let old = temp_path("nf_old.txt");
         let new = temp_path("nf_new.txt");
+        let _ = std::fs::remove_file(&old);
+        let _ = std::fs::remove_file(&new);
+
+        let mut tw = TypeWriter::new(old);
         tw.rename(new.clone())
             .expect("rename without an existing file");
         assert_eq!(tw.get_filename(), new);
