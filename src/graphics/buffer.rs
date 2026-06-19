@@ -1,6 +1,7 @@
 use crate::{
     graphics::{
         Serialize,
+        ansi::ANSI,
         screen::ScreenDecoder,
         selection::{Selection, SelectionPosition},
     },
@@ -27,7 +28,12 @@ impl Buffer {
         let mut result = vec![];
 
         for line in self.get_range(start.line, end.line + 1) {
-            let content = decoder.decode(&line.message);
+            // Strip ANSI escape codes before slicing: selection columns come from
+            // the rendered screen, where `ANSI::decode` has already removed those
+            // codes (they paint color, not glyphs). Slicing the still-encoded
+            // string would misalign every column past an ANSI code and leak the
+            // raw `\x1b[..m` text into the clipboard (issue #180).
+            let content = ANSI::remove_encoding(decoder.decode(&line.message));
             let content = content.as_str().chars();
 
             match selection.selection_position(line.line) {
@@ -211,4 +217,58 @@ impl PartialOrd for BufferPosition {
 
 pub fn timestamp_fmt(timestamp: DateTime<Local>) -> String {
     timestamp.format("%H:%M:%S.%3f").to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn buffer_from(lines: &[&[u8]]) -> Buffer {
+        let mut buffer = Buffer::new(lines.len().max(1));
+        for bytes in lines {
+            buffer += BufferLine::new_rx(Local::now(), bytes.to_vec());
+        }
+        buffer
+    }
+
+    fn pos(line: usize, column: usize) -> BufferPosition {
+        BufferPosition { line, column }
+    }
+
+    // Issue #180: copying a region that contains ANSI color codes used to leak
+    // the raw `\x1b[..m` text and misalign every column past the code, because
+    // selection columns come from the rendered screen (where ANSI codes paint
+    // color and occupy no glyphs) but the copy sliced the still-encoded string.
+    #[test]
+    fn one_line_selection_strips_ansi_and_aligns_columns() {
+        // Rendered as "Hello Red World"; "Red" starts at visible column 6.
+        let buffer = buffer_from(&[b"Hello \x1b[31mRed\x1b[0m World"]);
+        let selection = Selection::new(pos(0, 6), pos(0, 9));
+
+        let content = buffer.get_selection_content(&selection, ScreenDecoder::Ascii);
+
+        assert_eq!(content, "Red");
+    }
+
+    #[test]
+    fn selection_from_line_start_skips_leading_ansi() {
+        // A leading color code must not shift the visible columns.
+        let buffer = buffer_from(&[b"\x1b[32mgreen\x1b[0m"]);
+        let selection = Selection::new(pos(0, 0), pos(0, 5));
+
+        let content = buffer.get_selection_content(&selection, ScreenDecoder::Ascii);
+
+        assert_eq!(content, "green");
+    }
+
+    #[test]
+    fn multi_line_selection_strips_ansi_on_every_line() {
+        let buffer = buffer_from(&[b"\x1b[31mfoo", b"bar\x1b[0m"]);
+        // Top line from column 1, bottom line up to column 2.
+        let selection = Selection::new(pos(0, 1), pos(1, 2));
+
+        let content = buffer.get_selection_content(&selection, ScreenDecoder::Ascii);
+
+        assert_eq!(content, "ooba");
+    }
 }
