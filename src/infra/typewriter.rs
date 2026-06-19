@@ -21,9 +21,10 @@ impl TypeWriter {
 
     /// Point the session record at `filename`. If the previous file already
     /// exists on disk (it's created lazily on the first flush), it is moved so
-    /// the accumulated session isn't left behind under the old name. Refuses to
-    /// overwrite an existing destination, so no other file is clobbered (and the
-    /// behavior is the same on every platform).
+    /// the accumulated session isn't left behind under the old name. As a
+    /// best-effort guard against clobbering an unrelated file, it errors when
+    /// the destination already exists — note this check isn't atomic with the
+    /// move, so a concurrent creator could still race it.
     pub fn rename(&mut self, filename: String) -> Result<(), String> {
         if filename == self.filename {
             return Ok(());
