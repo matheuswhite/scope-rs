@@ -77,8 +77,15 @@ impl ANSI {
         let mut color = current;
         let mut params = body.split(';');
         while let Some(param) = params.next() {
-            let Ok(code) = param.parse::<u32>() else {
-                continue;
+            // An empty/omitted SGR parameter defaults to 0 (reset), e.g. the
+            // trailing param in `\x1b[32;m`; a non-numeric one is ignored.
+            let code = if param.is_empty() {
+                0
+            } else {
+                match param.parse::<u32>() {
+                    Ok(code) => code,
+                    Err(_) => continue,
+                }
             };
 
             match code {
@@ -312,6 +319,17 @@ mod tests {
             ANSI::remove_encoding("\\x1b[200~hi\\x1b[201~".to_string()),
             "hi"
         );
+    }
+
+    #[test]
+    fn test_decode_empty_sgr_param_resets() {
+        // An empty trailing parameter means 0, so the green must reset.
+        let spans = ANSI::decode(Span::raw("\\x1b[32mg\\x1b[32;mn"));
+        assert_eq!(spans.len(), 2);
+        assert_eq!(spans[0].content, "g");
+        assert_eq!(spans[0].style.fg, Some(Color::Green));
+        assert_eq!(spans[1].content, "n");
+        assert_eq!(spans[1].style.fg, Some(Color::Reset));
     }
 
     #[test]
