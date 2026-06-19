@@ -25,10 +25,15 @@ impl ANSI {
             let mut end = None;
 
             for (i, c) in string[params_start..].char_indices() {
+                // Parameter bytes: digits plus `;:<=>?`.
                 if c.is_ascii_digit() || matches!(c, ';' | ':' | '<' | '=' | '>' | '?') {
                     continue;
                 }
-                if c.is_ascii_alphabetic() {
+                // Final byte: anything in `@`..=`~` (e.g. `m`, cursor letters, or
+                // `~` as in bracketed paste `\x1b[200~`). A `\` is excluded — in
+                // the escaped text it starts the next `\xNN`, so it means this
+                // sequence was never terminated.
+                if matches!(c, '\u{40}'..='\u{7e}') && c != '\\' {
                     end = Some(params_start + i + c.len_utf8());
                 }
                 break;
@@ -77,7 +82,7 @@ impl ANSI {
                 0 | 39 => color = Color::Reset,
                 // Standard and bright foreground colours.
                 30..=37 => color = Self::base_color(code - 30),
-                90..=97 => color = Self::base_color(code - 90),
+                90..=97 => color = Self::bright_color(code - 90),
                 // Extended foreground: `38;5;n` (indexed) or `38;2;r;g;b` (RGB).
                 38 => match params.next().and_then(|p| p.parse::<u32>().ok()) {
                     Some(5) => {
@@ -124,6 +129,19 @@ impl ANSI {
             4 => Color::Blue,
             5 => Color::Magenta,
             6 => Color::Cyan,
+            _ => Color::White,
+        }
+    }
+
+    fn bright_color(index: u32) -> Color {
+        match index {
+            0 => Color::DarkGray,
+            1 => Color::LightRed,
+            2 => Color::LightGreen,
+            3 => Color::LightYellow,
+            4 => Color::LightBlue,
+            5 => Color::LightMagenta,
+            6 => Color::LightCyan,
             _ => Color::White,
         }
     }
@@ -269,5 +287,26 @@ mod tests {
     fn test_remove_encoding_strips_unknown_sgr() {
         let input = "\\x1b[1;32muart:~$\\x1b[39m".to_string();
         assert_eq!(ANSI::remove_encoding(input), "uart:~$");
+    }
+
+    #[test]
+    fn test_decode_bright_colors() {
+        let spans = ANSI::decode(Span::raw("\\x1b[91mx"));
+        assert_eq!(spans[0].content, "x");
+        assert_eq!(spans[0].style.fg, Some(Color::LightRed));
+    }
+
+    #[test]
+    fn test_decode_non_letter_final_byte() {
+        // Bracketed-paste markers end in `~`; they must be consumed, not left in
+        // the text (which would also corrupt copy/search).
+        let spans = ANSI::decode(Span::raw("\\x1b[200~hi\\x1b[201~"));
+        assert_eq!(spans.len(), 1);
+        assert_eq!(spans[0].content, "hi");
+
+        assert_eq!(
+            ANSI::remove_encoding("\\x1b[200~hi\\x1b[201~".to_string()),
+            "hi"
+        );
     }
 }
