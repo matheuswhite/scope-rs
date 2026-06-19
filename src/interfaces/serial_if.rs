@@ -101,6 +101,10 @@ impl SerialShared {
 impl SerialInterface {
     const NEW_LINE_TIMEOUT_MS: u128 = 1_000;
     const SERIAL_TIMEOUT_MS: u64 = 100;
+    /// Minimum gap between reconnect attempts. Each attempt may enumerate every
+    /// serial port (to follow a renamed device), so retrying in a tight loop
+    /// while a device is unplugged would waste CPU and churn sysfs on Linux.
+    const RECONNECT_INTERVAL_MS: u64 = 500;
 
     fn set_mode(shared: Arc<RwLock<InterfaceShared>>, mode: Option<SerialMode>) {
         let Some(mode) = mode else {
@@ -142,6 +146,7 @@ impl SerialInterface {
         let mut buffer = [0u8];
         let mut serial = None;
         let mut now = Instant::now();
+        let mut last_reconnect: Option<Instant> = None;
 
         'task_loop: loop {
             if let Ok(InterfaceCommand::Serial(cmd)) = cmd_receiver.try_recv() {
@@ -186,15 +191,27 @@ impl SerialInterface {
                     continue 'task_loop;
                 }
                 SerialMode::Reconnecting => {
-                    // The read lock is released above before connecting: `connect`
-                    // may take a write lock to record a renamed device path.
-                    let new_mode = Self::connect(
-                        shared.clone(),
-                        &mut serial,
-                        &logger,
-                        &plugin_engine_cmd_sender,
-                    );
-                    Self::set_mode(shared.clone(), new_mode);
+                    // Throttle attempts (see RECONNECT_INTERVAL_MS); the first
+                    // one after a disconnect still fires immediately for quick
+                    // recovery, since the previous attempt is far in the past.
+                    let due = last_reconnect.is_none_or(|t| {
+                        t.elapsed() >= Duration::from_millis(Self::RECONNECT_INTERVAL_MS)
+                    });
+                    if due {
+                        last_reconnect = Some(Instant::now());
+                        // The read lock is released above before connecting:
+                        // `connect` may take a write lock to record a renamed path.
+                        let new_mode = Self::connect(
+                            shared.clone(),
+                            &mut serial,
+                            &logger,
+                            &plugin_engine_cmd_sender,
+                        );
+                        Self::set_mode(shared.clone(), new_mode);
+                    } else {
+                        Self::wait(latency);
+                        continue 'task_loop;
+                    }
                 }
                 SerialMode::Connected => { /* Do nothing. It's already connected. */ }
             }
@@ -309,7 +326,7 @@ impl SerialInterface {
         let mut connect_res = open(&connected_port);
         if connect_res.is_err()
             && let Some(usb_id) = &usb_id
-            && let Some(new_port) = Self::find_renamed_port(usb_id)
+            && let Some(new_port) = Self::find_renamed_port(&connected_port, usb_id)
             && new_port != connected_port
         {
             if let Ok(ser) = open(&new_port) {
@@ -389,11 +406,20 @@ impl SerialInterface {
         )
     }
 
-    /// Find the current path of the device identified by `usb_id`, used when the
-    /// original path has disappeared. Returns the new port name if a matching
-    /// device is currently present.
-    fn find_renamed_port(usb_id: &UsbPortInfo) -> Option<String> {
-        serialport::available_ports().ok()?.into_iter().find_map(
+    /// Find where the device identified by `usb_id` moved to after its original
+    /// path `current_port` disappeared. Returns `None` (so we keep retrying the
+    /// same path) when `current_port` is still present — then the open failure
+    /// was transient (busy/permission), not a rename, and scanning could pick a
+    /// different identical adapter. Also `None` when no matching device is found.
+    fn find_renamed_port(current_port: &str, usb_id: &UsbPortInfo) -> Option<String> {
+        let ports = serialport::available_ports().ok()?;
+
+        // The original path still exists: not a rename, don't go looking.
+        if ports.iter().any(|p| p.port_name == current_port) {
+            return None;
+        }
+
+        ports.into_iter().find_map(
             |SerialPortInfo {
                  port_name,
                  port_type,
@@ -406,17 +432,20 @@ impl SerialInterface {
         )
     }
 
-    /// Two USB identities denote the same physical device when their vendor and
-    /// product ids match and, when both expose a serial number, those match too.
-    /// Many cheap adapters report no serial number, so vid+pid is the fallback.
+    /// Whether `candidate` is the same physical device as the `stored` identity.
+    /// Vendor and product ids must always match. If we learned a serial number
+    /// for the device, the candidate must report the same one — a serial is
+    /// stable across re-plugs, so a candidate lacking it (or reporting another)
+    /// is a different unit. Only when the device reports no serial at all (many
+    /// cheap adapters don't) do we fall back to vid+pid alone.
     fn usb_matches(stored: &UsbPortInfo, candidate: &UsbPortInfo) -> bool {
         if stored.vid != candidate.vid || stored.pid != candidate.pid {
             return false;
         }
 
-        match (&stored.serial_number, &candidate.serial_number) {
-            (Some(a), Some(b)) => a == b,
-            _ => true,
+        match &stored.serial_number {
+            Some(stored_serial) => candidate.serial_number.as_deref() == Some(stored_serial),
+            None => true,
         }
     }
 
@@ -569,6 +598,17 @@ mod tests {
         let a = usb(0x10c4, 0xea60, Some("ABC123"));
         let b = usb(0x10c4, 0xea60, Some("XYZ789"));
         assert!(!SerialInterface::usb_matches(&a, &b));
+    }
+
+    #[test]
+    fn rejects_candidate_without_serial_when_stored_has_one() {
+        // A serial number is stable across re-plugs, so a same-vid/pid device
+        // that reports none is a different unit, not the one we learned.
+        let stored = usb(0x10c4, 0xea60, Some("ABC123"));
+        assert!(!SerialInterface::usb_matches(
+            &stored,
+            &usb(0x10c4, 0xea60, None)
+        ));
     }
 
     #[test]
