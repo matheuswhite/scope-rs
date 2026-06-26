@@ -315,10 +315,10 @@ fn scrollbar_appears_only_when_buffer_overflows_viewport() {
 }
 
 #[test]
-fn scrollbar_tracks_scroll_position() {
-    // Issue #134: scrolling up must move the view (and thus the scrollbar thumb)
-    // toward the top. We assert the view indirectly: the oldest line is off-screen
-    // at the bottom and comes into view after PageUp, while the scrollbar stays.
+fn scrollbar_thumb_moves_up_when_scrolling_up() {
+    // Issue #134: the scrollbar thumb must reflect the scroll position. The thumb
+    // is the █ run in the rightmost column; its topmost row marks the thumb. We
+    // assert it sits low under auto-scroll and moves up after PageUp.
     let mut tui = Tui::start(&[]);
     tui.wait_until_ready();
 
@@ -327,19 +327,29 @@ fn scrollbar_tracks_scroll_position() {
         tui.press_enter();
     }
 
-    // Auto-scroll keeps us pinned to the bottom: newest visible, oldest scrolled off.
+    // The rightmost column of a scrollbar row is always a thumb (█) or track/arrow
+    // glyph, never a space, so the first line ending in █ is the thumb's top.
+    let thumb_top = |screen: &str| {
+        screen
+            .lines()
+            .position(|line| line.chars().last() == Some('█'))
+    };
+
+    // Auto-scroll pins us to the bottom: newest visible, oldest scrolled off, thumb low.
     let bottom = tui.wait_for(&format!("row {ROWS}\\r\\n"), SETTLE);
     assert!(
         !bottom.contains("row 1\\r\\n"),
         "oldest line should be off-screen at the bottom.\n{bottom}"
     );
+    let bottom_thumb = thumb_top(&bottom).expect("thumb should be visible at the bottom");
 
-    // PageUp scrolls by a full page, bringing the oldest line back into view.
+    // PageUp scrolls a full page to the top: oldest line reappears, thumb moves up.
     tui.type_text("\x1b[5~");
     let top = tui.wait_for("row 1\\r\\n", SETTLE);
+    let top_thumb = thumb_top(&top).expect("thumb should be visible at the top");
     assert!(
-        top.contains('▲') && top.contains('▼'),
-        "scrollbar should remain visible while scrolled.\n{top}"
+        top_thumb < bottom_thumb,
+        "thumb should move up when scrolling up: top={top_thumb} bottom={bottom_thumb}\n{top}"
     );
 }
 
