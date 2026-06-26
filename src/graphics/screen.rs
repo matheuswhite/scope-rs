@@ -274,14 +274,17 @@ impl Screen {
         visible_height: usize,
     ) {
         let total = buffer.len();
-        if total <= visible_height {
+        if visible_height == 0 || total <= visible_height {
             return;
         }
 
         /* position.line is clamped to the scroll range on scroll/new-line events,
          * but a resize only reassigns the size, so guard against a stale offset
-         * landing outside the buffer before the next event re-clamps it. */
-        let position = self.position.line.min(total.saturating_sub(1));
+         * landing past the maximum top-line offset before the next event re-clamps
+         * it. The max offset matches max_main_axis in the graphics task; total >
+         * visible_height is guaranteed above, so the subtraction can't underflow. */
+        let max_offset = total - visible_height;
+        let position = self.position.line.min(max_offset);
 
         let mut state = ScrollbarState::new(total)
             .position(position)
