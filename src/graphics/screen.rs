@@ -278,8 +278,13 @@ impl Screen {
             return;
         }
 
+        /* position.line is clamped to the scroll range on scroll/new-line events,
+         * but a resize only reassigns the size, so guard against a stale offset
+         * landing outside the buffer before the next event re-clamps it. */
+        let position = self.position.line.min(total.saturating_sub(1));
+
         let mut state = ScrollbarState::new(total)
-            .position(self.position.line)
+            .position(position)
             .viewport_content_length(visible_height);
 
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)

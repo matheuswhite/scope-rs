@@ -286,6 +286,63 @@ fn screen_recovers_after_external_clear() {
 }
 
 #[test]
+fn scrollbar_appears_only_when_buffer_overflows_viewport() {
+    // Issue #134: a vertical scrollbar indicates scroll position. It must stay
+    // hidden while the content fits and appear once the buffer overflows the
+    // viewport. The ▲/▼ arrow heads are unique to the scrollbar on screen.
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    tui.type_text("first line");
+    tui.press_enter();
+    let screen = tui.wait_for("first line", SETTLE);
+    assert!(
+        !screen.contains('▲') && !screen.contains('▼'),
+        "scrollbar must be hidden while content fits.\n{screen}"
+    );
+
+    // Overflow the viewport (ROWS minus command bar and borders is well under 40).
+    for i in 1..=40 {
+        tui.type_text(&format!("filler {i}"));
+        tui.press_enter();
+    }
+    let screen = tui.wait_for("filler 40", SETTLE);
+    assert!(
+        screen.contains('▲') && screen.contains('▼'),
+        "scrollbar arrows must appear once content overflows.\n{screen}"
+    );
+}
+
+#[test]
+fn scrollbar_tracks_scroll_position() {
+    // Issue #134: scrolling up must move the view (and thus the scrollbar thumb)
+    // toward the top. We assert the view indirectly: the oldest line is off-screen
+    // at the bottom and comes into view after PageUp, while the scrollbar stays.
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    for i in 1..=40 {
+        tui.type_text(&format!("row {i}"));
+        tui.press_enter();
+    }
+
+    // Auto-scroll keeps us pinned to the bottom: newest visible, oldest scrolled off.
+    let bottom = tui.wait_for("row 40\\r\\n", SETTLE);
+    assert!(
+        !bottom.contains("row 1\\r\\n"),
+        "oldest line should be off-screen at the bottom.\n{bottom}"
+    );
+
+    // PageUp scrolls by a full page, bringing the oldest line back into view.
+    tui.type_text("\x1b[5~");
+    let top = tui.wait_for("row 1\\r\\n", SETTLE);
+    assert!(
+        top.contains('▲') && top.contains('▼'),
+        "scrollbar should remain visible while scrolled.\n{top}"
+    );
+}
+
+#[test]
 #[cfg_attr(
     target_os = "macos",
     ignore = "macOS sets baud via the IOSSIOSPEED ioctl, which a PTY rejects with ENOTTY, so scope can't open the virtual serial port; Linux sets baud via termios and works"
