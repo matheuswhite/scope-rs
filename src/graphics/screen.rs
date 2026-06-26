@@ -103,10 +103,11 @@ impl Screen {
          * position.line so it never sits past the new range; otherwise a stale
          * offset would desync selection mapping and small-step scroll inputs (and
          * the render path / scrollbar, which derive from it) until the next event
-         * happens to re-clamp it. */
+         * happens to re-clamp it. clamp_position also re-enables auto-scroll when
+         * the clamp lands on the bottom, matching the rest of the scroll logic. */
         let visible_height = size.height.saturating_sub(2) as usize;
-        let max_offset = buffer_len.saturating_sub(visible_height);
-        self.position.line = self.position.line.min(max_offset);
+        let max_main_axis = buffer_len.saturating_sub(visible_height);
+        self.clamp_position(max_main_axis);
     }
 
     pub fn set_selection(&mut self, start_point: ScreenPosition) {
