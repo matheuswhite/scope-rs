@@ -97,8 +97,16 @@ impl Screen {
         self.size
     }
 
-    pub fn set_size(&mut self, size: Rect) {
+    pub fn set_size(&mut self, size: Rect, buffer_len: usize) {
         self.size = size;
+        /* A resize that grows the viewport shrinks the max scroll offset. Re-clamp
+         * position.line so it never sits past the new range; otherwise a stale
+         * offset would desync selection mapping and small-step scroll inputs (and
+         * the render path / scrollbar, which derive from it) until the next event
+         * happens to re-clamp it. */
+        let visible_height = size.height.saturating_sub(2) as usize;
+        let max_offset = buffer_len.saturating_sub(visible_height);
+        self.position.line = self.position.line.min(max_offset);
     }
 
     pub fn set_selection(&mut self, start_point: ScreenPosition) {
@@ -233,14 +241,10 @@ impl Screen {
     ) {
         let block = self.build_block(buffer, save_stats);
 
+        /* position.line is kept within the scroll range by scroll/new-line events
+         * and re-clamped on resize in set_size, so it is always a valid top line. */
+        let start = self.position.line;
         let visible_height = self.size.height.saturating_sub(2) as usize;
-        /* position.line is clamped to the scroll range on scroll/new-line events,
-         * but a resize only reassigns the size. Clamp the rendered top line to the
-         * current max offset (matching max_main_axis in the graphics task) so a
-         * stale offset can't slice an empty range or misplace the scrollbar thumb
-         * before the next event re-clamps position.line. */
-        let max_offset = buffer.len().saturating_sub(visible_height);
-        let start = self.position.line.min(max_offset);
         let end = start + visible_height;
         let max_width = self.size.width as usize;
 

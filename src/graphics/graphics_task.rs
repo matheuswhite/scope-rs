@@ -800,7 +800,7 @@ impl GraphicsTask {
                             height: size.height.saturating_sub(Self::COMMAND_BAR_HEIGHT),
                             ..size
                         };
-                        private.screen.set_size(screen_size);
+                        private.screen.set_size(screen_size, private.buffer.len());
 
                         let chunks = Layout::default()
                             .direction(Direction::Vertical)
