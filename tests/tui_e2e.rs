@@ -301,12 +301,13 @@ fn scrollbar_appears_only_when_buffer_overflows_viewport() {
         "scrollbar must be hidden while content fits.\n{screen}"
     );
 
-    // Overflow the viewport (ROWS minus command bar and borders is well under 40).
-    for i in 1..=40 {
+    // Overflow the viewport: ROWS lines always exceed the visible height, which
+    // is ROWS minus the command bar and borders.
+    for i in 1..=ROWS {
         tui.type_text(&format!("filler {i}"));
         tui.press_enter();
     }
-    let screen = tui.wait_for("filler 40", SETTLE);
+    let screen = tui.wait_for(&format!("filler {ROWS}"), SETTLE);
     assert!(
         screen.contains('▲') && screen.contains('▼'),
         "scrollbar arrows must appear once content overflows.\n{screen}"
@@ -321,13 +322,13 @@ fn scrollbar_tracks_scroll_position() {
     let mut tui = Tui::start(&[]);
     tui.wait_until_ready();
 
-    for i in 1..=40 {
+    for i in 1..=ROWS {
         tui.type_text(&format!("row {i}"));
         tui.press_enter();
     }
 
     // Auto-scroll keeps us pinned to the bottom: newest visible, oldest scrolled off.
-    let bottom = tui.wait_for("row 40\\r\\n", SETTLE);
+    let bottom = tui.wait_for(&format!("row {ROWS}\\r\\n"), SETTLE);
     assert!(
         !bottom.contains("row 1\\r\\n"),
         "oldest line should be off-screen at the bottom.\n{bottom}"

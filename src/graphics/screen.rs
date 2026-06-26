@@ -233,8 +233,14 @@ impl Screen {
     ) {
         let block = self.build_block(buffer, save_stats);
 
-        let start = self.position.line;
         let visible_height = self.size.height.saturating_sub(2) as usize;
+        /* position.line is clamped to the scroll range on scroll/new-line events,
+         * but a resize only reassigns the size. Clamp the rendered top line to the
+         * current max offset (matching max_main_axis in the graphics task) so a
+         * stale offset can't slice an empty range or misplace the scrollbar thumb
+         * before the next event re-clamps position.line. */
+        let max_offset = buffer.len().saturating_sub(visible_height);
+        let start = self.position.line.min(max_offset);
         let end = start + visible_height;
         let max_width = self.size.width as usize;
 
@@ -260,7 +266,7 @@ impl Screen {
         let paragraph = Paragraph::new(lines).block(block);
         frame.render_widget(paragraph, self.size);
 
-        self.draw_scrollbar(buffer, save_stats, frame, visible_height);
+        self.draw_scrollbar(buffer, save_stats, frame, start, visible_height);
     }
 
     /// Draws a vertical scrollbar over the right border, indicating the current
@@ -271,6 +277,7 @@ impl Screen {
         buffer: &Buffer,
         save_stats: &SaveStats,
         frame: &mut Frame,
+        top: usize,
         visible_height: usize,
     ) {
         let total = buffer.len();
@@ -278,16 +285,10 @@ impl Screen {
             return;
         }
 
-        /* position.line is clamped to the scroll range on scroll/new-line events,
-         * but a resize only reassigns the size, so guard against a stale offset
-         * landing past the maximum top-line offset before the next event re-clamps
-         * it. The max offset matches max_main_axis in the graphics task; total >
-         * visible_height is guaranteed above, so the subtraction can't underflow. */
-        let max_offset = total - visible_height;
-        let position = self.position.line.min(max_offset);
-
+        /* `top` is the already-clamped top line shared with the rendered content,
+         * so the thumb stays consistent with what is on screen. */
         let mut state = ScrollbarState::new(total)
-            .position(position)
+            .position(top)
             .viewport_content_length(visible_height);
 
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
