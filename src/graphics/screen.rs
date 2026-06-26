@@ -12,10 +12,13 @@ use crate::{
 use chrono::{DateTime, Local};
 use ratatui::{
     Frame,
-    layout::{Alignment, Rect},
+    layout::{Alignment, Margin, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, block::Title},
+    widgets::{
+        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        block::Title,
+    },
 };
 
 pub struct Screen {
@@ -181,6 +184,16 @@ impl Screen {
         self.auto_scroll = true;
     }
 
+    fn border_color(&self, save_stats: &SaveStats) -> Color {
+        if save_stats.is_recording() {
+            Color::Red
+        } else if save_stats.is_saving() {
+            save_stats.save_color()
+        } else {
+            self.mode.color()
+        }
+    }
+
     fn build_block(&self, buffer: &Buffer, save_stats: &SaveStats) -> Block<'_> {
         let file_size = ByteFormat::from(save_stats.file_size());
         let record_indicator = if save_stats.is_recording() {
@@ -189,13 +202,7 @@ impl Screen {
             ""
         };
 
-        let border_color = if save_stats.is_recording() {
-            Color::Red
-        } else if save_stats.is_saving() {
-            save_stats.save_color()
-        } else {
-            self.mode.color()
-        };
+        let border_color = self.border_color(save_stats);
         let border_style = Style::default().fg(border_color);
         let border_type = if self.auto_scroll {
             BorderType::Thick
@@ -252,6 +259,42 @@ impl Screen {
             .collect::<Vec<_>>();
         let paragraph = Paragraph::new(lines).block(block);
         frame.render_widget(paragraph, self.size);
+
+        self.draw_scrollbar(buffer, save_stats, frame, visible_height);
+    }
+
+    /// Draws a vertical scrollbar over the right border, indicating the current
+    /// scroll position within the buffer. It is only shown when the buffer has
+    /// more lines than fit in the viewport.
+    fn draw_scrollbar(
+        &self,
+        buffer: &Buffer,
+        save_stats: &SaveStats,
+        frame: &mut Frame,
+        visible_height: usize,
+    ) {
+        let total = buffer.len();
+        if total <= visible_height {
+            return;
+        }
+
+        let mut state = ScrollbarState::new(total)
+            .position(self.position.line)
+            .viewport_content_length(visible_height);
+
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"))
+            .thumb_style(Style::default().fg(self.border_color(save_stats)))
+            .track_style(Style::default().fg(Color::DarkGray));
+
+        /* inset vertically so the arrows fall inside the block's borders */
+        let area = self.size.inner(&Margin {
+            vertical: 1,
+            horizontal: 0,
+        });
+
+        frame.render_stateful_widget(scrollbar, area, &mut state);
     }
 
     fn crop(line: Line, start_x: usize, max_width: usize) -> Line {
