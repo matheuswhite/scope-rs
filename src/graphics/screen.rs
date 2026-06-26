@@ -290,9 +290,16 @@ impl Screen {
             return;
         }
 
-        /* `top` is the already-clamped top line shared with the rendered content,
-         * so the thumb stays consistent with what is on screen. */
-        let mut state = ScrollbarState::new(total)
+        /* ScrollbarState's content_length is the number of distinct scroll
+         * positions, not the line count: the thumb only reaches the bottom when
+         * `position` equals `content_length - 1`. Our top line maxes out at
+         * `total - visible_height` (the last full screen), so content_length must
+         * be `max_offset + 1`. Passing `total` here would cap the thumb partway
+         * down the track. viewport_content_length keeps the thumb sized to the
+         * visible fraction. `top` is the clamped top line shared with the rendered
+         * content, so the thumb stays consistent with what is on screen. */
+        let max_offset = total - visible_height;
+        let mut state = ScrollbarState::new(max_offset + 1)
             .position(top)
             .viewport_content_length(visible_height);
 

@@ -315,10 +315,12 @@ fn scrollbar_appears_only_when_buffer_overflows_viewport() {
 }
 
 #[test]
-fn scrollbar_thumb_moves_up_when_scrolling_up() {
-    // Issue #134: the scrollbar thumb must reflect the scroll position. The thumb
-    // is the █ run in the rightmost column; its topmost row marks the thumb. We
-    // assert it sits low under auto-scroll and moves up after PageUp.
+fn scrollbar_thumb_reaches_both_ends() {
+    // Issue #134: the thumb must span the whole track, not stop partway. At the
+    // bottom (auto-scroll) the thumb's last cell sits just above the ▼ arrow; at
+    // the top its first cell sits just below ▲. The rightmost column of each
+    // scrollbar row holds an arrow (▲/▼), the thumb (█) or the track, so we can
+    // read the glyphs straight off the end of each rendered line.
     let mut tui = Tui::start(&[]);
     tui.wait_until_ready();
 
@@ -327,29 +329,44 @@ fn scrollbar_thumb_moves_up_when_scrolling_up() {
         tui.press_enter();
     }
 
-    // The rightmost column of a scrollbar row is always a thumb (█) or track/arrow
-    // glyph, never a space, so the first line ending in █ is the thumb's top.
-    let thumb_top = |screen: &str| {
+    let rows_ending_with = |screen: &str, glyph: char| -> Vec<usize> {
         screen
             .lines()
-            .position(|line| line.chars().last() == Some('█'))
+            .enumerate()
+            .filter(|(_, line)| line.chars().last() == Some(glyph))
+            .map(|(i, _)| i)
+            .collect()
     };
 
-    // Auto-scroll pins us to the bottom: newest visible, oldest scrolled off, thumb low.
+    // Auto-scroll pins us to the bottom: the thumb reaches the bottom of the track.
     let bottom = tui.wait_for(&format!("row {ROWS}\\r\\n"), SETTLE);
     assert!(
         !bottom.contains("row 1\\r\\n"),
         "oldest line should be off-screen at the bottom.\n{bottom}"
     );
-    let bottom_thumb = thumb_top(&bottom).expect("thumb should be visible at the bottom");
+    let down_arrow = rows_ending_with(&bottom, '▼');
+    let thumb = rows_ending_with(&bottom, '█');
+    let (Some(&arrow), Some(&last_thumb)) = (down_arrow.first(), thumb.last()) else {
+        panic!("expected a thumb and a ▼ arrow at the bottom.\n{bottom}");
+    };
+    assert_eq!(
+        last_thumb,
+        arrow - 1,
+        "thumb must reach the bottom of the track (just above ▼).\n{bottom}"
+    );
 
-    // PageUp scrolls a full page to the top: oldest line reappears, thumb moves up.
+    // PageUp scrolls a full page to the top: the thumb reaches the top of the track.
     tui.type_text("\x1b[5~");
     let top = tui.wait_for("row 1\\r\\n", SETTLE);
-    let top_thumb = thumb_top(&top).expect("thumb should be visible at the top");
-    assert!(
-        top_thumb < bottom_thumb,
-        "thumb should move up when scrolling up: top={top_thumb} bottom={bottom_thumb}\n{top}"
+    let up_arrow = rows_ending_with(&top, '▲');
+    let thumb = rows_ending_with(&top, '█');
+    let (Some(&arrow), Some(&first_thumb)) = (up_arrow.first(), thumb.first()) else {
+        panic!("expected a thumb and a ▲ arrow at the top.\n{top}");
+    };
+    assert_eq!(
+        first_thumb,
+        arrow + 1,
+        "thumb must reach the top of the track (just below ▲).\n{top}"
     );
 }
 
