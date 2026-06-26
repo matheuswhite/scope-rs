@@ -13,11 +13,11 @@ use crate::infra::tags::TagList;
 use crate::interfaces::rtt_if::{RttCommand, RttConnections, RttSetup};
 use crate::interfaces::serial_if::SerialCommand;
 use crate::interfaces::{InterfaceCommand, InterfaceTask, InterfaceType};
-use chrono::Local;
 use clap::{Parser, Subcommand};
 use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
 use infra::logger::Logger;
 use infra::mpmc::Channel;
+use infra::session;
 use inputs::inputs_task::{InputsConnections, InputsTask};
 use interfaces::serial_if::{SerialConnections, SerialSetup};
 use list::list_serial_ports;
@@ -41,6 +41,9 @@ struct Cli {
     tag_file: Option<PathBuf>,
     #[clap(short, long)]
     latency: Option<u64>,
+    /// Base name for the session record file. Defaults to a timestamp.
+    #[clap(short, long)]
+    name: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -69,6 +72,7 @@ fn app_serial(
     port: Option<String>,
     baudrate: Option<u32>,
     latency: u64,
+    name: Option<String>,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -151,8 +155,7 @@ fn app_serial(
     let inputs_shared = inputs_task.shared_ref();
     let serial_shared = serial_if.shared_ref();
 
-    let now_str = Local::now().format("%Y%m%d_%H%M%S");
-    let storage_base_filename = format!("{}.txt", now_str);
+    let storage_base_filename = session::record_filename(name.as_deref());
     let graphics_config = graphics::graphics_task::GraphicsConfig {
         storage_base_filename,
         capacity,
@@ -192,6 +195,7 @@ fn app_rtt(
     target: Option<String>,
     channel_num: Option<usize>,
     latency: u64,
+    name: Option<String>,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -272,8 +276,7 @@ fn app_rtt(
     let inputs_shared = inputs_task.shared_ref();
     let rtt_shared = rtt_if.shared_ref();
 
-    let now_str = Local::now().format("%Y%m%d_%H%M%S");
-    let storage_base_filename = format!("{}.txt", now_str);
+    let storage_base_filename = session::record_filename(name.as_deref());
     let graphics_config = graphics::graphics_task::GraphicsConfig {
         storage_base_filename,
         capacity,
@@ -318,18 +321,23 @@ fn main() -> Result<(), String> {
     let tag_file = cli.tag_file.unwrap_or(PathBuf::from(DEFAULT_TAG_FILE));
     let latency = cli.latency.unwrap_or(100).clamp(0, 100_000);
 
-    let result = match cli.command {
-        Commands::Serial { port, baudrate } => {
-            app_serial(capacity, tag_file, port, baudrate, latency)
-        }
-        Commands::Ble { .. } => {
-            Err("Sorry! We're developing BLE interface and it's not available yet".to_string())
-        }
-        Commands::List { verbose } => list_serial_ports(verbose),
-        Commands::Rtt {
-            target,
-            channel_num,
-        } => app_rtt(capacity, tag_file, target, channel_num, latency),
+    // Sanitize the session name into the same `result` flow so an invalid
+    // `--name` is reported through the shared `[ERR]` formatter below.
+    let result = match cli.name.as_deref().map(session::sanitize_name).transpose() {
+        Err(err) => Err(err),
+        Ok(name) => match cli.command {
+            Commands::Serial { port, baudrate } => {
+                app_serial(capacity, tag_file, port, baudrate, latency, name)
+            }
+            Commands::Ble { .. } => {
+                Err("Sorry! We're developing BLE interface and it's not available yet".to_string())
+            }
+            Commands::List { verbose } => list_serial_ports(verbose),
+            Commands::Rtt {
+                target,
+                channel_num,
+            } => app_rtt(capacity, tag_file, target, channel_num, latency, name),
+        },
     };
 
     if let Err(err) = result {
