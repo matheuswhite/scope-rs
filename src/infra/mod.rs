@@ -1,3 +1,4 @@
+pub mod backup;
 pub mod blink;
 pub mod logger;
 pub mod messages;

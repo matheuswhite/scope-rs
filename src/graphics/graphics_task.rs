@@ -9,6 +9,7 @@ use crate::interfaces::rtt_if::RttMode;
 use crate::{error, info, inputs, success};
 use crate::{
     infra::{
+        backup::Backup,
         blink::Blink,
         logger::{LogLevel, LogMessage, Logger},
         messages::TimedBytes,
@@ -68,6 +69,7 @@ pub struct GraphicsConnections {
     interface_shared: Shared<InterfaceShared>,
     typewriter: TypeWriter,
     recorder: Recorder,
+    backup: Backup,
     latency: u64,
     buffer: Buffer,
     screen: Screen,
@@ -583,6 +585,9 @@ impl GraphicsTask {
                                 // full filename preserves dotted names) so a
                                 // later `!record` uses the new session name too.
                                 let _ = private.recorder.rename(&filename);
+                                // Move the crash-recovery backup alongside the
+                                // renamed session so it keeps mirroring it.
+                                private.backup.rename(format!("{}.bkp", filename));
                                 save_stats.filename = recording_file
                                     .unwrap_or_else(|| private.typewriter.get_filename());
                                 success!(private.logger, "Session renamed to \"{}\"", filename);
@@ -762,14 +767,23 @@ impl GraphicsTask {
             if !new_messages.is_empty() {
                 need_redraw = true;
                 new_messages.sort_by(|a, b| a.timestamp().partial_cmp(&b.timestamp()).unwrap());
+
+                let serialized = new_messages
+                    .iter()
+                    .map(|gm| gm.serialize())
+                    .collect::<Vec<_>>();
+
+                // Mirror the history into the crash-recovery backup; the write
+                // is handed to a background thread so the draw loop never stalls
+                // on disk I/O.
+                private.backup.append(serialized.clone());
+
                 if private.recorder.is_recording()
-                    && let Err(err) = private
-                        .recorder
-                        .add_bulk_content(new_messages.iter().map(|gm| gm.serialize()).collect())
+                    && let Err(err) = private.recorder.add_bulk_content(serialized.clone())
                 {
                     error!(private.logger, "{}", err);
                 }
-                private.typewriter += new_messages.iter().map(|gm| gm.serialize()).collect();
+                private.typewriter += serialized;
                 private.buffer += new_messages;
                 private.screen.update_after_new_lines(&private.buffer);
                 save_stats.file_size = private.typewriter.get_size();
@@ -918,6 +932,11 @@ impl GraphicsConnections {
         interface_shared: Shared<InterfaceShared>,
         config: GraphicsConfig,
     ) -> Self {
+        let backup = Backup::new(
+            format!("{}.bkp", config.storage_base_filename),
+            logger.clone(),
+        );
+
         Self {
             logger,
             logger_receiver,
@@ -929,6 +948,7 @@ impl GraphicsConnections {
             screen: Screen::default(),
             typewriter: TypeWriter::new(config.storage_base_filename.clone()),
             recorder: Recorder::new(config.storage_base_filename).expect("Cannot create Recorder"),
+            backup,
             system_log_level: LogLevel::Debug,
             latency: config.latency,
             clipboard: Clipboard::new().ok(),
