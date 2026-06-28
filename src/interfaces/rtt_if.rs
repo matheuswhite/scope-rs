@@ -5,7 +5,10 @@ use crate::{
         messages::TimedBytes,
         mpmc::{Consumer, Producer},
     },
-    interfaces::{InterfaceCommand, InterfaceShared},
+    interfaces::{
+        InterfaceCommand, InterfaceShared,
+        file_transfer::{CHUNK_SIZE, FileTransfer},
+    },
     plugin::engine::PluginEngineCommand,
     success, warning,
 };
@@ -63,6 +66,9 @@ pub enum RttCommand {
         address: u64,
         size: usize,
     },
+    SendFile {
+        path: String,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -114,6 +120,7 @@ impl RttInterface {
         let mut session = None;
         let mut rtt = None;
         let mut now = Instant::now();
+        let mut transfer: Option<FileTransfer> = None;
 
         'task_loop: loop {
             if let Ok(InterfaceCommand::Rtt(cmd)) = cmd_receiver.try_recv() {
@@ -184,6 +191,10 @@ impl RttInterface {
 
                         None
                     }
+                    RttCommand::SendFile { path } => {
+                        Self::start_file_transfer(&shared, &mut transfer, &path, &logger);
+                        None
+                    }
                     RttCommand::Exit => break 'task_loop,
                 };
                 Self::set_mode(shared.clone(), new_mode);
@@ -200,6 +211,19 @@ impl RttInterface {
                     ),
                 };
                 let mode = sr_ref.mode;
+
+                // A transfer only makes progress while connected; if the link
+                // dropped, abort it rather than later resuming mid-stream into a
+                // target that may have reset.
+                if !matches!(mode, RttMode::Connected)
+                    && let Some(t) = transfer.take()
+                {
+                    warning!(
+                        logger,
+                        "File transfer of \"{}\" aborted: RTT disconnected",
+                        t.name()
+                    );
+                }
 
                 match mode {
                     RttMode::DoNotConnect => {
@@ -247,29 +271,57 @@ impl RttInterface {
                 sr.channel
             };
 
-            if let Some(output) = rtt_if.down_channel(channel)
-                && let Ok(data_to_send) = tx.try_recv()
-            {
-                let Some(mut core) = session_obj.core(0).ok() else {
-                    let _ = Self::disconnect(
-                        shared.clone(),
-                        &mut Some(session_obj),
-                        &mut Some(rtt_if),
-                        &logger,
-                        &plugin_engine_cmd_sender,
-                        &mut probe_speed_message,
-                        &mut fail_to_attach_message,
-                    );
-                    Self::set_mode(shared.clone(), Some(RttMode::Reconnecting));
-                    Self::wait(latency);
-                    continue 'task_loop;
-                };
+            let mut sent_file_bytes = false;
+            if let Some(output) = rtt_if.down_channel(channel) {
+                // Only consume a tx message once we have the down channel, so a
+                // not-yet-ready channel doesn't drop queued bytes.
+                let tx_msg = tx.try_recv().ok();
 
-                if output
-                    .write(&mut core, data_to_send.message.as_slice())
-                    .is_err()
-                {
-                    error!(logger, "Cannot send: {:?}", data_to_send.message);
+                if tx_msg.is_some() || transfer.is_some() {
+                    let Some(mut core) = session_obj.core(0).ok() else {
+                        let _ = Self::disconnect(
+                            shared.clone(),
+                            &mut Some(session_obj),
+                            &mut Some(rtt_if),
+                            &logger,
+                            &plugin_engine_cmd_sender,
+                            &mut probe_speed_message,
+                            &mut fail_to_attach_message,
+                        );
+                        Self::set_mode(shared.clone(), Some(RttMode::Reconnecting));
+                        Self::wait(latency);
+                        continue 'task_loop;
+                    };
+
+                    if let Some(data_to_send) = tx_msg
+                        && output
+                            .write(&mut core, data_to_send.message.as_slice())
+                            .is_err()
+                    {
+                        error!(logger, "Cannot send: {:?}", data_to_send.message);
+                    }
+
+                    // Stream the next chunk of an in-progress file transfer
+                    // straight to the down channel (never through `tx`). The RTT
+                    // buffer may accept fewer bytes than offered, so advance by
+                    // the count actually written.
+                    if transfer.is_some() {
+                        let (done, written) = {
+                            let t = transfer.as_mut().unwrap();
+                            let chunk = t.next_chunk(CHUNK_SIZE);
+                            match output.write(&mut core, chunk) {
+                                Ok(written) => (t.advance(written, &logger), written),
+                                Err(err) => {
+                                    error!(logger, "Failed to send \"{}\": {}", t.name(), err);
+                                    (true, 0)
+                                }
+                            }
+                        };
+                        sent_file_bytes = written > 0;
+                        if done {
+                            transfer = None;
+                        }
+                    }
                 }
             }
 
@@ -336,7 +388,11 @@ impl RttInterface {
             rtt = Some(rtt_if);
             session = Some(session_obj);
 
-            if !received_data {
+            // Throttle only when we made no progress this iteration. An active
+            // transfer streaming bytes runs without the per-iteration wait (so
+            // it isn't capped at one chunk per `latency`), but a full down
+            // channel that accepted nothing still backs off — no busy-spin.
+            if !received_data && !sent_file_bytes {
                 Self::wait(latency);
             }
         }
@@ -365,6 +421,40 @@ impl RttInterface {
         } else {
             yield_now();
         }
+    }
+
+    /// Arm a file transfer. Requires an active connection (so the user gets
+    /// immediate feedback instead of a transfer that silently waits) and refuses
+    /// to overlap with one already running; the file read and kickoff log are
+    /// handled by [`FileTransfer::load`].
+    fn start_file_transfer(
+        shared: &Arc<RwLock<InterfaceShared>>,
+        transfer: &mut Option<FileTransfer>,
+        path: &str,
+        logger: &Logger,
+    ) {
+        let connected = {
+            let sr = shared
+                .read()
+                .expect("Failed to acquire read lock on RTT shared state");
+            matches!(sr.deref(), InterfaceShared::Rtt(sr) if matches!(sr.mode, RttMode::Connected))
+        };
+        if !connected {
+            error!(logger, "Cannot send \"{}\": RTT is not connected", path);
+            return;
+        }
+
+        if let Some(t) = transfer {
+            error!(
+                logger,
+                "Cannot send \"{}\": already sending \"{}\"",
+                path,
+                t.name()
+            );
+            return;
+        }
+
+        *transfer = FileTransfer::load(path, logger);
     }
 
     fn rtt_attach(core: &mut Core, last_address: &mut Option<u64>, logger: &Logger) -> Option<Rtt> {

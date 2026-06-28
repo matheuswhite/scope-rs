@@ -836,6 +836,26 @@ impl InputsTask {
         }
     }
 
+    fn handle_send_file_command(command_line_split: Vec<String>, private: &InputsConnections) {
+        // The command line is split on whitespace, so the path is a single
+        // token (paths with spaces aren't supported, like other `!` commands).
+        let Some(path) = command_line_split.get(1) else {
+            error!(private.logger, "Usage: !send_file <path>");
+            return;
+        };
+
+        let cmd = match private.if_type {
+            InterfaceType::Serial => {
+                InterfaceCommand::Serial(SerialCommand::SendFile { path: path.clone() })
+            }
+            InterfaceType::Rtt => {
+                InterfaceCommand::Rtt(RttCommand::SendFile { path: path.clone() })
+            }
+        };
+
+        let _ = private.interface_cmd_sender.send(cmd);
+    }
+
     fn handle_user_command(command_line_split: Vec<String>, private: &InputsConnections) {
         let Some(cmd_name) = command_line_split.first() else {
             private.tx.produce(Arc::new(TimedBytes {
@@ -953,6 +973,9 @@ impl InputsTask {
                     );
                 }
             },
+            "send_file" => {
+                Self::handle_send_file_command(command_line_split, private);
+            }
             "log" => {
                 if command_line_split.len() < 3 {
                     error!(
@@ -1443,6 +1466,7 @@ impl InputsConnections {
                 "Type @ to place a tag",
                 "Type $ to start a hex sequence",
                 "Type !rename <name> to rename the session record",
+                "Type !send_file <path> to stream a file to the device",
                 "Type here and hit <Enter> to send the text",
             ],
             history,

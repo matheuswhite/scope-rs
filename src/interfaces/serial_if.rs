@@ -5,7 +5,10 @@ use crate::{
         messages::TimedBytes,
         mpmc::{Consumer, Producer},
     },
-    interfaces::{InterfaceCommand, InterfaceShared},
+    interfaces::{
+        InterfaceCommand, InterfaceShared,
+        file_transfer::{CHUNK_SIZE, FileTransfer},
+    },
     plugin::engine::PluginEngineCommand,
     success, warning,
 };
@@ -66,6 +69,7 @@ pub enum SerialCommand {
     Disconnect,
     Exit,
     Setup(SerialSetup),
+    SendFile { path: String },
 }
 
 #[derive(Copy, Clone)]
@@ -157,6 +161,7 @@ impl SerialInterface {
         let mut serial = None;
         let mut now = Instant::now();
         let mut last_reconnect: Option<Instant> = None;
+        let mut transfer: Option<FileTransfer> = None;
 
         'task_loop: loop {
             if let Ok(InterfaceCommand::Serial(cmd)) = cmd_receiver.try_recv() {
@@ -181,6 +186,10 @@ impl SerialInterface {
                         &logger,
                         &plugin_engine_cmd_sender,
                     ),
+                    SerialCommand::SendFile { path } => {
+                        Self::start_file_transfer(&shared, &mut transfer, &path, &logger);
+                        None
+                    }
                 };
                 Self::set_mode(shared.clone(), new_mode);
             }
@@ -194,6 +203,19 @@ impl SerialInterface {
                     ),
                 }
             };
+
+            // A transfer only makes progress while connected; if the link
+            // dropped (unplug, reconnect, manual disconnect), abort it rather
+            // than later resuming mid-stream into a device that may have reset.
+            if !matches!(mode, SerialMode::Connected)
+                && let Some(t) = transfer.take()
+            {
+                warning!(
+                    logger,
+                    "File transfer of \"{}\" aborted: serial disconnected",
+                    t.name()
+                );
+            }
 
             match mode {
                 SerialMode::DoNotConnect => {
@@ -240,6 +262,10 @@ impl SerialInterface {
             {
                 error!(logger, "Cannot send: {:?}", data_to_send.message);
             }
+
+            // Stream the next chunk of an in-progress file transfer straight to
+            // the wire (never through the `tx` display bus).
+            Self::pump_file_transfer(&mut transfer, &mut ser, &logger);
 
             match ser.read(&mut buffer) {
                 Ok(_) => {
@@ -578,6 +604,75 @@ impl SerialInterface {
             None
         }
     }
+
+    /// Arm a file transfer. Requires an active connection (so the user gets
+    /// immediate feedback instead of a transfer that silently waits) and refuses
+    /// to overlap with one already running; the file read and kickoff log are
+    /// handled by [`FileTransfer::load`].
+    fn start_file_transfer(
+        shared: &Arc<RwLock<InterfaceShared>>,
+        transfer: &mut Option<FileTransfer>,
+        path: &str,
+        logger: &Logger,
+    ) {
+        let connected = {
+            let sr = shared.read().expect("Cannot get serial shared for read");
+            matches!(sr.deref(), InterfaceShared::Serial(sr) if matches!(sr.mode, SerialMode::Connected))
+        };
+        if !connected {
+            error!(logger, "Cannot send \"{}\": serial is not connected", path);
+            return;
+        }
+
+        if let Some(t) = transfer {
+            error!(
+                logger,
+                "Cannot send \"{}\": already sending \"{}\"",
+                path,
+                t.name()
+            );
+            return;
+        }
+
+        *transfer = FileTransfer::load(path, logger);
+    }
+
+    /// Write the next chunk of an active transfer to `ser`, clearing it on
+    /// completion or write error. Called every loop iteration; a no-op when
+    /// idle.
+    fn pump_file_transfer<W: Write>(
+        transfer: &mut Option<FileTransfer>,
+        ser: &mut W,
+        logger: &Logger,
+    ) {
+        let done = {
+            let Some(t) = transfer.as_mut() else {
+                return;
+            };
+            let chunk = t.next_chunk(CHUNK_SIZE);
+            // A single non-blocking write (not write_all): on a slow link the OS
+            // buffer may take only part of the chunk, so advance by what was
+            // accepted and retry the rest next iteration. This keeps the task
+            // loop from blocking on the wire and mirrors the RTT path.
+            match ser.write(chunk) {
+                Ok(written) => t.advance(written, logger),
+                Err(ref e)
+                    if e.kind() == io::ErrorKind::TimedOut
+                        || e.kind() == io::ErrorKind::WouldBlock =>
+                {
+                    // Buffer full / write timed out: nothing sent, retry later.
+                    false
+                }
+                Err(err) => {
+                    error!(logger, "Failed to send \"{}\": {}", t.name(), err);
+                    true
+                }
+            }
+        };
+        if done {
+            *transfer = None;
+        }
+    }
 }
 
 impl SerialConnections {
@@ -601,6 +696,34 @@ impl SerialConnections {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Drive the generic file-transfer pump against an in-memory writer to
+    /// confirm the serial glue streams every byte verbatim and clears the
+    /// transfer once done. (The progress/throttle logic itself is covered by
+    /// the `file_transfer` module's own tests.)
+    #[test]
+    fn pump_streams_all_bytes_then_clears() {
+        let (logger, _rx) = Logger::new("test".to_string());
+        let path = std::env::temp_dir()
+            .join(format!("scope_serial_pump_{}.bin", std::process::id()))
+            .to_str()
+            .unwrap()
+            .to_string();
+        let data: Vec<u8> = (0..CHUNK_SIZE * 2 + 9).map(|i| i as u8).collect();
+        std::fs::write(&path, &data).unwrap();
+
+        let mut transfer = FileTransfer::load(&path, &logger);
+        let mut wire = Vec::new();
+        let mut iterations = 0;
+        while transfer.is_some() {
+            SerialInterface::pump_file_transfer(&mut transfer, &mut wire, &logger);
+            iterations += 1;
+            assert!(iterations <= 8, "must converge");
+        }
+
+        assert_eq!(wire, data, "every byte reaches the wire, in order");
+        let _ = std::fs::remove_file(&path);
+    }
 
     fn usb(vid: u16, pid: u16, serial: Option<&str>) -> UsbPortInfo {
         UsbPortInfo {
