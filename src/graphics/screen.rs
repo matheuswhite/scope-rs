@@ -12,10 +12,13 @@ use crate::{
 use chrono::{DateTime, Local};
 use ratatui::{
     Frame,
-    layout::{Alignment, Rect},
+    layout::{Alignment, Margin, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Paragraph, block::Title},
+    widgets::{
+        Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
+        block::Title,
+    },
 };
 
 pub struct Screen {
@@ -94,8 +97,17 @@ impl Screen {
         self.size
     }
 
-    pub fn set_size(&mut self, size: Rect) {
+    pub fn set_size(&mut self, size: Rect, buffer_len: usize) {
         self.size = size;
+        /* A resize that grows the viewport shrinks the max scroll offset. Re-clamp
+         * position.line so it never sits past the new range; otherwise a stale
+         * offset would desync selection mapping and small-step scroll inputs (and
+         * the render path / scrollbar, which derive from it) until the next event
+         * happens to re-clamp it. clamp_position also re-enables auto-scroll when
+         * the clamp lands on the bottom, matching the rest of the scroll logic. */
+        let visible_height = size.height.saturating_sub(2) as usize;
+        let max_main_axis = buffer_len.saturating_sub(visible_height);
+        self.clamp_position(max_main_axis);
     }
 
     pub fn set_selection(&mut self, start_point: ScreenPosition) {
@@ -181,6 +193,16 @@ impl Screen {
         self.auto_scroll = true;
     }
 
+    fn border_color(&self, save_stats: &SaveStats) -> Color {
+        if save_stats.is_recording() {
+            Color::Red
+        } else if save_stats.is_saving() {
+            save_stats.save_color()
+        } else {
+            self.mode.color()
+        }
+    }
+
     fn build_block(&self, buffer: &Buffer, save_stats: &SaveStats) -> Block<'_> {
         let file_size = ByteFormat::from(save_stats.file_size());
         let record_indicator = if save_stats.is_recording() {
@@ -189,13 +211,7 @@ impl Screen {
             ""
         };
 
-        let border_color = if save_stats.is_recording() {
-            Color::Red
-        } else if save_stats.is_saving() {
-            save_stats.save_color()
-        } else {
-            self.mode.color()
-        };
+        let border_color = self.border_color(save_stats);
         let border_style = Style::default().fg(border_color);
         let border_type = if self.auto_scroll {
             BorderType::Thick
@@ -226,6 +242,8 @@ impl Screen {
     ) {
         let block = self.build_block(buffer, save_stats);
 
+        /* position.line is kept within the scroll range by scroll/new-line events
+         * and re-clamped on resize in set_size, so it is always a valid top line. */
         let start = self.position.line;
         let visible_height = self.size.height.saturating_sub(2) as usize;
         let end = start + visible_height;
@@ -252,6 +270,52 @@ impl Screen {
             .collect::<Vec<_>>();
         let paragraph = Paragraph::new(lines).block(block);
         frame.render_widget(paragraph, self.size);
+
+        self.draw_scrollbar(buffer, save_stats, frame, start, visible_height);
+    }
+
+    /// Draws a vertical scrollbar over the right border, indicating the current
+    /// scroll position within the buffer. It is only shown when the buffer has
+    /// more lines than fit in the viewport.
+    fn draw_scrollbar(
+        &self,
+        buffer: &Buffer,
+        save_stats: &SaveStats,
+        frame: &mut Frame,
+        top: usize,
+        visible_height: usize,
+    ) {
+        let total = buffer.len();
+        if visible_height == 0 || total <= visible_height {
+            return;
+        }
+
+        /* ScrollbarState's content_length is the number of distinct scroll
+         * positions, not the line count: the thumb only reaches the bottom when
+         * `position` equals `content_length - 1`. Our top line maxes out at
+         * `total - visible_height` (the last full screen), so content_length must
+         * be `max_offset + 1`. Passing `total` here would cap the thumb partway
+         * down the track. viewport_content_length keeps the thumb sized to the
+         * visible fraction. `top` is the clamped top line shared with the rendered
+         * content, so the thumb stays consistent with what is on screen. */
+        let max_offset = total - visible_height;
+        let mut state = ScrollbarState::new(max_offset + 1)
+            .position(top)
+            .viewport_content_length(visible_height);
+
+        let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+            .begin_symbol(Some("▲"))
+            .end_symbol(Some("▼"))
+            .thumb_style(Style::default().fg(self.border_color(save_stats)))
+            .track_style(Style::default().fg(Color::DarkGray));
+
+        /* inset vertically so the arrows fall inside the block's borders */
+        let area = self.size.inner(&Margin {
+            vertical: 1,
+            horizontal: 0,
+        });
+
+        frame.render_stateful_widget(scrollbar, area, &mut state);
     }
 
     fn crop(line: Line, start_x: usize, max_width: usize) -> Line {

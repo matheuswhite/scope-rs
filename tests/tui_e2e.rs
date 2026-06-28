@@ -286,6 +286,91 @@ fn screen_recovers_after_external_clear() {
 }
 
 #[test]
+fn scrollbar_appears_only_when_buffer_overflows_viewport() {
+    // Issue #134: a vertical scrollbar indicates scroll position. It must stay
+    // hidden while the content fits and appear once the buffer overflows the
+    // viewport. The ▲/▼ arrow heads are unique to the scrollbar on screen.
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    tui.type_text("first line");
+    tui.press_enter();
+    let screen = tui.wait_for("first line", SETTLE);
+    assert!(
+        !screen.contains('▲') && !screen.contains('▼'),
+        "scrollbar must be hidden while content fits.\n{screen}"
+    );
+
+    // Overflow the viewport: ROWS lines always exceed the visible height, which
+    // is ROWS minus the command bar and borders.
+    for i in 1..=ROWS {
+        tui.type_text(&format!("filler {i}"));
+        tui.press_enter();
+    }
+    let screen = tui.wait_for(&format!("filler {ROWS}"), SETTLE);
+    assert!(
+        screen.contains('▲') && screen.contains('▼'),
+        "scrollbar arrows must appear once content overflows.\n{screen}"
+    );
+}
+
+#[test]
+fn scrollbar_thumb_reaches_both_ends() {
+    // Issue #134: the thumb must span the whole track, not stop partway. At the
+    // bottom (auto-scroll) the thumb's last cell sits just above the ▼ arrow; at
+    // the top its first cell sits just below ▲. The rightmost column of each
+    // scrollbar row holds an arrow (▲/▼), the thumb (█) or the track, so we can
+    // read the glyphs straight off the end of each rendered line.
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    for i in 1..=ROWS {
+        tui.type_text(&format!("row {i}"));
+        tui.press_enter();
+    }
+
+    let rows_ending_with = |screen: &str, glyph: char| -> Vec<usize> {
+        screen
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.chars().last() == Some(glyph))
+            .map(|(i, _)| i)
+            .collect()
+    };
+
+    // Auto-scroll pins us to the bottom: the thumb reaches the bottom of the track.
+    let bottom = tui.wait_for(&format!("row {ROWS}\\r\\n"), SETTLE);
+    assert!(
+        !bottom.contains("row 1\\r\\n"),
+        "oldest line should be off-screen at the bottom.\n{bottom}"
+    );
+    let down_arrow = rows_ending_with(&bottom, '▼');
+    let thumb = rows_ending_with(&bottom, '█');
+    let (Some(&arrow), Some(&last_thumb)) = (down_arrow.first(), thumb.last()) else {
+        panic!("expected a thumb and a ▼ arrow at the bottom.\n{bottom}");
+    };
+    assert_eq!(
+        last_thumb,
+        arrow - 1,
+        "thumb must reach the bottom of the track (just above ▼).\n{bottom}"
+    );
+
+    // PageUp scrolls a full page to the top: the thumb reaches the top of the track.
+    tui.type_text("\x1b[5~");
+    let top = tui.wait_for("row 1\\r\\n", SETTLE);
+    let up_arrow = rows_ending_with(&top, '▲');
+    let thumb = rows_ending_with(&top, '█');
+    let (Some(&arrow), Some(&first_thumb)) = (up_arrow.first(), thumb.first()) else {
+        panic!("expected a thumb and a ▲ arrow at the top.\n{top}");
+    };
+    assert_eq!(
+        first_thumb,
+        arrow + 1,
+        "thumb must reach the top of the track (just below ▲).\n{top}"
+    );
+}
+
+#[test]
 #[cfg_attr(
     target_os = "macos",
     ignore = "macOS sets baud via the IOSSIOSPEED ioctl, which a PTY rejects with ENOTTY, so scope can't open the virtual serial port; Linux sets baud via termios and works"
