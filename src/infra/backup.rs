@@ -20,7 +20,6 @@ enum BackupCommand {
 /// explicit save). All disk writes happen on a dedicated thread, so the graphics
 /// loop hands off the already-serialized lines and never blocks on I/O.
 pub struct Backup {
-    filename: String,
     // `Option` only so `Drop` can take the sender and join the worker.
     sender: Option<Sender<BackupCommand>>,
     handle: Option<JoinHandle<()>>,
@@ -28,15 +27,20 @@ pub struct Backup {
 
 impl Backup {
     pub fn new(filename: String, logger: Logger) -> Self {
+        // The channel is intentionally unbounded: dropping batches would punch
+        // gaps into the crash-recovery file, and a blocking bounded send would
+        // reintroduce the draw-loop stall the worker thread exists to avoid.
+        // Backlog can only grow while disk writes lag arrival, which sequential
+        // text appends don't in practice; failed writes are dropped (not
+        // re-queued), and the session's full unsaved history already lives
+        // unbounded in the TypeWriter, so this isn't the binding memory cap.
         let (sender, receiver) = channel::<BackupCommand>();
-        let worker_filename = filename.clone();
         let handle = thread::Builder::new()
             .name("backup-writer".to_string())
-            .spawn(move || Self::worker(worker_filename, receiver, logger))
+            .spawn(move || Self::worker(filename, receiver, logger))
             .expect("Cannot spawn backup writer thread");
 
         Self {
-            filename,
             sender: Some(sender),
             handle: Some(handle),
         }
@@ -56,13 +60,10 @@ impl Backup {
     }
 
     /// Point the backup at a new file name (following a session `!rename`). The
-    /// move is serialized with pending writes on the worker thread.
-    pub fn rename(&mut self, filename: String) {
-        if filename == self.filename {
-            return;
-        }
-
-        self.filename = filename.clone();
+    /// request is always forwarded and serialized with pending writes on the
+    /// worker thread, which owns the authoritative file name — so it can no-op a
+    /// same-name request without a stale local copy blocking a later retry.
+    pub fn rename(&self, filename: String) {
         if let Some(sender) = &self.sender {
             let _ = sender.send(BackupCommand::Rename(filename));
         }
@@ -79,6 +80,9 @@ impl Backup {
         while let Ok(cmd) = receiver.recv() {
             match cmd {
                 BackupCommand::Rename(new_name) => {
+                    if new_name == filename {
+                        continue;
+                    }
                     // Drop the handle first so the move targets a closed file;
                     // the next append reopens under the (possibly new) name.
                     file = None;
@@ -94,10 +98,9 @@ impl Backup {
                     } else if Path::new(&filename).exists() {
                         match std::fs::rename(&filename, &new_name) {
                             Ok(()) => filename = new_name,
-                            Err(err) => error!(
-                                logger,
-                                "Cannot rename backup to \"{}\": {}", new_name, err
-                            ),
+                            Err(err) => {
+                                error!(logger, "Cannot rename backup to \"{}\": {}", new_name, err)
+                            }
                         }
                     } else {
                         // Nothing written yet; just adopt the new name.
@@ -229,7 +232,7 @@ mod tests {
         let _ = std::fs::remove_file(&new);
 
         {
-            let mut backup = Backup::new(old.clone(), test_logger());
+            let backup = Backup::new(old.clone(), test_logger());
             backup.append(vec!["before".to_string()]);
             backup.rename(new.clone());
             backup.append(vec!["after".to_string()]);
@@ -252,7 +255,7 @@ mod tests {
         std::fs::write(&dest, "previous-session").unwrap();
 
         {
-            let mut backup = Backup::new(old.clone(), test_logger());
+            let backup = Backup::new(old.clone(), test_logger());
             backup.append(vec!["before".to_string()]);
             backup.rename(dest.clone());
             backup.append(vec!["after".to_string()]);
