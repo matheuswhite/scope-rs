@@ -3,10 +3,41 @@ use crate::infra::logger::{LogLevel, Logger};
 use std::{
     fs::{File, OpenOptions},
     io::Write,
-    path::Path,
+    path::{Path, PathBuf},
     sync::mpsc::{Receiver, Sender, channel},
     thread::{self, JoinHandle},
+    time::SystemTime,
 };
+
+/// How many `.bkp` files to keep in the backup directory. Once a new session's
+/// backup is created and the count exceeds this, the oldest files are removed so
+/// the directory doesn't grow without bound.
+const MAX_BACKUP_FILES: usize = 10;
+
+/// Directory the crash-recovery backups live in: the user's config directory
+/// under `scope/backup` (e.g. `~/.config/scope/backup` on Linux). Keeping the
+/// `.bkp` files here instead of the working directory avoids littering whatever
+/// folder the user launched `scope` from. Falls back to a relative directory if
+/// the platform config directory can't be resolved.
+fn backup_dir() -> PathBuf {
+    dirs::config_dir()
+        .map(|dir| dir.join("scope").join("backup"))
+        .unwrap_or_else(|| PathBuf::from("scope").join("backup"))
+}
+
+/// Resolve a backup file name (e.g. `session.txt.bkp`) to its full path inside
+/// the backup directory. Pure — creating the directory happens lazily on the
+/// worker thread right before the file is opened.
+pub fn backup_path(file_name: &str) -> String {
+    // Pin to the final path component. Session names are already sanitized
+    // upstream (`session::sanitize_name` rejects separators, `..`, etc.), but
+    // `PathBuf::join` would let an absolute or directory-bearing `file_name`
+    // escape the backup directory entirely, so keep the helper safe on its own.
+    let name = Path::new(file_name)
+        .file_name()
+        .unwrap_or_else(|| file_name.as_ref());
+    backup_dir().join(name).to_string_lossy().into_owned()
+}
 
 /// Commands handed to the background backup-writer thread.
 enum BackupCommand {
@@ -17,8 +48,11 @@ enum BackupCommand {
 /// Mirrors every line the session accumulates into a `<session>.txt.bkp` file
 /// as it arrives, so an accidental close or a crash doesn't lose the history
 /// that hasn't been explicitly saved yet (the `TypeWriter` only hits disk on an
-/// explicit save). All disk writes happen on a dedicated thread, so the graphics
-/// loop hands off the already-serialized lines and never blocks on I/O.
+/// explicit save). The file lives in the user's config directory (see
+/// [`backup_dir`]) rather than the working directory, and at most
+/// [`MAX_BACKUP_FILES`] are kept. All disk writes happen on a dedicated thread,
+/// so the graphics loop hands off the already-serialized lines and never blocks
+/// on I/O.
 pub struct Backup {
     // `Option` only so `Drop` can take the sender and join the worker.
     sender: Option<Sender<BackupCommand>>,
@@ -109,10 +143,19 @@ impl Backup {
                 }
                 BackupCommand::Append(contents) => {
                     if file.is_none() {
+                        // Create the backup directory lazily so an idle session
+                        // leaves nothing behind, and only pay the syscall when we
+                        // actually have something to write.
+                        if let Some(parent) = Path::new(&filename).parent() {
+                            let _ = std::fs::create_dir_all(parent);
+                        }
                         match OpenOptions::new().append(true).create(true).open(&filename) {
                             Ok(f) => {
                                 file = Some(f);
                                 reported_error = false;
+                                // A fresh backup just landed in the directory;
+                                // evict the oldest ones if we're over the cap.
+                                prune_old_backups(Path::new(&filename), MAX_BACKUP_FILES, &logger);
                             }
                             Err(err) => {
                                 if !reported_error {
@@ -161,6 +204,59 @@ impl Backup {
     }
 }
 
+/// Keep at most `keep` `.bkp` files in `current`'s directory, deleting the
+/// oldest (by modification time) beyond that. `current` is the file being
+/// actively written; it always counts toward the cap and is never removed even
+/// if the clock makes it look old.
+fn prune_old_backups(current: &Path, keep: usize, logger: &Logger) {
+    let Some(dir) = current.parent() else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+
+    let mut others: Vec<(PathBuf, SystemTime)> = entries
+        .flatten()
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.as_path() == current || !path.extension().is_some_and(|ext| ext == "bkp") {
+                return None;
+            }
+            // One stat, straight off the directory entry. Skip anything that
+            // isn't a regular file so we never try to `remove_file` a directory
+            // named `*.bkp`; an unreadable mtime falls back to the epoch so the
+            // entry still counts toward the cap and stays a prune candidate
+            // rather than silently dodging it.
+            let meta = entry.metadata().ok()?;
+            if !meta.is_file() {
+                return None;
+            }
+            let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+            Some((path, modified))
+        })
+        .collect();
+
+    // `current` occupies one slot, so at most `keep - 1` other files may remain.
+    let max_others = keep.saturating_sub(1);
+    if others.len() <= max_others {
+        return;
+    }
+
+    others.sort_by_key(|(_, modified)| *modified); // oldest first
+    let remove_count = others.len() - max_others;
+    for (path, _) in others.into_iter().take(remove_count) {
+        if let Err(err) = std::fs::remove_file(&path) {
+            error!(
+                logger,
+                "Cannot remove old backup \"{}\": {}",
+                path.display(),
+                err
+            );
+        }
+    }
+}
+
 impl Drop for Backup {
     fn drop(&mut self) {
         // Closing the channel makes the worker drain its remaining writes and
@@ -176,12 +272,13 @@ impl Drop for Backup {
 mod tests {
     use super::*;
 
+    // Each caller gets its own directory so the worker's `prune_old_backups`
+    // scan stays contained to that test's files instead of the shared OS temp
+    // root (where it could touch unrelated `.bkp` files).
     fn temp_path(suffix: &str) -> String {
-        std::env::temp_dir()
-            .join(format!("scope_bkp_{}_{}", std::process::id(), suffix))
-            .to_str()
-            .unwrap()
-            .to_string()
+        let dir = std::env::temp_dir().join(format!("scope_bkp_{}_{}", std::process::id(), suffix));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(suffix).to_str().unwrap().to_string()
     }
 
     fn test_logger() -> Logger {
@@ -271,6 +368,90 @@ mod tests {
 
         let _ = std::fs::remove_file(&old);
         let _ = std::fs::remove_file(&dest);
+    }
+
+    #[test]
+    fn backup_path_lives_under_the_config_dir() {
+        let path = backup_path("session.txt.bkp");
+        let path = Path::new(&path);
+        assert!(path.ends_with(Path::new("scope").join("backup").join("session.txt.bkp")));
+    }
+
+    #[test]
+    fn backup_path_cannot_escape_the_backup_dir() {
+        // An absolute or directory-bearing name must collapse to its final
+        // component so it can't write outside the backup directory.
+        let base = backup_dir();
+        for name in ["../../etc/evil.bkp", "/tmp/evil.bkp", "sub/dir/evil.bkp"] {
+            let path = backup_path(name);
+            assert_eq!(Path::new(&path), base.join("evil.bkp"));
+        }
+    }
+
+    #[test]
+    fn prune_removes_oldest_beyond_cap() {
+        use std::time::{Duration, UNIX_EPOCH};
+
+        let dir = std::env::temp_dir().join(format!("scope_bkp_prune_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // 12 backups with strictly increasing modification times (oldest first).
+        let mut paths = vec![];
+        for i in 0..12 {
+            let path = dir.join(format!("session_{i:02}.txt.bkp"));
+            let f = File::create(&path).unwrap();
+            f.set_modified(UNIX_EPOCH + Duration::from_secs(1_000 + i))
+                .unwrap();
+            paths.push(path);
+        }
+        // An unrelated file must be left untouched.
+        let keep_me = dir.join("notes.txt");
+        std::fs::write(&keep_me, "x").unwrap();
+
+        // The newest file is the one being actively written.
+        let current = paths.last().unwrap().clone();
+        prune_old_backups(&current, MAX_BACKUP_FILES, &test_logger());
+
+        // The two oldest .bkp were removed; the rest and the .txt survive.
+        assert!(!paths[0].exists(), "oldest backup should be pruned");
+        assert!(!paths[1].exists(), "second-oldest backup should be pruned");
+        for path in &paths[2..] {
+            assert!(path.exists(), "recent backup pruned: {}", path.display());
+        }
+        assert!(keep_me.exists(), "non-.bkp files must be untouched");
+        assert!(current.exists(), "the active backup is never removed");
+
+        let remaining = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|ext| ext == "bkp"))
+            .count();
+        assert_eq!(remaining, MAX_BACKUP_FILES);
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn prune_is_a_noop_under_the_cap() {
+        let dir = std::env::temp_dir().join(format!("scope_bkp_noprune_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut paths = vec![];
+        for i in 0..MAX_BACKUP_FILES {
+            let path = dir.join(format!("session_{i:02}.txt.bkp"));
+            File::create(&path).unwrap();
+            paths.push(path);
+        }
+
+        prune_old_backups(&paths[0], MAX_BACKUP_FILES, &test_logger());
+
+        for path in &paths {
+            assert!(path.exists(), "nothing should be pruned at the cap");
+        }
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

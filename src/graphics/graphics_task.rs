@@ -9,7 +9,7 @@ use crate::interfaces::rtt_if::RttMode;
 use crate::{error, info, inputs, success};
 use crate::{
     infra::{
-        backup::Backup,
+        backup::{Backup, backup_path},
         blink::Blink,
         logger::{LogLevel, LogMessage, Logger},
         messages::TimedBytes,
@@ -587,7 +587,9 @@ impl GraphicsTask {
                                 let _ = private.recorder.rename(&filename);
                                 // Move the crash-recovery backup alongside the
                                 // renamed session so it keeps mirroring it.
-                                private.backup.rename(format!("{}.bkp", filename));
+                                private
+                                    .backup
+                                    .rename(backup_path(&format!("{}.bkp", filename)));
                                 save_stats.filename = recording_file
                                     .unwrap_or_else(|| private.typewriter.get_filename());
                                 success!(private.logger, "Session renamed to \"{}\"", filename);
@@ -933,7 +935,7 @@ impl GraphicsConnections {
         config: GraphicsConfig,
     ) -> Self {
         let backup = Backup::new(
-            format!("{}.bkp", config.storage_base_filename),
+            backup_path(&format!("{}.bkp", config.storage_base_filename)),
             logger.clone(),
         );
 
