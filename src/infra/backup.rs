@@ -29,7 +29,14 @@ fn backup_dir() -> PathBuf {
 /// the backup directory. Pure — creating the directory happens lazily on the
 /// worker thread right before the file is opened.
 pub fn backup_path(file_name: &str) -> String {
-    backup_dir().join(file_name).to_string_lossy().into_owned()
+    // Pin to the final path component. Session names are already sanitized
+    // upstream (`session::sanitize_name` rejects separators, `..`, etc.), but
+    // `PathBuf::join` would let an absolute or directory-bearing `file_name`
+    // escape the backup directory entirely, so keep the helper safe on its own.
+    let name = Path::new(file_name)
+        .file_name()
+        .unwrap_or_else(|| file_name.as_ref());
+    backup_dir().join(name).to_string_lossy().into_owned()
 }
 
 /// Commands handed to the background backup-writer thread.
@@ -211,10 +218,21 @@ fn prune_old_backups(current: &Path, keep: usize, logger: &Logger) {
 
     let mut others: Vec<(PathBuf, SystemTime)> = entries
         .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path != current && path.extension().is_some_and(|ext| ext == "bkp"))
-        .filter_map(|path| {
-            let modified = std::fs::metadata(&path).and_then(|meta| meta.modified()).ok()?;
+        .filter_map(|entry| {
+            let path = entry.path();
+            if path.as_path() == current || !path.extension().is_some_and(|ext| ext == "bkp") {
+                return None;
+            }
+            // One stat, straight off the directory entry. Skip anything that
+            // isn't a regular file so we never try to `remove_file` a directory
+            // named `*.bkp`; an unreadable mtime falls back to the epoch so the
+            // entry still counts toward the cap and stays a prune candidate
+            // rather than silently dodging it.
+            let meta = entry.metadata().ok()?;
+            if !meta.is_file() {
+                return None;
+            }
+            let modified = meta.modified().unwrap_or(SystemTime::UNIX_EPOCH);
             Some((path, modified))
         })
         .collect();
@@ -360,6 +378,17 @@ mod tests {
     }
 
     #[test]
+    fn backup_path_cannot_escape_the_backup_dir() {
+        // An absolute or directory-bearing name must collapse to its final
+        // component so it can't write outside the backup directory.
+        let base = backup_dir();
+        for name in ["../../etc/evil.bkp", "/tmp/evil.bkp", "sub/dir/evil.bkp"] {
+            let path = backup_path(name);
+            assert_eq!(Path::new(&path), base.join("evil.bkp"));
+        }
+    }
+
+    #[test]
     fn prune_removes_oldest_beyond_cap() {
         use std::time::{Duration, UNIX_EPOCH};
 
@@ -372,7 +401,8 @@ mod tests {
         for i in 0..12 {
             let path = dir.join(format!("session_{i:02}.txt.bkp"));
             let f = File::create(&path).unwrap();
-            f.set_modified(UNIX_EPOCH + Duration::from_secs(1_000 + i)).unwrap();
+            f.set_modified(UNIX_EPOCH + Duration::from_secs(1_000 + i))
+                .unwrap();
             paths.push(path);
         }
         // An unrelated file must be left untouched.
