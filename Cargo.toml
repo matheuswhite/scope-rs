@@ -35,8 +35,9 @@ ratatui = "0.26.1"
 crossterm = { version = "0.27.0", features = ["default", "event-stream"] }
 futures = "0.3.30"
 chrono = "0.4.23"
-serde = "1.0"
+serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
+toml = "0.8"
 rand = "0.8.6"
 clap = { version = "4.1.9", features = ["derive"] }
 mlua = { version = "0.9.6", features = ["lua54", "vendored", "async", "send"] }

@@ -15,6 +15,7 @@ use crate::interfaces::serial_if::SerialCommand;
 use crate::interfaces::{InterfaceCommand, InterfaceTask, InterfaceType};
 use clap::{Parser, Subcommand};
 use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
+use infra::config::Config;
 use infra::logger::Logger;
 use infra::mpmc::Channel;
 use infra::session;
@@ -317,15 +318,28 @@ fn main() -> Result<(), String> {
 
     let cli = Cli::parse();
 
-    let capacity = cli.capacity.unwrap_or(DEFAULT_CAPACITY);
-    let tag_file = cli.tag_file.unwrap_or(PathBuf::from(DEFAULT_TAG_FILE));
     let latency = cli.latency.unwrap_or(100).clamp(0, 100_000);
 
-    // Sanitize the session name into the same `result` flow so an invalid
-    // `--name` is reported through the shared `[ERR]` formatter below.
-    let result = match cli.name.as_deref().map(session::sanitize_name).transpose() {
-        Err(err) => Err(err),
-        Ok(name) => match cli.command {
+    // Everything that can fail fatally — loading `~/.config/scope/config.toml`,
+    // sanitizing `--name`, and running the chosen command — funnels into this
+    // single `result` so it's reported through the one `[ERR]` formatter below.
+    // Each setting resolves as CLI flag > config file > built-in default, and a
+    // malformed config is fatal so a typo is reported rather than silently
+    // ignored.
+    let result = (|| {
+        let config = Config::load()?;
+        let capacity = cli.capacity.or(config.capacity).unwrap_or(DEFAULT_CAPACITY);
+        let tag_file = cli
+            .tag_file
+            .or(config.tag_file)
+            .unwrap_or_else(|| PathBuf::from(DEFAULT_TAG_FILE));
+        let name = cli
+            .name
+            .as_deref()
+            .map(session::sanitize_name)
+            .transpose()?;
+
+        match cli.command {
             Commands::Serial { port, baudrate } => {
                 app_serial(capacity, tag_file, port, baudrate, latency, name)
             }
@@ -337,8 +351,8 @@ fn main() -> Result<(), String> {
                 target,
                 channel_num,
             } => app_rtt(capacity, tag_file, target, channel_num, latency, name),
-        },
-    };
+        }
+    })();
 
     if let Err(err) = result {
         eprintln!("[\x1b[31mERR\x1b[0m] {}", err);
