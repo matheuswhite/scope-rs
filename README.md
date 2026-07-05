@@ -42,6 +42,8 @@ greeting: Hello, World!
 
 Typing `@reset` or `@greeting` on the command bar expands the tag to its value before sending. A tag name is delimited by whitespace, another `@`, or a `"`. Press `Tab` to autocomplete a tag name from the tag file, and the list is filtered as you type. The tag file is watched and hot-reloaded, so edits take effect without restarting `Scope`.
 
+![Tags gif](videos/012_tags/video.gif)
+
 > [!NOTE]
 > Tag values are used verbatim. Prior to v0.3.0 `Scope` had a fixed "command" syntax; it was removed and superseded by these user-defined tags.
 
@@ -107,11 +109,15 @@ You can rename the current session at runtime with `!rename <name>`; the save fi
 
 ### Send a File
 
-Use `!send_file <path>` to stream the contents of a file to the target over the active interface (serial or RTT).
+Use `!send_file <path>` to stream the contents of a file to the target over the active interface (serial or RTT). `Scope` reports the transfer progress and a final confirmation on the history box.
+
+![Send file gif](videos/013_send_file/video.gif)
 
 ### Select, Copy and Clear
 
 Click and drag with the mouse to select text in the history, then press `Ctrl+C` to copy the selection to the system clipboard. `Ctrl+L` clears the screen.
+
+![Select, copy and clear gif](videos/014_select_copy/video.gif)
 
 ### Message Timestamp
 

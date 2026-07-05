@@ -56,6 +56,22 @@ feed() {
     printf '%b' "$1" >"$PORT_OUT"
 }
 
+# Inject an SGR mouse drag to select text: press at (COL_START,ROW), drag across,
+# release at (COL_END,ROW). scope renders the selection in reverse video; pair it
+# with `press C-c` to copy. Coordinates are 1-based terminal cells.
+# Usage: mouse_drag ROW COL_START COL_END
+mouse_drag() {
+    local row="$1" c1="$2" c2="$3" mid=$((($2 + $3) / 2))
+    tmux send-keys -t "$SESSION" -l "$(printf '\033[<0;%d;%dM' "$c1" "$row")"
+    sleep 0.2
+    tmux send-keys -t "$SESSION" -l "$(printf '\033[<32;%d;%dM' "$mid" "$row")"
+    sleep 0.2
+    tmux send-keys -t "$SESSION" -l "$(printf '\033[<32;%d;%dM' "$c2" "$row")"
+    sleep 0.2
+    tmux send-keys -t "$SESSION" -l "$(printf '\033[<0;%d;%dm' "$c2" "$row")"
+    sleep 0.3
+}
+
 # Stream `Hello, World!` lines colored with ANSI foreground colors. Colors are
 # cycled deterministically (not random) so re-recording produces the same cast.
 # $1 = number of lines.

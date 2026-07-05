@@ -1,0 +1,3 @@
+greeting: Hello, World!
+reset: AT+RST
+device_id: AT+ID?
