@@ -25,7 +25,7 @@ use crate::{
 };
 use arboard::Clipboard;
 use crossterm::{
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -483,8 +483,13 @@ impl GraphicsTask {
     ) {
         enable_raw_mode().expect("Cannot enable terminal raw mode");
         let mut stdout = io::stdout();
-        execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
-            .expect("Cannot enable alternate screen and mouse capture");
+        execute!(
+            stdout,
+            EnterAlternateScreen,
+            EnableMouseCapture,
+            EnableBracketedPaste
+        )
+        .expect("Cannot enable alternate screen, mouse capture and bracketed paste");
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend).expect("Cannot create terminal backend");
         let mut save_blink = Blink::new(Duration::from_millis(200), 2, Color::Reset, Color::Black);
@@ -857,9 +862,10 @@ impl GraphicsTask {
         execute!(
             terminal.backend_mut(),
             LeaveAlternateScreen,
-            DisableMouseCapture
+            DisableMouseCapture,
+            DisableBracketedPaste
         )
-        .expect("Cannot disable alternate screen and mouse capture");
+        .expect("Cannot disable alternate screen, mouse capture and bracketed paste");
         terminal.show_cursor().expect("Cannot show mouse cursor");
     }
 

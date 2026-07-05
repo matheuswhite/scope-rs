@@ -57,6 +57,8 @@ It's possible to retrieve old data sent. You can hit `Up Arrow` and `Down Arrow`
 
 Hit `Ctrl+F` to enter **search mode** and type a query to find it in the captured history. Press `Enter` or `Down Arrow` to jump to the next match and `Up Arrow` for the previous one. `Ctrl+W` toggles case sensitivity, and `Esc` leaves search mode.
 
+![Search gif](videos/015_search/video.gif)
+
 ### Auto Reconnect
 
 The `Scope` tool has an auto-reconnect feature. When the serial port isn't available, `Scope` will keep trying to reconnect to the serial port until it's available again.
@@ -115,7 +117,7 @@ Use `!send_file <path>` to stream the contents of a file to the target over the 
 
 ### Select, Copy and Clear
 
-Click and drag with the mouse to select text in the history, then press `Ctrl+C` to copy the selection to the system clipboard. `Ctrl+L` clears the screen.
+Click and drag with the mouse to select text in the history, then press `Ctrl+C` to copy the selection to the system clipboard. You can paste text into the command bar with your terminal's paste shortcut (`Scope` supports bracketed paste). `Ctrl+L` clears the screen.
 
 ![Select, copy and clear gif](videos/014_select_copy/video.gif)
 
@@ -163,6 +165,7 @@ Anything typed on the command bar that starts with `!` is a command. A line with
 | `Ctrl`+`S` | Save the whole session to a `.txt` file. |
 | `Ctrl`+`R` | Start / stop a record session. |
 | `Ctrl`+`C` | Copy the current selection to the clipboard. |
+| Terminal paste shortcut | Paste text into the command bar (via bracketed paste). |
 | `Ctrl`+`L` | Clear the screen. |
 | `Esc` | Leave search mode, or quit `Scope` when in normal mode. |
 | `PageUp` / `PageDown` | Scroll the history one page up / down. |
