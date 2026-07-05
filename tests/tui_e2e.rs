@@ -266,6 +266,33 @@ fn tag_autocomplete_lists_only_matching_tags() {
 }
 
 #[test]
+fn bracketed_paste_inserts_into_command_bar() {
+    // A terminal delivers a paste wrapped in the bracketed-paste markers
+    // (ESC[200~ ... ESC[201~). It must land in the command bar and be sendable.
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    tui.type_text("\x1b[200~hello world\x1b[201~");
+    tui.press_enter();
+
+    tui.wait_for("hello world\\r\\n", SETTLE);
+}
+
+#[test]
+fn bracketed_paste_strips_control_chars() {
+    // A multi-line paste must not inject newlines into the single-line command
+    // bar or submit on its own: the control chars are dropped, so "ab\ncd"
+    // becomes "abcd" and is only sent on the explicit Enter.
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    tui.type_text("\x1b[200~ab\ncd\x1b[201~");
+    tui.press_enter();
+
+    tui.wait_for("abcd\\r\\n", SETTLE);
+}
+
+#[test]
 fn screen_recovers_after_external_clear() {
     // Regression for issue #166: an external terminal clear (e.g. Cmd+K in Zed's
     // terminal) wipes the grid without notifying the app, leaving ratatui's diff

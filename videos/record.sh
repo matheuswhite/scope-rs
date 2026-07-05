@@ -49,11 +49,22 @@ spawn_socat
 # (`!plugin load plugins/echo.lua`), since scope runs with cwd = $WORK.
 [ -d "$HERE/plugins" ] && cp -R "$HERE/plugins" "$WORK/plugins"
 
+# Per-demo assets (e.g. a tags.yml or a file to `!send_file`) land in the
+# working dir so a demo can reference them by their bare name.
+[ -d "$HERE/$DEMO/assets" ] && cp -R "$HERE/$DEMO/assets/." "$WORK/"
+
+# Optional per-demo options: a demo may set SCOPE_ARGS (extra global flags
+# passed before the `serial` subcommand, e.g. `-l 100000` to slow the poll loop
+# so a file transfer's progress is visible).
+SCOPE_ARGS=""
+# shellcheck source=/dev/null
+[ -f "$HERE/$DEMO/opts.env" ] && source "$HERE/$DEMO/opts.env"
+
 # scope runs with cwd = $WORK and port arg "COM1", so the title bar reads "COM1"
 # (the link lives in $WORK). asciinema stops when scope exits, writing the cast.
 rm -f "$CAST"
 tmux new-session -d -s "$SESSION" -x "$COLS" -y "$ROWS" \
-    "cd '$WORK' && TERM=xterm-256color asciinema rec --overwrite -c '$SCOPE_BIN serial COM1 0' '$CAST'"
+    "cd '$WORK' && TERM=xterm-256color asciinema rec --overwrite -c '$SCOPE_BIN $SCOPE_ARGS serial COM1 0' '$CAST'"
 
 # Wait for scope to come up and connect before driving it.
 sleep 2

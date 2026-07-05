@@ -603,6 +603,50 @@ impl InputsTask {
         new_text
     }
 
+    /// Insert clipboard text delivered by the terminal's bracketed paste at the
+    /// cursor (e.g. after the user hits the terminal's paste shortcut). Control
+    /// characters are dropped so a multi-line paste can't inject newlines into
+    /// the single-line command bar or submit on its own.
+    fn handle_paste(
+        private: &mut InputsConnections,
+        shared: Arc<RwLock<InputsShared>>,
+        data: String,
+    ) {
+        let text: String = data.chars().filter(|c| !c.is_control()).collect();
+        if text.is_empty() {
+            return;
+        }
+
+        let mut sw = shared.write().expect("Cannot get input lock for write");
+        match sw.mode {
+            InputMode::Normal => {
+                sw.current_hint = None;
+                let at = sw.cursor.min(sw.command_line.chars().count());
+                let mut chars: Vec<char> = sw.command_line.chars().collect();
+                for (i, c) in text.chars().enumerate() {
+                    chars.insert(at + i, c);
+                }
+                sw.command_line = chars.into_iter().collect();
+                sw.cursor = at + text.chars().count();
+                Self::update_tag_list(&mut sw, private);
+                private.history.reset_index();
+            }
+            InputMode::Search => {
+                let at = sw.search_cursor.min(sw.search_buffer.chars().count());
+                let mut chars: Vec<char> = sw.search_buffer.chars().collect();
+                for (i, c) in text.chars().enumerate() {
+                    chars.insert(at + i, c);
+                }
+                sw.search_buffer = chars.into_iter().collect();
+                sw.search_cursor = at + text.chars().count();
+                Self::update_tag_list(&mut sw, private);
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::SearchChange);
+            }
+        }
+    }
+
     fn handle_tab_input(private: &mut InputsConnections, shared: Arc<RwLock<InputsShared>>) {
         let mut sw = shared.write().expect("Cannot get input lock for write");
 
@@ -1285,7 +1329,9 @@ impl InputsTask {
                     }
                     _ => {}
                 },
-                event::Event::Paste(_) => {}
+                event::Event::Paste(data) => {
+                    Self::handle_paste(&mut private, shared.clone(), data);
+                }
                 event::Event::Resize(_, _) => {}
                 _ => continue 'input_loop,
             }
