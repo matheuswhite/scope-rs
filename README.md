@@ -8,34 +8,52 @@
 
 <p align="center">
     <a href="#send-data">Key Features</a> •
-    <a href="#scope-vs-others">Scope vs Other</a> •
+    <a href="#command-reference">Commands</a> •
+    <a href="#keyboard--mouse-shortcuts">Shortcuts</a> •
+    <a href="#scope-vs-others">Scope vs Others</a> •
     <a href="#installation">Installation</a> •
-    <a href="#how-to-use">How to Use</a> •
-    <a href="#project-goals">Project Goals</a>
+    <a href="#command-line-options">CLI</a> •
+    <a href="#configuration-file">Config</a> •
+    <a href="#plugins">Plugins</a>
 </p>
+
+## Key Features
 
 ### Send Data
 
-With `Scope`, you can type a message on the command bar (at bottom) and hit `Enter` to send it through the serial port.
+With `Scope`, you can type a message on the command bar (at bottom) and hit `Enter` to send it through the serial port. Every message is terminated with `\r\n`; hold `Alt` (`Ctrl` on Windows) while pressing `Enter` to send the text **without** the trailing `\r\n`.
 
 ![Send data gif](videos/001_send_data/video.gif)
 
 ### Send in Hexadecimal
 
-You also can send bytes in hexadecimal. To do it, type `$` and write your bytes in a hexadecimal format. The message can have spaces and commas as separators (`Scope` will send the bytes of message without spaces and commas).
+You also can send bytes in hexadecimal. To do it, type `$` and write your bytes in a hexadecimal format. Inside a `$` sequence you may use `,`, `_`, `-`, `.` and spaces as separators between bytes (they are ignored when the bytes are sent), and a new `$` starts another sequence. For example, `$48 65 6c 6c 6f`, `$48,65,6c,6c,6f` and `$48$65$6c$6c$6f` all send `Hello`.
 
 ![Send hex gif](videos/002_hexa/video.gif)
 
-### Send Commands
+### Tags
 
-> [!WARNING]
-> The commands were removed at v0.3.0 and will be replaced for `tag` syntax in future versions. The `tag` syntax will be more powerful and flexible than commands.
+Instead of retyping the same values over and over, you can define **tags** and reference them with `@`. Tags live in a YAML tag file (`tags.yml` by default, or the file passed with `-t/--tag-file`), written as a simple `name: value` map:
+
+```yaml
+reset: $01 02 03
+greeting: Hello, World!
+```
+
+Typing `@reset` or `@greeting` on the command bar expands the tag to its value before sending. A tag name is delimited by whitespace, another `@`, or a `"`. Press `Tab` to autocomplete a tag name from the tag file, and the list is filtered as you type. The tag file is watched and hot-reloaded, so edits take effect without restarting `Scope`.
+
+> [!NOTE]
+> Tag values are used verbatim. Prior to v0.3.0 `Scope` had a fixed "command" syntax; it was removed and superseded by these user-defined tags.
 
 ### Written History
 
-It's possible to retrieve old data sent. You can hit `Up Arrow` and `Down Arrow` to navigate through the history of sent data.
+It's possible to retrieve old data sent. You can hit `Up Arrow` and `Down Arrow` to navigate through the history of sent messages. The history is persisted between runs in a `.scope_history` file, so it survives restarts.
 
 ![Command history](videos/004_history/video.gif)
+
+### Search
+
+Hit `Ctrl+F` to enter **search mode** and type a query to find it in the captured history. Press `Enter` or `Down Arrow` to jump to the next match and `Up Arrow` for the previous one. `Ctrl+W` toggles case sensitivity, and `Esc` leaves search mode.
 
 ### Auto Reconnect
 
@@ -63,7 +81,19 @@ type `!serial connect COM4 9600` to set serial port to `COM4` and baud rate to `
 
 ![Setup serial port](videos/008_setup_serial/video.gif)
 
-### Save history
+You can also set hardware/software flow control with `!serial flow <none|sw|hw>`. When you don't want to type the interface name, the generic `!connect`, `!disconnect` and `!flow` commands act on whichever interface is currently active.
+
+### RTT Interface
+
+Besides a serial port, `Scope` can talk to an embedded target over [RTT](https://wiki.segger.com/RTT) using [`probe-rs`](https://probe.rs/). Start it from the CLI with `scope rtt <target> <channel>` (for example `scope rtt STM32F303 0`).
+
+While connected you can:
+
+- `!rtt connect [<target>] [<channel>]` — connect or reconfigure the RTT session (same omit-arguments rules as `!serial connect`).
+- `!rtt disconnect` — detach from the target.
+- `!rtt read <address> [<size>]` — read `size` bytes (default `4`) from the target's memory. The address may be hexadecimal (`0x...`) or decimal.
+
+### Save and Record
 
 To save the all messages captured (and sent) since the start, you can hit `Ctrl+s`. The history box will blink and a message will be displayed on history. The filename is shown at top of history box with `.txt` extension. There is, at the history's top-right corner, the size of all message captured.
 
@@ -72,6 +102,16 @@ To save the all messages captured (and sent) since the start, you can hit `Ctrl+
 However, if you want to save only the message captured from now, you'll use the record feature. Hitting `Ctrl+r`, you'll start a record session. While in a record session, the history block is yellow and the `Scope` will store all messages captured from now. To stop the record session, you need to hit `Ctrl+r` again. The right-corner indicator will show the size of the record session. A new filename is created each time a new record session is started. Both: start session and stop session, prints a message on the history box to indicate when it occurs.
 
 ![Save record](videos/010_record/video.gif)
+
+You can rename the current session at runtime with `!rename <name>`; the save file (and any crash-recovery backup) follows the new name. To guard against an accidental close or a crash, `Scope` also mirrors the running session to a `.bkp` file under the user config directory (e.g. `~/.config/scope/backup/`), keeping the most recent backups.
+
+### Send a File
+
+Use `!send_file <path>` to stream the contents of a file to the target over the active interface (serial or RTT).
+
+### Select, Copy and Clear
+
+Click and drag with the mouse to select text in the history, then press `Ctrl+C` to copy the selection to the system clipboard. `Ctrl+L` clears the screen.
 
 ### Message Timestamp
 
@@ -82,13 +122,53 @@ format: `HH:MM:SS.ms`.
 
 You can use `Scope` on multiple platforms, like: Linux, Windows and macOS (Apple Silicon).
 
-### History Navigation
+## Command Reference
 
-You can navigate through the message history using the mouse wheel or hitting `PageUp` and `PageDown`.
+Anything typed on the command bar that starts with `!` is a command. A line without `!` is sent as data (after expanding `@tags` and `$hex`).
 
-### Plugins
+| Command | Description |
+|---------|-------------|
+| `!serial connect [<port>] [<baud>]` | Connect/reconfigure the serial port. A numeric argument is the baud rate, otherwise it's the port; omit either to keep the current value. |
+| `!serial disconnect` | Release the serial port. |
+| `!serial flow <none\|sw\|hw>` | Set flow control: none, software (`sw`) or hardware (`hw`). |
+| `!rtt connect [<target>] [<channel>]` | Connect/reconfigure the RTT session (numeric argument is the channel). |
+| `!rtt disconnect` | Detach from the RTT target. |
+| `!rtt read <address> [<size>]` | Read `size` bytes (default `4`) from target memory. Address is hex (`0x..`) or decimal. |
+| `!connect` / `!disconnect` / `!flow <...>` | Same as above but on whichever interface is currently active. |
+| `!rename <name>` | Rename the current session record file (and its backup). |
+| `!send_file <path>` | Stream a file to the target over the active interface. |
+| `!log <module> <level>` | Set the log level. `<module>` is `system` (`sys`) or a plugin name; `<level>` is one of `debug`, `info`, `success`, `warning`, `error`. |
+| `!plugin load <file>` | Load a Lua plugin from a file. |
+| `!plugin reload <file>` | Reload a plugin from a file. |
+| `!plugin unload <name>` | Unload a plugin by name. |
+| `!<plugin> <command> [args...]` | Call a command exported by a loaded plugin (see [Plugins](#plugins)). |
 
-You can extend the basic functions of `Scope` using plugins! Plugins are scripts written in `lua` language. The code below shows a plugin that appends `Received:` at the beginning of received message. It also sends `Hello, World\r\n` via serial and the user type `!echo hello` (if the plugin name is `echo.lua`) on the command bar.
+## Keyboard & Mouse Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Enter` | Send the message / run the command. In search mode: next match. |
+| `Alt`+`Enter` (`Ctrl`+`Enter` on Windows) | Send without the trailing `\r\n`. In search mode: previous match. |
+| `Up` / `Down` | Navigate the command history. In search mode: previous / next match. |
+| `Ctrl`+`F` | Toggle search mode. |
+| `Ctrl`+`W` | In search mode: toggle case sensitivity. |
+| `Tab` | Autocomplete a `@tag` from the tag file. |
+| `Ctrl`+`S` | Save the whole session to a `.txt` file. |
+| `Ctrl`+`R` | Start / stop a record session. |
+| `Ctrl`+`C` | Copy the current selection to the clipboard. |
+| `Ctrl`+`L` | Clear the screen. |
+| `Esc` | Leave search mode, or quit `Scope` when in normal mode. |
+| `PageUp` / `PageDown` | Scroll the history one page up / down. |
+| `Alt`+`PageUp` / `Alt`+`PageDown` (`Ctrl` on Windows) | Jump to the start / end of the history. |
+| `Home` / `End` | Move the cursor to the start / end of the input. |
+| `Ctrl`+`Left` / `Ctrl`+`Right` (`Alt` on macOS) | Move the cursor one word left / right. |
+| `Backspace` / `Delete` | Delete the character before / at the cursor. |
+| Mouse wheel | Scroll the history (hold `Ctrl` to scroll horizontally). |
+| Mouse drag | Select text (copy it with `Ctrl`+`C`). |
+
+## Plugins
+
+You can extend the basic functions of `Scope` using plugins! Plugins are scripts written in `lua` language. The code below shows a plugin that appends `Received:` at the beginning of received message. It also prints `Hello, World!` when the user types `!echo hello` (if the plugin file is `echo.lua`).
 
 ```lua
 local log = require("scope").log
@@ -107,7 +187,7 @@ end
 return M
 ```
 
-To call your plugin you need to type `!` followed by your plugin name and a list of arguments. Inside your plugin, is possible to do many action to interact with `Scope` and serial port, such as: connect to a serial port, disconnect from the serial port, send data to serial port, print some message in `Scope` text view and so on. For more information about the development of plugins for `Scope` you can read the [Plugins Developer Guide](plugins/README.md).
+Load a plugin with `!plugin load <file>` (and `!plugin reload <file>` / `!plugin unload <name>` to reload or remove it). To call one of your plugin's commands, type `!` followed by the plugin name, the command name and its arguments — for example `!echo hello`. Inside a plugin you can react to lifecycle and I/O events (`on_load`, `on_unload`, `on_serial_recv`/`on_serial_send`, `on_rtt_recv`/`on_rtt_send`) and interact with `Scope` and the target: connect/disconnect, send data, read RTT memory, print messages, run shell commands and more. For the full guide see the [Plugins Developer Guide](plugins/README.md).
 
 ![Plugin usage](videos/011_plugin/video.gif)
 
@@ -119,7 +199,7 @@ The `Scope` combine multiple features. The table below list these features:
 |-----------------------------|--------------|-----------|---------|-----------|----------|----------|
 | Send Data                   | ✅            | ✅        | ✅       | ✅         | ✅        | ✅        |
 | Send in Hexadecimal         | ✅            | ✅        | x        | x         | x        | x        |
-| Send Commands               | x[^1]         | ✅        | x       | x          | x        | x        |
+| Tags / Macros               | ✅[^1]        | ✅        | x       | x          | x        | x        |
 | Written History             | ✅            | ✅[^2]    | x        | x         | x        | x        |
 | Auto Reconnect              | ✅            | ✅        | x        | ✅         | x        | x        |
 | Colorful                    | ✅            | x         | x       | ✅         | ✅        | ✅        |
@@ -130,7 +210,7 @@ The `Scope` combine multiple features. The table below list these features:
 | Interface                   | TUI           | GUI       | GUI     | GUI       | Terminal | Terminal |
 | Price                       | Free          | €69       | Free    | Free      | Free     | Free     |
 
-<br>[^1]: Will be replaced by `tag` syntax in next versions
+<br>[^1]: User-defined `@tags` replaced the old fixed command syntax that was removed at v0.3.0
 <br>[^2]: The Docklight has a list of commands in lateral panel, so it doesn't need a command history
 
 ## Installation
@@ -142,6 +222,39 @@ You can use `cargo` to install `Scope`, download a pre-built binary at [Releases
 ```shell
 cargo install scope-monitor
 ```
+
+## Command-Line Options
+
+`Scope` is invoked as `scope [OPTIONS] <COMMAND>`.
+
+Commands:
+
+| Command | Description |
+|---------|-------------|
+| `serial [<port>] [<baudrate>]` | Open a serial port (e.g. `scope serial COM3 115200`). |
+| `rtt [<target>] [<channel>]` | Attach to an RTT target via `probe-rs` (e.g. `scope rtt STM32F303 0`). |
+| `list [-v\|--verbose]` | List the available serial ports. |
+| `ble <name> <mtu>` | *(Not yet implemented.)* |
+
+Global options (given before the command):
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `-c, --capacity <N>` | `2000` | Number of scrollback lines kept in memory. |
+| `-t, --tag-file <PATH>` | `tags.yml` | Path to the tag file (see [Tags](#tags)). |
+| `-l, --latency <MS>` | `100` | Polling latency in milliseconds (clamped to `0..=100000`). |
+| `-n, --name <NAME>` | timestamp | Base name for the session record file. |
+
+## Configuration File
+
+The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It currently supports the `capacity` and `tag_file` fields:
+
+```toml
+capacity = 5000
+tag_file = "/home/user/.config/scope/tags.yml"
+```
+
+Values resolve as **CLI flag > `config.toml` > built-in default**, so a flag always wins over the file, and the file wins over the defaults. A missing file (or a missing field) just falls back to the defaults; a malformed file or an unknown key is reported as an error. Paths are used verbatim — `~` and environment variables are **not** expanded, so use an absolute path.
 
 ## How to Use
 
