@@ -21,7 +21,7 @@
 
 ### Send Data
 
-With `Scope`, you can type a message on the command bar (at bottom) and hit `Enter` to send it through the serial port. Every message is terminated with `\r\n`; hold `Alt` (`Ctrl` on Windows) while pressing `Enter` to send the text **without** the trailing `\r\n`.
+With `Scope`, you can type a message on the command bar (at bottom) and hit `Enter` to send it through the serial port. Every message is terminated with `\r\n`; hold `Alt` while pressing `Enter` to send the text **without** the trailing `\r\n`.
 
 ![Send data gif](videos/001_send_data/video.gif)
 
@@ -81,7 +81,7 @@ type `!serial connect COM4 9600` to set serial port to `COM4` and baud rate to `
 
 ![Setup serial port](videos/008_setup_serial/video.gif)
 
-You can also set hardware/software flow control with `!serial flow <none|sw|hw>`. When you don't want to type the interface name, the generic `!connect`, `!disconnect` and `!flow` commands act on whichever interface is currently active.
+You can also set hardware/software flow control with `!serial flow <none|sw|hw>` (flow control applies to serial only). When you don't want to type the interface name, the generic `!connect` and `!disconnect` commands act on whichever interface is currently active.
 
 ### RTT Interface
 
@@ -134,7 +134,7 @@ Anything typed on the command bar that starts with `!` is a command. A line with
 | `!rtt connect [<target>] [<channel>]` | Connect/reconfigure the RTT session (numeric argument is the channel). |
 | `!rtt disconnect` | Detach from the RTT target. |
 | `!rtt read <address> [<size>]` | Read `size` bytes (default `4`) from target memory. Address is hex (`0x..`) or decimal. |
-| `!connect` / `!disconnect` / `!flow <...>` | Same as above but on whichever interface is currently active. |
+| `!connect` / `!disconnect` | Connect / disconnect whichever interface is currently active. |
 | `!rename <name>` | Rename the current session record file (and its backup). |
 | `!send_file <path>` | Stream a file to the target over the active interface. |
 | `!log <module> <level>` | Set the log level. `<module>` is `system` (`sys`) or a plugin name; `<level>` is one of `debug`, `info`, `success`, `warning`, `error`. |
@@ -148,7 +148,8 @@ Anything typed on the command bar that starts with `!` is a command. A line with
 | Shortcut | Action |
 |----------|--------|
 | `Enter` | Send the message / run the command. In search mode: next match. |
-| `Alt`+`Enter` (`Ctrl`+`Enter` on Windows) | Send without the trailing `\r\n`. In search mode: previous match. |
+| `Alt`+`Enter` | Send without the trailing `\r\n`. |
+| `Alt`+`Enter` (`Ctrl`+`Enter` on Windows) | In search mode: previous match. |
 | `Up` / `Down` | Navigate the command history. In search mode: previous / next match. |
 | `Ctrl`+`F` | Toggle search mode. |
 | `Ctrl`+`W` | In search mode: toggle case sensitivity. |
@@ -242,7 +243,7 @@ Global options (given before the command):
 |--------|---------|-------------|
 | `-c, --capacity <N>` | `2000` | Number of scrollback lines kept in memory. |
 | `-t, --tag-file <PATH>` | `tags.yml` | Path to the tag file (see [Tags](#tags)). |
-| `-l, --latency <MS>` | `100` | Polling latency in milliseconds (clamped to `0..=100000`). |
+| `-l, --latency <US>` | `100` | Polling latency in microseconds (clamped to `0..=100000`). |
 | `-n, --name <NAME>` | timestamp | Base name for the session record file. |
 
 ## Configuration File
