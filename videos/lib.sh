@@ -56,17 +56,18 @@ feed() {
     printf '%b' "$1" >"$PORT_OUT"
 }
 
-# Stream `Hello, World!` lines colored with random ANSI foreground colors.
+# Stream `Hello, World!` lines colored with ANSI foreground colors. Colors are
+# cycled deterministically (not random) so re-recording produces the same cast.
 # $1 = number of lines.
 ansi_feed() {
-    local lines="$1" i j color msg
+    local lines="$1" i j msg idx=0
     local colors=('\x1b[31m' '\x1b[32m' '\x1b[33m' '\x1b[34m' '\x1b[35m' '\x1b[36m' '\x1b[37m')
     for ((i = 0; i < lines; i++)); do
         sleep 0.5
         msg=""
         for ((j = 0; j < 3; j++)); do
-            color="${colors[$((RANDOM % 7))]}"
-            msg+="${color}Hello, World!\x1b[0m "
+            msg+="${colors[idx % ${#colors[@]}]}Hello, World!\x1b[0m "
+            idx=$((idx + 1))
         done
         feed "${msg}\r\n"
     done
@@ -102,5 +103,14 @@ spawn_socat() {
     # not by the link disappearing).
     (cd "$WORK" && exec socat PTY,link=COM1,raw,echo=0 PTY,link=COM1_out,raw,echo=0 >/dev/null 2>&1) &
     echo $! >"$WORK/socat.pid"
-    until [ -e "$WORK/COM1" ] && [ -e "$WORK/COM1_out" ]; do sleep 0.05; done
+    # Fail fast instead of hanging forever if socat can't create the links.
+    local tries=0
+    until [ -e "$WORK/COM1" ] && [ -e "$WORK/COM1_out" ]; do
+        sleep 0.05
+        tries=$((tries + 1))
+        if [ "$tries" -ge 100 ]; then
+            echo "socat did not create the serial port links within 5s" >&2
+            return 1
+        fi
+    done
 }

@@ -10,7 +10,6 @@
 #
 # Requires: socat, tmux, asciinema, agg.
 
-SHELL := /bin/bash
 DEMOS := $(sort $(patsubst %/steps.sh,%,$(wildcard */steps.sh)))
 
 .PHONY: all clean $(DEMOS)

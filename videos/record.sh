@@ -68,6 +68,13 @@ for _ in $(seq 1 50); do
     sleep 0.2
 done
 
+# A session still alive means scope never exited: asciinema hasn't flushed a
+# complete cast, so fail loudly rather than render a truncated GIF.
+if tmux has-session -t "$SESSION" 2>/dev/null; then
+    echo "scope did not exit after Escape — demo likely broken, cast is incomplete" >&2
+    exit 1
+fi
+
 [ -f "$CAST" ] || { echo "recording failed: no cast produced" >&2; exit 1; }
 # Cap long idle stretches so the loop stays snappy without dropping the
 # deliberate pauses in the demos.
