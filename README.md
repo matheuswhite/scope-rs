@@ -7,7 +7,7 @@
 </p>
 
 <p align="center">
-    <a href="#send-data">Key Features</a> •
+    <a href="#key-features">Key Features</a> •
     <a href="#command-reference">Commands</a> •
     <a href="#keyboard--mouse-shortcuts">Shortcuts</a> •
     <a href="#scope-vs-others">Scope vs Others</a> •
