@@ -1,19 +1,23 @@
-.ONESHELL:
+# Regenerate the README demo GIFs.
+#
+# Each demo lives in NNN_name/steps.sh and is recorded headlessly by record.sh
+# (socat virtual serial port + tmux + asciinema + agg) — no focused window or
+# real hardware needed. Build the release binary first (cargo build --release).
+#
+#   make            # (re)record every demo
+#   make 006_ansi   # record a single demo
+#   make clean      # remove generated casts and gifs
+#
+# Requires: socat, tmux, asciinema, agg.
 
-VIDEO_DIRS := $(filter-out plugins/video.gif, $(filter-out __pycache__/video.gif, $(addsuffix video.gif, $(dir $(wildcard */)))))
+DEMOS := $(sort $(patsubst %/steps.sh,%,$(wildcard */steps.sh)))
 
-.PHONY: all setup clean
+.PHONY: all clean $(DEMOS)
 
-all: setup ${VIDEO_DIRS}
+all: $(DEMOS)
 
-setup:
-	socat PTY,link=COM1,raw,echo=0 PTY,link=COM1_out,raw &
+$(DEMOS):
+	./record.sh $@
 
 clean:
-	rm -f ${VIDEO_DIRS}
-
-%/video.gif: % %/video.py
-	rm -rf $</video.cast
-	. .venv/bin/activate; python $</video.py &
-	asciinema rec -c "scope serial COM1 0" $</video.cast
-	agg $</video.cast $</video.gif
+	rm -f */video.cast */video.gif
