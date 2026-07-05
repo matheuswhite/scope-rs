@@ -1,5 +1,6 @@
 pub mod backup;
 pub mod blink;
+pub mod config;
 pub mod logger;
 pub mod messages;
 pub mod mpmc;
