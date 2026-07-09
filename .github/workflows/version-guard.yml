@@ -1,0 +1,53 @@
+name: version-guard
+
+# Bumping the crate version in Cargo.toml triggers the automated release
+# pipeline (release.yml runs on a push to `main` that touches Cargo.toml:
+# it tags the release, publishes to crates.io and uploads binaries). To keep
+# that a maintainer-only action, this check fails any pull request that changes
+# the `version` field.
+#
+# Maintainer escape hatch: add the `release` label to a PR to allow the version
+# bump (e.g. the release PR itself).
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    types: [ opened, synchronize, reopened, labeled, unlabeled ]
+
+permissions:
+  contents: read
+
+jobs:
+  no-version-bump:
+    name: Version bump is maintainer-only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fail if the crate version changed
+        env:
+          LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+
+          if printf '%s' "$LABELS" | grep -q '"release"'; then
+            echo "PR carries the 'release' label — version bump allowed."
+            exit 0
+          fi
+
+          extract() { grep -E -m1 '^version[[:space:]]*=' | sed -E 's/.*"([^"]+)".*/\1/'; }
+
+          git fetch --no-tags --depth=1 origin "$BASE_REF"
+          BASE_VERSION="$(git show "FETCH_HEAD:Cargo.toml" | extract)"
+          PR_VERSION="$(extract < Cargo.toml)"
+
+          echo "base ($BASE_REF): $BASE_VERSION"
+          echo "this PR:          $PR_VERSION"
+
+          if [ "$PR_VERSION" != "$BASE_VERSION" ]; then
+            echo "::error file=Cargo.toml::Crate version changed ($BASE_VERSION -> $PR_VERSION). Version bumps trigger an automated release and are maintainer-only. Please revert the version in Cargo.toml — the maintainer bumps it at release time. (Maintainers: add the 'release' label to allow this.)"
+            exit 1
+          fi
+
+          echo "Crate version unchanged ($BASE_VERSION). OK."
