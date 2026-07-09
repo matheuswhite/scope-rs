@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/matheuswhite/scope-rs/issues
+    about: For general questions, search existing issues first, then open a new one.
+  - name: Plugin development
+    url: https://github.com/matheuswhite/scope-rs/blob/main/plugins/README.md
+    about: Building a plugin? Start with the Plugins Developer Guide.
