@@ -20,7 +20,7 @@
     <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
-![Scope in action](videos/006_ansi/video.gif)
+![Scope in action](videos/000_hero/video.gif)
 
 ## Why Scope
 

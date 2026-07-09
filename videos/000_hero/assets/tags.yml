@@ -1,0 +1,3 @@
+reset: AT+RST
+device_id: AT+ID?
+version: AT+VER?
