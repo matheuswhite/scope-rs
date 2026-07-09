@@ -7,31 +7,83 @@
 </p>
 
 <p align="center">
-    <a href="#key-features">Key Features</a> •
+    <a href="#why-scope">Why Scope</a> •
+    <a href="#installation">Installation</a> •
+    <a href="#quickstart">Quickstart</a> •
+    <a href="#features">Features</a> •
     <a href="#command-reference">Commands</a> •
     <a href="#keyboard--mouse-shortcuts">Shortcuts</a> •
-    <a href="#scope-vs-others">Scope vs Others</a> •
-    <a href="#installation">Installation</a> •
     <a href="#command-line-options">CLI</a> •
     <a href="#configuration-file">Config</a> •
-    <a href="#plugins">Plugins</a>
+    <a href="#plugins">Plugins</a> •
+    <a href="#scope-vs-others">Comparison</a> •
+    <a href="#troubleshooting">Troubleshooting</a>
 </p>
 
-## Key Features
+![Scope in action](videos/000_hero/video.gif)
 
-### Send Data
+## Why Scope
 
-With `Scope`, you can type a message on the command bar (at bottom) and hit `Enter` to send it through the serial port. Every message is terminated with `\r\n`; hold `Alt` while pressing `Enter` to send the text **without** the trailing `\r\n`.
+Embedded and hardware work means living in a serial monitor — and most of them either do too little (`screen`, `cat /dev/tty*`) or lock the useful parts behind a paid GUI. `Scope` is a fast, keyboard-driven terminal serial monitor that puts the everyday essentials in one place: colored send/receive with timestamps, reusable `@tags` and hex input, search, session recording, auto-reconnect, an RTT interface for embedded targets, and Lua plugins when you need to script it. It runs the same on Linux, Windows, and macOS.
+
+## Installation
+
+You can install `Scope` with `cargo`, download a pre-built binary, or build it from source.
+
+### Requirements
+
+- **Platforms:** Linux, Windows, and macOS (Apple Silicon).
+- **Building from source / `cargo install`:** Rust **1.92.0** or newer.
+- **RTT interface:** a debug probe supported by [`probe-rs`](https://probe.rs/) (e.g. J-Link, ST-Link, CMSIS-DAP).
+
+### Using `cargo`
+
+```shell
+cargo install scope-monitor
+```
+
+### Pre-built binary
+
+Download the binary for your platform from the [Releases](https://github.com/matheuswhite/scope-rs/releases) page and place it on your `PATH`.
+
+### From source
+
+```shell
+git clone https://github.com/matheuswhite/scope-rs
+cd scope-rs
+cargo build --release
+# the binary is at target/release/scope
+```
+
+## Quickstart
+
+Open a serial port by passing it to the `serial` subcommand together with the baud rate:
+
+```shell
+scope serial COM3 115200        # Windows
+scope serial /dev/ttyUSB0 115200  # Linux
+scope list                      # not sure of the port? list the available ones
+```
+
+When the command bar at the bottom turns **green**, `Scope` is connected: it starts capturing incoming messages and lets you type and send data. Type a message and press `Enter` to send it. That's it — everything below builds on this loop.
+
+## Features
+
+### Sending data
+
+#### Send Data
+
+Type a message on the command bar (at the bottom) and press `Enter` to send it through the serial port. Every message is terminated with `\r\n`; hold `Alt` while pressing `Enter` to send the text **without** the trailing `\r\n`.
 
 ![Send data gif](videos/001_send_data/video.gif)
 
-### Send in Hexadecimal
+#### Send in Hexadecimal
 
-You also can send bytes in hexadecimal. To do it, type `$` and write your bytes in a hexadecimal format. Inside a `$` sequence you may use `,`, `_`, `-`, `.` and spaces as separators between bytes (they are ignored when the bytes are sent), and a new `$` starts another sequence. For example, `$48 65 6c 6c 6f`, `$48,65,6c,6c,6f` and `$48$65$6c$6c$6f` all send `Hello`.
+You can also send raw bytes in hexadecimal. Type `$` and write your bytes in a hexadecimal format. Inside a `$` sequence you may use `,`, `_`, `-`, `.` and spaces as separators between bytes (they are ignored when the bytes are sent), and a new `$` starts another sequence. For example, `$48 65 6c 6c 6f`, `$48,65,6c,6c,6f` and `$48$65$6c$6c$6f` all send `Hello`.
 
 ![Send hex gif](videos/002_hexa/video.gif)
 
-### Tags
+#### Tags
 
 Instead of retyping the same values over and over, you can define **tags** and reference them with `@`. Tags live in a YAML tag file (`tags.yml` by default, or the file passed with `-t/--tag-file`), written as a simple `name: value` map:
 
@@ -47,47 +99,57 @@ Typing `@reset` or `@greeting` on the command bar expands the tag to its value b
 > [!NOTE]
 > Tag values are used verbatim. Prior to v0.3.0 `Scope` had a fixed "command" syntax; it was removed and superseded by these user-defined tags.
 
-### Written History
+#### Command History
 
-It's possible to retrieve old data sent. You can hit `Up Arrow` and `Down Arrow` to navigate through the history of sent messages. The history is persisted between runs in a `.scope_history` file, so it survives restarts.
+You can recall data you sent earlier: press `Up Arrow` and `Down Arrow` to navigate through the history of sent messages. The history is persisted between runs in a `.scope_history` file, so it survives restarts.
 
 ![Command history](videos/004_history/video.gif)
 
-### Search
+#### Send a File
 
-Hit `Ctrl+F` to enter **search mode** and type a query to find it in the captured history. Press `Enter` or `Down Arrow` to jump to the next match and `Up Arrow` for the previous one. `Ctrl+W` toggles case sensitivity, and `Esc` leaves search mode.
+Use `!send_file <path>` to stream the contents of a file to the target over the active interface (serial or RTT). `Scope` reports the transfer progress and a final confirmation on the history box.
 
-![Search gif](videos/015_search/video.gif)
+![Send file gif](videos/013_send_file/video.gif)
 
-### Auto Reconnect
+### Reading and display
 
-The `Scope` tool has an auto-reconnect feature. When the serial port isn't available, `Scope` will keep trying to reconnect to the serial port until it's available again.
+#### Colorful Output
 
-![Reconnect gif](videos/005_reconnect/video.gif)
-
-> [!NOTE]
-> There are some issues for auto reconnect in Windows version.
-
-### Colorful
-
-`Scope` colors the command bar to notify the status of the serial connection: red to disconnected and green to connected. Beyond status, the content read and written are colored too. The messages read is colored using ANSI terminal color standard.
+`Scope` colors the command bar to signal the status of the serial connection: red when disconnected, green when connected. The content read and written is colored too — received data follows the ANSI terminal color standard.
 
 ![Read ANSI color gif](videos/006_ansi/video.gif)
 
-The data sent to serial port always has a background to differentiate it from read data. Characters outside the printable range of the ASCII table are shown in magenta and in the hexadecimal format. Some characters are printed as its representation, such as: `\n`, `\r` and `\0`.
+Data sent to the serial port always has a background to distinguish it from received data. Characters outside the printable ASCII range are shown in magenta and in hexadecimal, and a few common characters are printed as their escape representation, such as `\n`, `\r` and `\0`.
 
 ![Special character gif](videos/007_invisible/video.gif)
 
-### Setup Serial Port
+#### Message Timestamp
 
-It's possible change serial port and its baud rate while the tool is open. To do that,
-type `!serial connect COM4 9600` to set serial port to `COM4` and baud rate to `9600`. You can also omit port to change only the baud rate (`!serial connect 9600`) or omit the baud rate to change only the port (`!serial connect COM4`). If you want to release the serial port, you'll type `!serial disconnect`.
+All data written or read carries a gray timestamp on the left, in the format `HH:MM:SS.ms`.
+
+#### Search
+
+Press `Ctrl+F` to enter **search mode** and type a query to find it in the captured history. Press `Enter` or `Down Arrow` to jump to the next match and `Up Arrow` for the previous one. `Ctrl+W` toggles case sensitivity, and `Esc` leaves search mode.
+
+![Search gif](videos/015_search/video.gif)
+
+#### Select, Copy and Clear
+
+Click and drag with the mouse to select text in the history, then press `Ctrl+C` to copy the selection to the system clipboard. You can paste text into the command bar with your terminal's paste shortcut (`Scope` supports bracketed paste). `Ctrl+L` clears the screen.
+
+![Select, copy and clear gif](videos/014_select_copy/video.gif)
+
+### Interfaces
+
+#### Setup Serial Port
+
+You can change the serial port and its baud rate while the tool is open. Type `!serial connect COM4 9600` to set the serial port to `COM4` and the baud rate to `9600`. You can also omit the port to change only the baud rate (`!serial connect 9600`) or omit the baud rate to change only the port (`!serial connect COM4`). To release the serial port, type `!serial disconnect`.
 
 ![Setup serial port](videos/008_setup_serial/video.gif)
 
 You can also set hardware/software flow control with `!serial flow <none|sw|hw>` (flow control applies to serial only). When you don't want to type the interface name, the generic `!connect` and `!disconnect` commands act on whichever interface is currently active.
 
-### RTT Interface
+#### RTT Interface
 
 Besides a serial port, `Scope` can talk to an embedded target over [RTT](https://wiki.segger.com/RTT) using [`probe-rs`](https://probe.rs/). Start it from the CLI with `scope rtt <target> <channel>` (for example `scope rtt STM32F303 0`).
 
@@ -97,38 +159,32 @@ While connected you can:
 - `!rtt disconnect` — detach from the target.
 - `!rtt read <address> [<size>]` — read `size` bytes (default `4`) from the target's memory. The address may be hexadecimal (`0x...`) or decimal.
 
-### Save and Record
+#### Auto Reconnect
 
-To save the all messages captured (and sent) since the start, you can hit `Ctrl+s`. The history box will blink and a message will be displayed on history. The filename is shown at top of history box with `.txt` extension. There is, at the history's top-right corner, the size of all message captured.
+`Scope` has an auto-reconnect feature: when the serial port isn't available, it keeps trying to reconnect until the port comes back.
+
+![Reconnect gif](videos/005_reconnect/video.gif)
+
+> [!NOTE]
+> Auto-reconnect has some known issues on the Windows version.
+
+### Capture and sessions
+
+#### Save and Record
+
+To save all the messages captured (and sent) since the start, press `Ctrl+S`. The history box blinks and a message is shown in the history. The filename appears at the top of the history box with a `.txt` extension, and the top-right corner shows the total size of the captured messages.
 
 ![Save history](videos/009_save/video.gif)
 
-However, if you want to save only the message captured from now, you'll use the record feature. Hitting `Ctrl+r`, you'll start a record session. While in a record session, the history block is yellow and the `Scope` will store all messages captured from now. To stop the record session, you need to hit `Ctrl+r` again. The right-corner indicator will show the size of the record session. A new filename is created each time a new record session is started. Both: start session and stop session, prints a message on the history box to indicate when it occurs.
+If you instead want to save only the messages captured *from now on*, use the record feature. Press `Ctrl+R` to start a record session: while recording, the history block turns yellow and `Scope` stores every message captured from that point. Press `Ctrl+R` again to stop. The right-corner indicator shows the size of the record session, and a new filename is created each time a record session starts. Both starting and stopping a session print a message in the history box marking when it happened.
 
 ![Save record](videos/010_record/video.gif)
 
 You can rename the current session at runtime with `!rename <name>`; the save file (and any crash-recovery backup) follows the new name. To guard against an accidental close or a crash, `Scope` also mirrors the running session to a `.bkp` file under the user config directory (e.g. `~/.config/scope/backup/`), keeping the most recent backups.
 
-### Send a File
+### Cross-platform
 
-Use `!send_file <path>` to stream the contents of a file to the target over the active interface (serial or RTT). `Scope` reports the transfer progress and a final confirmation on the history box.
-
-![Send file gif](videos/013_send_file/video.gif)
-
-### Select, Copy and Clear
-
-Click and drag with the mouse to select text in the history, then press `Ctrl+C` to copy the selection to the system clipboard. You can paste text into the command bar with your terminal's paste shortcut (`Scope` supports bracketed paste). `Ctrl+L` clears the screen.
-
-![Select, copy and clear gif](videos/014_select_copy/video.gif)
-
-### Message Timestamp
-
-All the data written or read has a gray timestamp on the left of the message and with the following
-format: `HH:MM:SS.ms`.
-
-### Multiplatform
-
-You can use `Scope` on multiple platforms, like: Linux, Windows and macOS (Apple Silicon).
+`Scope` runs on Linux, Windows, and macOS (Apple Silicon), with the same interface and behavior on each.
 
 ## Command Reference
 
@@ -176,63 +232,6 @@ Anything typed on the command bar that starts with `!` is a command. A line with
 | Mouse wheel | Scroll the history (hold `Ctrl` to scroll horizontally). |
 | Mouse drag | Select text (copy it with `Ctrl`+`C`). |
 
-## Plugins
-
-You can extend the basic functions of `Scope` using plugins! Plugins are scripts written in `lua` language. The code below shows a plugin that appends `Received:` at the beginning of received message. It also prints `Hello, World!` when the user types `!echo hello` (if the plugin file is `echo.lua`).
-
-```lua
-local log = require("scope").log
-local fmt = require("scope").fmt
-
-local M = {}
-
-function M.on_serial_recv(msg)
-  log.info("Received: " .. fmt.to_str(msg))
-end
-
-function M.hello()
-  log.info("Hello, World!")
-end
-
-return M
-```
-
-Load a plugin with `!plugin load <file>` (and `!plugin reload <file>` / `!plugin unload <name>` to reload or remove it). To call one of your plugin's commands, type `!` followed by the plugin name, the command name and its arguments — for example `!echo hello`. Inside a plugin you can react to lifecycle and I/O events (`on_load`, `on_unload`, `on_serial_recv`/`on_serial_send`, `on_rtt_recv`/`on_rtt_send`) and interact with `Scope` and the target: connect/disconnect, send data, read RTT memory, print messages, run shell commands and more. For the full guide see the [Plugins Developer Guide](plugins/README.md).
-
-![Plugin usage](videos/011_plugin/video.gif)
-
-## Scope vs Others
-
-The `Scope` combine multiple features. The table below list these features:
-
-| Features                    | Scope (Free) | Docklight | Arduino | Tera Term | screen   | esp-idf  |
-|-----------------------------|--------------|-----------|---------|-----------|----------|----------|
-| Send Data                   | ✅            | ✅        | ✅       | ✅         | ✅        | ✅        |
-| Send in Hexadecimal         | ✅            | ✅        | x        | x         | x        | x        |
-| Tags / Macros               | ✅[^1]        | ✅        | x       | x          | x        | x        |
-| Written History             | ✅            | ✅[^2]    | x        | x         | x        | x        |
-| Auto Reconnect              | ✅            | ✅        | x        | ✅         | x        | x        |
-| Colorful                    | ✅            | x         | x       | ✅         | ✅        | ✅        |
-| Message Timestamp           | ✅            | ✅        | x        | x         | x        | x        |
-| Display non-printable chars | ✅            | ✅        | x        | x         | x        | x        |
-| Plugins                     | ✅            | ✅        | x        | x         | x        | x        |
-| Multiplatform               | ✅            | Windows   | ✅       | Windows   | Linux    | ✅        |
-| Interface                   | TUI           | GUI       | GUI     | GUI       | Terminal | Terminal |
-| Price                       | Free          | €69       | Free    | Free      | Free     | Free     |
-
-<br>[^1]: User-defined `@tags` replaced the old fixed command syntax that was removed at v0.3.0
-<br>[^2]: The Docklight has a list of commands in lateral panel, so it doesn't need a command history
-
-## Installation
-
-You can use `cargo` to install `Scope`, download a pre-built binary at [Releases](https://github.com/matheuswhite/scope-rs/releases) page, or compile it from source (using this repository).
-
-### Using `cargo`
-
-```shell
-cargo install scope-monitor
-```
-
 ## Command-Line Options
 
 `Scope` is invoked as `scope [OPTIONS] <COMMAND>`.
@@ -266,46 +265,93 @@ tag_file = "/home/user/.config/scope/tags.yml"
 
 Values resolve as **CLI flag > `config.toml` > built-in default**, so a flag always wins over the file, and the file wins over the defaults. A missing file (or a missing field) just falls back to the defaults; a malformed file or an unknown key is reported as an error. Paths are used verbatim — `~` and environment variables are **not** expanded, so use an absolute path.
 
-## How to Use
+## Plugins
 
-After the installation, type `scope serial` followed by the serial port and the desired baud rate. For example, to open the port `COM3` at `115200 bps` type:
+You can extend the basic functions of `Scope` with plugins! Plugins are scripts written in the `lua` language. The code below shows a plugin that prepends `Received:` to every received message. It also prints `Hello, World!` when the user types `!echo hello` (if the plugin file is `echo.lua`).
 
-```shell
-scope serial COM3 115200
+```lua
+local log = require("scope").log
+local fmt = require("scope").fmt
+
+local M = {}
+
+function M.on_serial_recv(msg)
+  log.info("Received: " .. fmt.to_str(msg))
+end
+
+function M.hello()
+  log.info("Hello, World!")
+end
+
+return M
 ```
 
-When the command bar at the bottom is green, it starts to capture messages from serial port and allows for sending messages.
+Load a plugin with `!plugin load <file>` (and `!plugin reload <file>` / `!plugin unload <name>` to reload or remove it). To call one of your plugin's commands, type `!` followed by the plugin name, the command name and its arguments — for example `!echo hello`. Inside a plugin you can react to lifecycle and I/O events (`on_load`, `on_unload`, `on_serial_recv`/`on_serial_send`, `on_rtt_recv`/`on_rtt_send`) and interact with `Scope` and the target: connect/disconnect, send data, read RTT memory, print messages, run shell commands and more. For the full guide see the [Plugins Developer Guide](plugins/README.md).
+
+![Plugin usage](videos/011_plugin/video.gif)
+
+## Scope vs Others
+
+`Scope` combines many features that are otherwise scattered across different tools. The table below compares them:
+
+| Features                    | Scope (Free) | Docklight | Arduino | Tera Term | screen   | esp-idf  |
+|-----------------------------|--------------|-----------|---------|-----------|----------|----------|
+| Send Data                   | ✅            | ✅        | ✅       | ✅         | ✅        | ✅        |
+| Send in Hexadecimal         | ✅            | ✅        | x        | x         | x        | x        |
+| Tags / Macros               | ✅[^1]        | ✅        | x       | x          | x        | x        |
+| Written History             | ✅            | ✅[^2]    | x        | x         | x        | x        |
+| Auto Reconnect              | ✅            | ✅        | x        | ✅         | x        | x        |
+| Colorful                    | ✅            | x         | x       | ✅         | ✅        | ✅        |
+| Message Timestamp           | ✅            | ✅        | x        | x         | x        | x        |
+| Display non-printable chars | ✅            | ✅        | x        | x         | x        | x        |
+| Plugins                     | ✅            | ✅        | x        | x         | x        | x        |
+| Multiplatform               | ✅            | Windows   | ✅       | Windows   | Linux    | ✅        |
+| Interface                   | TUI           | GUI       | GUI     | GUI       | Terminal | Terminal |
+| Price                       | Free          | €69       | Free    | Free      | Free     | Free     |
+
+<br>[^1]: User-defined `@tags` replaced the old fixed command syntax that was removed at v0.3.0
+<br>[^2]: The Docklight has a list of commands in lateral panel, so it doesn't need a command history
+
+## Troubleshooting
+
+**No serial ports are listed.** Run `scope list` (or `scope list -v`) to see what `Scope` detects. If your device is missing, check the cable and drivers, and make sure you have permission to access the port — on Linux your user usually needs to be in the `dialout` group (`sudo usermod -aG dialout $USER`, then log out and back in).
+
+**Auto-reconnect misbehaves on Windows.** This is a known limitation of the Windows build; reconnect works reliably on Linux and macOS.
+
+**RTT won't connect.** The RTT interface needs a debug probe supported by [`probe-rs`](https://probe.rs/) and the correct target chip name and channel — for example `scope rtt STM32F303 0`. Make sure the probe is connected and not held by another debugger.
+
+**My `tag_file` / config path isn't found.** Path values are used verbatim: `~` and environment variables are **not** expanded. Use an absolute path (for example `/home/user/.config/scope/tags.yml`).
 
 ## Project Goals
 
-This project has 5 pillars that will direct the development of this tool:
+This project has 5 pillars that direct the development of this tool:
 
-I. **Intuitive Usage:** The usage of the tool must be intuitive. This means the usability should follow other popular tool's common behaviors. For example, the history navigation (`Up Arrow` and `Down Arrow`) follows the history navigation of OS terminal like in the Unix shell and in the Windows Powershell.
-<br>II. **Compactness and Orthogonality:** The features must follow the [compactness and orthogonality](http://www.catb.org/esr/writings/taoup/html/ch04s02.html) principles of the Unix.
-<br>III. **User Centric Development:** The development of this tool must deliver value to user in the first place, instead of pleasing the developers. For example: the script language used to extend the tool must be a consolidated programming language, instead of creating a new language. Another example is to prioritize critical bugs reported by users, instead of launch new features.
-<br>IV. **Multiplatform:** All releases must work in Windows, Linux (zsh, shell and fish) and macOS.
-<br>V. **Extensible:** Support user scripts to extend base functionalities. These scripts are called plugins. For more information about plugins see [Plugins Developer Guide](plugins/README.md)
+I. **Intuitive Usage:** The usage of the tool must be intuitive. This means the usability should follow the common behaviors of other popular tools. For example, the history navigation (`Up Arrow` and `Down Arrow`) follows the history navigation of an OS terminal like the Unix shell or Windows PowerShell.
+<br>II. **Compactness and Orthogonality:** The features must follow the [compactness and orthogonality](http://www.catb.org/esr/writings/taoup/html/ch04s02.html) principles of Unix.
+<br>III. **User-Centric Development:** The development of this tool must deliver value to the user first, instead of pleasing the developers. For example, the scripting language used to extend the tool is a consolidated programming language rather than a new one, and critical bugs reported by users are prioritized over shipping new features.
+<br>IV. **Multiplatform:** All releases must work on Windows, Linux (zsh, bash and fish) and macOS.
+<br>V. **Extensible:** Support user scripts to extend the base functionality. These scripts are called plugins. For more information about plugins see the [Plugins Developer Guide](plugins/README.md).
 
-The roadmap, with next releases, may be found in [GitHub project](https://github.com/users/matheuswhite/projects/5) of this tool.
-
-## Community
-
-For new feature requests and to report a bug, feel free to post a new [issue](https://github.com/matheuswhite/scope-rs/issues) on GitHub.
+The roadmap, with upcoming releases, can be found in the [GitHub project](https://github.com/users/matheuswhite/projects/5) for this tool.
 
 ## Contributing
 
-Take a look at the [CONTRIBUTING](CONTRIBUTING.md) guide
+Contributions are welcome — take a look at the [CONTRIBUTING](CONTRIBUTING.md) guide.
+
+## Community
+
+For new feature requests and to report a bug, feel free to open a new [issue](https://github.com/matheuswhite/scope-rs/issues) on GitHub.
 
 ## Maintainers
 
 + [Matheus T. dos Santos](https://github.com/matheuswhite)
 
-## Acknowledges
+## Acknowledgements
 
-+ [Emilio Bottoni](https://github.com/MilhoNerfado) and [José Gomes](https://github.com/JoseGomesJr) for the ideas that pushes forward this tool, for the tests that finds hidden bugs and for good features implementations.
++ [Emilio Bottoni](https://github.com/MilhoNerfado) and [José Gomes](https://github.com/JoseGomesJr) for the ideas that push this tool forward, for the testing that finds hidden bugs, and for good feature implementations.
 
 ## License
 
-Scope is made available under the terms of BSD v3 Licence.
+`Scope` is made available under the terms of the BSD 3-Clause License.
 
-See the [LICENCE](https://github.com/matheuswhite/scope-rs/blob/main/LICENSE) for license details.
+See the [LICENSE](https://github.com/matheuswhite/scope-rs/blob/main/LICENSE) for license details.
