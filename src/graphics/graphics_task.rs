@@ -1,6 +1,7 @@
 use super::Serialize;
 use crate::graphics::ansi::ANSI;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
+use crate::graphics::message_filter::MessageFilter;
 use crate::graphics::screen::{Screen, ScreenPosition};
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::inputs::inputs_task::InputMode;
@@ -32,10 +33,10 @@ use crossterm::{
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, block::Title},
 };
 use std::ops::Deref;
 use std::thread::{sleep, yield_now};
@@ -72,6 +73,7 @@ pub struct GraphicsConnections {
     backup: Backup,
     latency: u64,
     buffer: Buffer,
+    message_filter: MessageFilter,
     screen: Screen,
     clipboard: Option<Clipboard>,
 }
@@ -81,6 +83,7 @@ pub enum GraphicsCommand {
     SaveData,
     RecordData,
     Rename(String),
+    SetFilter { pattern: String, exclude: bool },
     ScrollLeft,
     ScrollRight,
     ScrollUp,
@@ -177,6 +180,7 @@ impl GraphicsTask {
         frame: &mut Frame,
         rect: Rect,
         latency: u64,
+        filter_label: &str,
     ) {
         let (title, is_connected) = {
             let interface_shared = interface_shared
@@ -250,6 +254,7 @@ impl GraphicsTask {
 
         let block = Block::default()
             .title(format!("[{:03}][{}] {}", history_len, latency, title))
+            .title(Title::from(format!("[{}]", filter_label)).alignment(Alignment::Right))
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
             .border_style(Style::default().fg(bar_color));
@@ -337,6 +342,7 @@ impl GraphicsTask {
         rect: Rect,
         latency: u64,
         search_indexes: Option<(usize, usize)>,
+        filter_label: &str,
     ) {
         let (input_mode, is_case_sensitive) = {
             let inputs_shared = inputs_shared
@@ -352,6 +358,7 @@ impl GraphicsTask {
                 frame,
                 rect,
                 latency,
+                filter_label,
             ),
             inputs::inputs_task::InputMode::Search => Self::draw_command_bar_search_mode(
                 inputs_shared,
@@ -604,6 +611,33 @@ impl GraphicsTask {
                             }
                         }
                     }
+                    GraphicsCommand::SetFilter { pattern, exclude } => {
+                        // An empty pattern resets the filter to its default,
+                        // showing every message again (regardless of -v).
+                        if pattern.is_empty() {
+                            private.message_filter = MessageFilter::default();
+                            success!(
+                                private.logger,
+                                "Message filter reset to \"{}\"",
+                                private.message_filter.pattern()
+                            );
+                        } else {
+                            match MessageFilter::new(&pattern, exclude) {
+                                Ok(filter) => {
+                                    private.message_filter = filter;
+                                    success!(
+                                        private.logger,
+                                        "Message filter set: {} lines matching \"{}\"",
+                                        if exclude { "hiding" } else { "showing" },
+                                        pattern
+                                    );
+                                }
+                                Err(err) => {
+                                    error!(private.logger, "Invalid filter pattern: {}", err)
+                                }
+                            }
+                        }
+                    }
                     GraphicsCommand::RecordData => {
                         let filename = private.recorder.get_filename();
 
@@ -791,7 +825,16 @@ impl GraphicsTask {
                     error!(private.logger, "{}", err);
                 }
                 private.typewriter += serialized;
-                private.buffer += new_messages;
+
+                // The filter only affects what is displayed; the persistence
+                // above keeps the complete record. Only RX lines that fail the
+                // current filter are dropped from the scrollback view.
+                let decoder = private.screen.decoder();
+                let displayed = new_messages
+                    .into_iter()
+                    .filter(|line| private.message_filter.allows(line, decoder))
+                    .collect::<Vec<_>>();
+                private.buffer += displayed;
                 private.screen.update_after_new_lines(&private.buffer);
                 save_stats.file_size = private.typewriter.get_size();
                 new_messages = vec![];
@@ -844,6 +887,7 @@ impl GraphicsTask {
                             chunks[1],
                             private.latency,
                             private.screen.search_indexes(),
+                            &private.message_filter.label(),
                         );
                         Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
                     })
@@ -953,6 +997,7 @@ impl GraphicsConnections {
             inputs_shared,
             interface_shared,
             buffer: Buffer::new(config.capacity),
+            message_filter: MessageFilter::default(),
             screen: Screen::default(),
             typewriter: TypeWriter::new(config.storage_base_filename.clone()),
             recorder: Recorder::new(config.storage_base_filename).expect("Cannot create Recorder"),

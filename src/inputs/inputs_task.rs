@@ -1006,6 +1006,21 @@ impl InputsTask {
                     Err(err) => error!(private.logger, "Cannot rename session: {}", err),
                 }
             }
+            "filter" => {
+                // `-v` as the first argument switches to exclude mode (hide
+                // matching lines, like `grep -v`). Everything after that is the
+                // pattern (a regex, which may contain spaces). No pattern resets
+                // the filter to its default.
+                let (exclude, pattern_args) = match command_line_split.get(1) {
+                    Some(flag) if flag == "-v" => (true, &command_line_split[2..]),
+                    _ => (false, &command_line_split[1..]),
+                };
+                let pattern = pattern_args.join(" ");
+
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::SetFilter { pattern, exclude });
+            }
             "flow" => match private.if_type {
                 InterfaceType::Serial => {
                     Self::handle_flow_command(command_line_split, private);
@@ -1512,6 +1527,8 @@ impl InputsConnections {
                 "Type @ to place a tag",
                 "Type $ to start a hex sequence",
                 "Type !rename <name> to rename the session record",
+                "Type !filter <pattern> to show only matching received messages",
+                "Type !filter -v <pattern> to hide matching received messages",
                 "Type !send_file <path> to stream a file to the device",
                 "Type here and hit <Enter> to send the text",
             ],

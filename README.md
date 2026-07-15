@@ -133,6 +133,22 @@ Press `Ctrl+F` to enter **search mode** and type a query to find it in the captu
 
 ![Search gif](videos/015_search/video.gif)
 
+#### Message Filter
+
+When received data floods the history — for example a stream of `dbg` lines — use the `!filter` command to control which received messages are shown. The current filter is shown between square brackets at the top-right of the command bar (e.g. `[.*]`).
+
+- `!filter <pattern>` — **show only** received lines matching the regex `<pattern>`.
+- `!filter -v <pattern>` — **hide** received lines matching `<pattern>` (like `grep -v`); everything else is shown. The indicator shows the `-v`, e.g. `[-v ^dbg]`.
+- `!filter` — reset to the default `.*` (show everything).
+
+Behavior to keep in mind:
+
+- **The pattern is a regex applied per line, and matching is *not anchored*.** It succeeds when the pattern is found *anywhere* in the line, so `!filter dbg` shows every line that contains `dbg`, not only those that start with it. Anchor with `^` / `$` to match the start / end of a line — e.g. `!filter -v ^dbg` hides only lines that *begin* with `dbg`, and `!filter -v "^\[00"` hides lines beginning with `[00`.
+- **Regex metacharacters must be escaped.** `[` opens a character class, so to match a literal `[` write `\[` (e.g. `^\[` matches a line starting with `[`). An invalid pattern is reported as an error and the previous filter is kept.
+- **The filter only affects received (RX) data.** Data you send and system log messages (errors, warnings, connection notices…) are always shown, regardless of the filter.
+- **The filter is display-only.** Every message is still written to the session record, the crash backup and any active recording — filtering hides lines from the live view, it does not drop them from disk. (So checking the saved `.txt` will show filtered-out lines; look at the live TUI to see the filter's effect.)
+- **The filter resets to the default `.*` at the start of each session.** It is not persisted.
+
 #### Select, Copy and Clear
 
 Click and drag with the mouse to select text in the history, then press `Ctrl+C` to copy the selection to the system clipboard. You can paste text into the command bar with your terminal's paste shortcut (`Scope` supports bracketed paste). `Ctrl+L` clears the screen.
@@ -200,6 +216,7 @@ Anything typed on the command bar that starts with `!` is a command. A line with
 | `!rtt read <address> [<size>]` | Read `size` bytes (default `4`) from target memory. Address is hex (`0x..`) or decimal. |
 | `!connect` / `!disconnect` | Connect / disconnect whichever interface is currently active. |
 | `!rename <name>` | Rename the current session record file (and its backup). |
+| `!filter [-v] <pattern>` | Filter received messages by the regex `<pattern>` (applied line by line, unanchored). Without `-v`, show only matching lines; with `-v`, hide matching lines (like `grep -v`). Call with no argument to reset to the default `.*` (show everything). Display-only — the session record keeps every message. |
 | `!send_file <path>` | Stream a file to the target over the active interface. |
 | `!log <module> <level>` | Set the log level. `<module>` is `system` (`sys`) or a plugin name; `<level>` is one of `debug`, `info`, `success`, `warning`, `error`. |
 | `!plugin load <file>` | Load a Lua plugin from a file. |
