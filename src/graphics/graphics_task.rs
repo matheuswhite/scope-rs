@@ -624,10 +624,7 @@ impl GraphicsTask {
                         let changed = if pattern.is_empty() {
                             if exclude {
                                 private.message_filter = MessageFilter::mute_all();
-                                warning!(
-                                    private.logger,
-                                    "All received messages are muted"
-                                );
+                                warning!(private.logger, "All received messages are muted");
                             } else {
                                 private.message_filter = MessageFilter::default();
                                 success!(

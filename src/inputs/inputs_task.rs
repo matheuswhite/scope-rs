@@ -1012,20 +1012,24 @@ impl InputsTask {
                 // clears the filter, showing every message again.
                 let pattern = command_line_split[1..].join(" ");
 
-                let _ = private.graphics_cmd_sender.send(GraphicsCommand::SetFilter {
-                    pattern,
-                    exclude: false,
-                });
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::SetFilter {
+                        pattern,
+                        exclude: false,
+                    });
             }
             "mute" => {
                 // Hide received lines matching the pattern (the inverse of
                 // `!filter`, like `grep -v`). No pattern mutes everything.
                 let pattern = command_line_split[1..].join(" ");
 
-                let _ = private.graphics_cmd_sender.send(GraphicsCommand::SetFilter {
-                    pattern,
-                    exclude: true,
-                });
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::SetFilter {
+                        pattern,
+                        exclude: true,
+                    });
             }
             "flow" => match private.if_type {
                 InterfaceType::Serial => {
