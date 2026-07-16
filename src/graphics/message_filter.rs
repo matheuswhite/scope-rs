@@ -6,10 +6,12 @@ use crate::graphics::{
 use regex::Regex;
 
 /// A regex applied line by line to decide which messages appear in the history
-/// view. It has two modes:
+/// view. It has two modes, driven by two commands that share the same slot:
 ///
-/// - **allow** (default): a line is shown when it matches the pattern.
-/// - **exclude** (`!filter -v`): a line is *hidden* when it matches the pattern.
+/// - **allow** (`!filter`, the default): a line is shown when it matches the
+///   pattern. `!filter` with no pattern resets to `.*`, showing everything.
+/// - **mute** (`!mute`): a line is *hidden* when it matches the pattern.
+///   `!mute` with no pattern mutes everything (`.*` in mute mode).
 ///
 /// Only received (RX) data is subject to it; transmitted data and system logs
 /// are always shown. The filter never touches what is persisted to disk
@@ -45,17 +47,19 @@ impl MessageFilter {
         })
     }
 
-    /// The current pattern, as typed by the user.
-    pub fn pattern(&self) -> &str {
-        &self.pattern
+    /// The filter produced by `!mute` with no pattern: `.*` in mute mode, so
+    /// every received line is hidden.
+    pub fn mute_all() -> Self {
+        Self::new(Self::DEFAULT_PATTERN, true)
+            .expect("the default message filter pattern must always compile")
     }
 
-    /// The text shown between square brackets in the command bar. It mirrors
-    /// what the user would type: the bare pattern in allow mode, or `-v
-    /// <pattern>` in exclude mode.
+    /// The text shown between square brackets in the command bar. Both modes
+    /// share this slot: the bare pattern when filtering (allow mode), or
+    /// `mute <pattern>` when muting (exclude mode), so they stay distinguishable.
     pub fn label(&self) -> String {
         if self.exclude {
-            format!("-v {}", self.pattern)
+            format!("mute {}", self.pattern)
         } else {
             self.pattern.clone()
         }
@@ -102,7 +106,6 @@ mod tests {
     fn default_pattern_allows_every_line() {
         let filter = MessageFilter::default();
 
-        assert_eq!(filter.pattern(), ".*");
         assert_eq!(filter.label(), ".*");
         assert!(filter.allows(&rx("anything at all"), ScreenDecoder::Ascii));
         assert!(filter.allows(&rx(""), ScreenDecoder::Ascii));
@@ -120,10 +123,24 @@ mod tests {
     fn exclude_mode_hides_matching_lines() {
         let filter = MessageFilter::new("dbg", true).unwrap();
 
-        assert_eq!(filter.label(), "-v dbg");
+        assert_eq!(filter.label(), "mute dbg");
         // Matching lines are hidden, everything else is shown.
         assert!(!filter.allows(&rx("dbg: heartbeat"), ScreenDecoder::Ascii));
         assert!(filter.allows(&rx("sensor: 42"), ScreenDecoder::Ascii));
+    }
+
+    #[test]
+    fn mute_all_hides_every_received_line() {
+        let filter = MessageFilter::mute_all();
+
+        assert_eq!(filter.label(), "mute .*");
+        // Every RX line is hidden...
+        assert!(!filter.allows(&rx("anything at all"), ScreenDecoder::Ascii));
+        assert!(!filter.allows(&rx(""), ScreenDecoder::Ascii));
+        // ...but transmitted data and system logs still come through, so the
+        // "everything is muted" warning itself remains visible.
+        assert!(filter.allows(&tx("a command I sent"), ScreenDecoder::Ascii));
+        assert!(filter.allows(&log("all messages are muted"), ScreenDecoder::Ascii));
     }
 
     #[test]

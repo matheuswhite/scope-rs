@@ -617,30 +617,46 @@ impl GraphicsTask {
                         }
                     }
                     GraphicsCommand::SetFilter { pattern, exclude } => {
-                        // An empty pattern resets the filter to its default,
-                        // showing every message again (regardless of -v).
+                        // `exclude` selects the command: `!mute` (hide matches)
+                        // vs `!filter` (show only matches). An empty pattern is
+                        // the reset for each: `!filter` shows everything again,
+                        // `!mute` mutes everything.
                         let changed = if pattern.is_empty() {
-                            private.message_filter = MessageFilter::default();
-                            success!(
-                                private.logger,
-                                "Message filter reset to \"{}\"",
-                                private.message_filter.pattern()
-                            );
+                            if exclude {
+                                private.message_filter = MessageFilter::mute_all();
+                                warning!(
+                                    private.logger,
+                                    "All received messages are muted"
+                                );
+                            } else {
+                                private.message_filter = MessageFilter::default();
+                                success!(
+                                    private.logger,
+                                    "Filter cleared; showing all received messages"
+                                );
+                            }
                             true
                         } else {
                             match MessageFilter::new(&pattern, exclude) {
                                 Ok(filter) => {
                                     private.message_filter = filter;
-                                    success!(
-                                        private.logger,
-                                        "Message filter set: {} lines matching \"{}\"",
-                                        if exclude { "hiding" } else { "showing" },
-                                        pattern
-                                    );
+                                    if exclude {
+                                        success!(
+                                            private.logger,
+                                            "Muting received messages matching \"{}\"",
+                                            pattern
+                                        );
+                                    } else {
+                                        success!(
+                                            private.logger,
+                                            "Showing only received messages matching \"{}\"",
+                                            pattern
+                                        );
+                                    }
                                     true
                                 }
                                 Err(err) => {
-                                    error!(private.logger, "Invalid filter pattern: {}", err);
+                                    error!(private.logger, "Invalid pattern: {}", err);
                                     false
                                 }
                             }

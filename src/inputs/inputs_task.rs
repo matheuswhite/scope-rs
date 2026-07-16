@@ -1007,19 +1007,25 @@ impl InputsTask {
                 }
             }
             "filter" => {
-                // `-v` as the first argument switches to exclude mode (hide
-                // matching lines, like `grep -v`). Everything after that is the
-                // pattern (a regex, which may contain spaces). No pattern resets
-                // the filter to its default.
-                let (exclude, pattern_args) = match command_line_split.get(1) {
-                    Some(flag) if flag == "-v" => (true, &command_line_split[2..]),
-                    _ => (false, &command_line_split[1..]),
-                };
-                let pattern = pattern_args.join(" ");
+                // Show only received lines matching the pattern (like `grep`).
+                // The pattern is a regex, which may contain spaces. No pattern
+                // clears the filter, showing every message again.
+                let pattern = command_line_split[1..].join(" ");
 
-                let _ = private
-                    .graphics_cmd_sender
-                    .send(GraphicsCommand::SetFilter { pattern, exclude });
+                let _ = private.graphics_cmd_sender.send(GraphicsCommand::SetFilter {
+                    pattern,
+                    exclude: false,
+                });
+            }
+            "mute" => {
+                // Hide received lines matching the pattern (the inverse of
+                // `!filter`, like `grep -v`). No pattern mutes everything.
+                let pattern = command_line_split[1..].join(" ");
+
+                let _ = private.graphics_cmd_sender.send(GraphicsCommand::SetFilter {
+                    pattern,
+                    exclude: true,
+                });
             }
             "flow" => match private.if_type {
                 InterfaceType::Serial => {
@@ -1528,7 +1534,7 @@ impl InputsConnections {
                 "Type $ to start a hex sequence",
                 "Type !rename <name> to rename the session record",
                 "Type !filter <pattern> to show only matching received messages",
-                "Type !filter -v <pattern> to hide matching received messages",
+                "Type !mute <pattern> to hide matching received messages",
                 "Type !send_file <path> to stream a file to the device",
                 "Type here and hit <Enter> to send the text",
             ],
