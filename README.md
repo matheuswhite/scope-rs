@@ -139,7 +139,7 @@ When received data floods the history — for example a stream of `dbg` lines �
 
 - `!filter <pattern>` — **show only** received lines matching the regex `<pattern>` (like `grep`).
 - `!filter` — show every received message again (reset to the default `.*`).
-- `!mute <pattern>` — **hide** received lines matching `<pattern>` (the inverse of `!filter`, like `grep -v`); everything else is shown. The indicator is prefixed with `mute`, e.g. `[mute ^dbg]`.
+- `!mute <pattern>` — **hide** received lines matching `<pattern>` (the inverse of `!filter`, like `grep -v`); everything else is shown. The indicator is prefixed with `!`, e.g. `![^dbg]`.
 - `!mute` — mute *every* received message (a warning is logged to make the state obvious).
 
 Behavior to keep in mind:

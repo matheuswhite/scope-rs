@@ -259,7 +259,7 @@ impl GraphicsTask {
 
         let block = Block::default()
             .title(format!("[{:03}][{}] {}", history_len, latency, title))
-            .title(Title::from(format!("[{}]", filter_label)).alignment(Alignment::Right))
+            .title(Title::from(filter_label.to_string()).alignment(Alignment::Right))
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
             .border_style(Style::default().fg(bar_color));

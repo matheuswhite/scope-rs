@@ -54,14 +54,15 @@ impl MessageFilter {
             .expect("the default message filter pattern must always compile")
     }
 
-    /// The text shown between square brackets in the command bar. Both modes
-    /// share this slot: the bare pattern when filtering (allow mode), or
-    /// `mute <pattern>` when muting (exclude mode), so they stay distinguishable.
+    /// The indicator shown in the command bar. Both modes share this slot and
+    /// stay distinguishable by a leading `!`: `[<pattern>]` when filtering
+    /// (allow mode) and `![<pattern>]` when muting (exclude mode). The brackets
+    /// are part of the label so the `!` can sit outside them.
     pub fn label(&self) -> String {
         if self.exclude {
-            format!("mute {}", self.pattern)
+            format!("![{}]", self.pattern)
         } else {
-            self.pattern.clone()
+            format!("[{}]", self.pattern)
         }
     }
 
@@ -106,7 +107,7 @@ mod tests {
     fn default_pattern_allows_every_line() {
         let filter = MessageFilter::default();
 
-        assert_eq!(filter.label(), ".*");
+        assert_eq!(filter.label(), "[.*]");
         assert!(filter.allows(&rx("anything at all"), ScreenDecoder::Ascii));
         assert!(filter.allows(&rx(""), ScreenDecoder::Ascii));
     }
@@ -123,7 +124,7 @@ mod tests {
     fn exclude_mode_hides_matching_lines() {
         let filter = MessageFilter::new("dbg", true).unwrap();
 
-        assert_eq!(filter.label(), "mute dbg");
+        assert_eq!(filter.label(), "![dbg]");
         // Matching lines are hidden, everything else is shown.
         assert!(!filter.allows(&rx("dbg: heartbeat"), ScreenDecoder::Ascii));
         assert!(filter.allows(&rx("sensor: 42"), ScreenDecoder::Ascii));
@@ -133,7 +134,7 @@ mod tests {
     fn mute_all_hides_every_received_line() {
         let filter = MessageFilter::mute_all();
 
-        assert_eq!(filter.label(), "mute .*");
+        assert_eq!(filter.label(), "![.*]");
         // Every RX line is hidden...
         assert!(!filter.allows(&rx("anything at all"), ScreenDecoder::Ascii));
         assert!(!filter.allows(&rx(""), ScreenDecoder::Ascii));
