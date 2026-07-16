@@ -1,4 +1,8 @@
-use crate::graphics::{ansi::ANSI, buffer::BufferLine, screen::ScreenDecoder};
+use crate::graphics::{
+    ansi::ANSI,
+    buffer::{BufferLine, LineBytes},
+    screen::ScreenDecoder,
+};
 use regex::Regex;
 
 /// A regex applied line by line to decide which messages appear in the history
@@ -62,7 +66,7 @@ impl MessageFilter {
     /// always allowed through. The pattern is matched against the decoded,
     /// ANSI-stripped line, mirroring what search matches against. In exclude
     /// mode the match result is inverted.
-    pub fn allows(&self, line: &BufferLine<Vec<u8>>, decoder: ScreenDecoder) -> bool {
+    pub fn allows(&self, line: &BufferLine<LineBytes>, decoder: ScreenDecoder) -> bool {
         if line.level.is_some() || line.is_tx {
             return true;
         }
@@ -78,15 +82,15 @@ mod tests {
     use super::*;
     use chrono::Local;
 
-    fn rx(message: &str) -> BufferLine<Vec<u8>> {
+    fn rx(message: &str) -> BufferLine<LineBytes> {
         BufferLine::new_rx(Local::now(), message.as_bytes().to_vec())
     }
 
-    fn tx(message: &str) -> BufferLine<Vec<u8>> {
+    fn tx(message: &str) -> BufferLine<LineBytes> {
         BufferLine::new_tx(Local::now(), message.as_bytes().to_vec())
     }
 
-    fn log(message: &str) -> BufferLine<Vec<u8>> {
+    fn log(message: &str) -> BufferLine<LineBytes> {
         BufferLine::new_log(
             Local::now(),
             crate::infra::LogLevel::Error,

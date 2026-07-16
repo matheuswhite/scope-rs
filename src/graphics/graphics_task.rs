@@ -72,6 +72,11 @@ pub struct GraphicsConnections {
     recorder: Recorder,
     backup: Backup,
     latency: u64,
+    // The full received/sent/log history, kept regardless of the current
+    // filter. `buffer` below is the filtered view derived from it and is what
+    // the screen renders; rebuilding it from here is how clearing or changing
+    // the filter brings previously-hidden lines back.
+    full_buffer: Buffer,
     buffer: Buffer,
     message_filter: MessageFilter,
     screen: Screen,
@@ -614,13 +619,14 @@ impl GraphicsTask {
                     GraphicsCommand::SetFilter { pattern, exclude } => {
                         // An empty pattern resets the filter to its default,
                         // showing every message again (regardless of -v).
-                        if pattern.is_empty() {
+                        let changed = if pattern.is_empty() {
                             private.message_filter = MessageFilter::default();
                             success!(
                                 private.logger,
                                 "Message filter reset to \"{}\"",
                                 private.message_filter.pattern()
                             );
+                            true
                         } else {
                             match MessageFilter::new(&pattern, exclude) {
                                 Ok(filter) => {
@@ -631,11 +637,35 @@ impl GraphicsTask {
                                         if exclude { "hiding" } else { "showing" },
                                         pattern
                                     );
+                                    true
                                 }
                                 Err(err) => {
-                                    error!(private.logger, "Invalid filter pattern: {}", err)
+                                    error!(private.logger, "Invalid filter pattern: {}", err);
+                                    false
                                 }
                             }
+                        };
+
+                        // The filter is a view over the full history: re-derive
+                        // the displayed buffer so lines hidden by a previous
+                        // filter come back and lines the new filter rejects go
+                        // away. Line indices change, so drop any stale selection
+                        // and rebuild the search matches.
+                        if changed {
+                            Self::rebuild_displayed_buffer(&mut private);
+
+                            let (search_buffer, is_case_sensitive) = {
+                                let input_sr = private
+                                    .inputs_shared
+                                    .read()
+                                    .expect("Cannot get input lock for read");
+                                (input_sr.search_buffer.clone(), input_sr.is_case_sensitive)
+                            };
+                            Self::update_search_state(
+                                &mut private,
+                                search_buffer,
+                                is_case_sensitive,
+                            );
                         }
                     }
                     GraphicsCommand::RecordData => {
@@ -664,6 +694,7 @@ impl GraphicsTask {
                     GraphicsCommand::Clear => {
                         private.screen.clear();
                         private.buffer.clear();
+                        private.full_buffer.clear();
                     }
                     GraphicsCommand::ScrollLeft => {
                         let max_main_axis = Self::max_main_axis(&private);
@@ -826,14 +857,18 @@ impl GraphicsTask {
                 }
                 private.typewriter += serialized;
 
-                // The filter only affects what is displayed; the persistence
-                // above keeps the complete record. Only RX lines that fail the
-                // current filter are dropped from the scrollback view.
+                // The filter only affects what is displayed; the full history
+                // (like the persistence above) keeps every line, so clearing or
+                // changing the filter can bring hidden lines back. Only RX lines
+                // that fail the current filter are kept out of the scrollback
+                // view.
                 let decoder = private.screen.decoder();
                 let displayed = new_messages
-                    .into_iter()
+                    .iter()
                     .filter(|line| private.message_filter.allows(line, decoder))
+                    .cloned()
                     .collect::<Vec<_>>();
+                private.full_buffer += new_messages;
                 private.buffer += displayed;
                 private.screen.update_after_new_lines(&private.buffer);
                 save_stats.file_size = private.typewriter.get_size();
@@ -911,6 +946,26 @@ impl GraphicsTask {
         )
         .expect("Cannot disable alternate screen, mouse capture and bracketed paste");
         terminal.show_cursor().expect("Cannot show mouse cursor");
+    }
+
+    /// Rebuilds the displayed `buffer` from the full history under the current
+    /// filter. Called when the filter changes so hidden lines can reappear and
+    /// newly-rejected lines drop out. Because every line is re-indexed, the
+    /// scroll position is re-anchored to the bottom and any active selection is
+    /// dropped (its old line/column no longer point at the same content).
+    fn rebuild_displayed_buffer(private: &mut GraphicsConnections) {
+        let decoder = private.screen.decoder();
+        let displayed = private
+            .full_buffer
+            .iter()
+            .filter(|line| private.message_filter.allows(line, decoder))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        private.buffer.clear();
+        private.buffer += displayed;
+        private.screen.clear();
+        private.screen.update_after_new_lines(&private.buffer);
     }
 
     fn update_search_state(
@@ -996,6 +1051,7 @@ impl GraphicsConnections {
             rx,
             inputs_shared,
             interface_shared,
+            full_buffer: Buffer::new(config.capacity),
             buffer: Buffer::new(config.capacity),
             message_filter: MessageFilter::default(),
             screen: Screen::default(),

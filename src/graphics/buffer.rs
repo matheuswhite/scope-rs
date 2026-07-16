@@ -9,9 +9,16 @@ use crate::{
 };
 use chrono::{DateTime, Local};
 use std::ops::AddAssign;
+use std::sync::Arc;
+
+/// The payload of a stored buffer line. It is reference-counted so the filtered
+/// view (`Buffer`) can hold cheap clones of the lines in the full history
+/// without duplicating the byte content: cloning a [`BufferLine`] only bumps
+/// this `Arc`, it does not copy the message.
+pub type LineBytes = Arc<[u8]>;
 
 pub struct Buffer {
-    lines: Vec<BufferLine<Vec<u8>>>,
+    lines: Vec<BufferLine<LineBytes>>,
     capacity: usize,
 }
 
@@ -66,14 +73,14 @@ impl Buffer {
         result.join("").replace("\\r", "\r").replace("\\n", "\n")
     }
 
-    pub fn get_range(&self, start: usize, end: usize) -> &[BufferLine<Vec<u8>>] {
+    pub fn get_range(&self, start: usize, end: usize) -> &[BufferLine<LineBytes>] {
         let end = end.min(self.lines.len());
         let start = start.min(end);
 
         &self.lines[start..end]
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = &BufferLine<Vec<u8>>> {
+    pub fn iter(&self) -> impl Iterator<Item = &BufferLine<LineBytes>> {
         self.lines.iter()
     }
 
@@ -96,8 +103,8 @@ impl Buffer {
     }
 }
 
-impl AddAssign<BufferLine<Vec<u8>>> for Buffer {
-    fn add_assign(&mut self, mut rhs: BufferLine<Vec<u8>>) {
+impl AddAssign<BufferLine<LineBytes>> for Buffer {
+    fn add_assign(&mut self, mut rhs: BufferLine<LineBytes>) {
         self.drop_oldest_if_needed();
 
         rhs.line = self.lines.len();
@@ -105,14 +112,15 @@ impl AddAssign<BufferLine<Vec<u8>>> for Buffer {
     }
 }
 
-impl AddAssign<Vec<BufferLine<Vec<u8>>>> for Buffer {
-    fn add_assign(&mut self, mut rhs: Vec<BufferLine<Vec<u8>>>) {
+impl AddAssign<Vec<BufferLine<LineBytes>>> for Buffer {
+    fn add_assign(&mut self, mut rhs: Vec<BufferLine<LineBytes>>) {
         for line in rhs.drain(..) {
             *self += line;
         }
     }
 }
 
+#[derive(Clone)]
 pub struct BufferLine<T>
 where
     T: AsRef<[u8]>,
@@ -124,7 +132,7 @@ where
     pub is_tx: bool,
 }
 
-impl BufferLine<Vec<u8>> {
+impl BufferLine<LineBytes> {
     pub fn decode(&self, decoder: ScreenDecoder) -> BufferLine<String> {
         BufferLine {
             line: self.line,
@@ -140,7 +148,7 @@ impl BufferLine<Vec<u8>> {
             line: 0,
             timestamp,
             level: None,
-            message,
+            message: message.into(),
             is_tx: false,
         }
     }
@@ -150,7 +158,7 @@ impl BufferLine<Vec<u8>> {
             line: 0,
             timestamp,
             level: None,
-            message,
+            message: message.into(),
             is_tx: true,
         }
     }
@@ -160,7 +168,7 @@ impl BufferLine<Vec<u8>> {
             line: 0,
             timestamp,
             level: Some(level),
-            message,
+            message: message.into(),
             is_tx: false,
         }
     }
@@ -170,7 +178,7 @@ impl BufferLine<Vec<u8>> {
     }
 }
 
-impl Serialize for BufferLine<Vec<u8>> {
+impl Serialize for BufferLine<LineBytes> {
     fn serialize(&self) -> String {
         let message = ScreenDecoder::Ascii.decode(&self.message);
 
@@ -233,6 +241,21 @@ mod tests {
 
     fn pos(line: usize, column: usize) -> BufferPosition {
         BufferPosition { line, column }
+    }
+
+    // The filtered display buffer holds clones of the full-history lines. Those
+    // clones must share the byte payload (the message is an Arc), not copy it —
+    // otherwise every shown line would be stored twice. Guard that here so the
+    // payload type can't silently regress to an owned buffer.
+    #[test]
+    fn cloning_a_line_shares_the_payload_without_copying() {
+        let line = BufferLine::new_rx(Local::now(), b"a shared payload".to_vec());
+        assert_eq!(Arc::strong_count(&line.message), 1);
+
+        let clone = line.clone();
+        // Both handles point at the same allocation.
+        assert_eq!(Arc::strong_count(&line.message), 2);
+        assert!(Arc::ptr_eq(&line.message, &clone.message));
     }
 
     // Issue #180: copying a region that contains ANSI color codes used to leak
