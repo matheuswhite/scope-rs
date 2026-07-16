@@ -133,6 +133,23 @@ Press `Ctrl+F` to enter **search mode** and type a query to find it in the captu
 
 ![Search gif](videos/015_search/video.gif)
 
+#### Message Filter
+
+When received data floods the history — for example a stream of `dbg` lines — use the `!filter` and `!mute` commands to control which received messages are shown. The current filter is shown between square brackets at the top-right of the command bar (e.g. `[.*]`). The two commands share that slot, so setting one replaces the other.
+
+- `!filter <pattern>` — **show only** received lines matching the regex `<pattern>` (like `grep`).
+- `!filter` — show every received message again (reset to the default `.*`).
+- `!mute <pattern>` — **hide** received lines matching `<pattern>` (the inverse of `!filter`, like `grep -v`); everything else is shown. The indicator is prefixed with `!`, e.g. `![^dbg]`.
+- `!mute` — mute *every* received message (a warning is logged to make the state obvious).
+
+Behavior to keep in mind:
+
+- **The pattern is a regex applied per line, and matching is *not anchored*.** It succeeds when the pattern is found *anywhere* in the line, so `!filter dbg` shows every line that contains `dbg`, not only those that start with it. Anchor with `^` / `$` to match the start / end of a line — e.g. `!mute ^dbg` hides only lines that *begin* with `dbg`, and `!mute "^\[00"` hides lines beginning with `[00`.
+- **Regex metacharacters must be escaped.** `[` opens a character class, so to match a literal `[` write `\[` (e.g. `^\[` matches a line starting with `[`). An invalid pattern is reported as an error and the previous filter is kept.
+- **These commands only affect received (RX) data.** Data you send and system log messages (errors, warnings, connection notices…) are always shown, regardless of the filter.
+- **Filtering is display-only.** Every message is still written to the session record, the crash backup and any active recording — it hides lines from the live view, it does not drop them from disk. (So checking the saved `.txt` will show hidden lines; look at the live TUI to see the effect.) Removing the filter (`!filter`) brings hidden lines back into the view.
+- **The filter resets to the default `.*` at the start of each session.** It is not persisted.
+
 #### Select, Copy and Clear
 
 Click and drag with the mouse to select text in the history, then press `Ctrl+C` to copy the selection to the system clipboard. You can paste text into the command bar with your terminal's paste shortcut (`Scope` supports bracketed paste). `Ctrl+L` clears the screen.
@@ -200,6 +217,8 @@ Anything typed on the command bar that starts with `!` is a command. A line with
 | `!rtt read <address> [<size>]` | Read `size` bytes (default `4`) from target memory. Address is hex (`0x..`) or decimal. |
 | `!connect` / `!disconnect` | Connect / disconnect whichever interface is currently active. |
 | `!rename <name>` | Rename the current session record file (and its backup). |
+| `!filter <pattern>` | Show only received messages matching the regex `<pattern>` (applied line by line, unanchored), like `grep`. Call with no argument to show everything again (reset to the default `.*`). Display-only — the session record keeps every message. |
+| `!mute <pattern>` | Hide received messages matching the regex `<pattern>` (the inverse of `!filter`, like `grep -v`). Call with no argument to mute every received message (a warning is logged). Display-only — the session record keeps every message. |
 | `!send_file <path>` | Stream a file to the target over the active interface. |
 | `!log <module> <level>` | Set the log level. `<module>` is `system` (`sys`) or a plugin name; `<level>` is one of `debug`, `info`, `success`, `warning`, `error`. |
 | `!plugin load <file>` | Load a Lua plugin from a file. |

@@ -1006,6 +1006,31 @@ impl InputsTask {
                     Err(err) => error!(private.logger, "Cannot rename session: {}", err),
                 }
             }
+            "filter" => {
+                // Show only received lines matching the pattern (like `grep`).
+                // The pattern is a regex, which may contain spaces. No pattern
+                // clears the filter, showing every message again.
+                let pattern = command_line_split[1..].join(" ");
+
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::SetFilter {
+                        pattern,
+                        exclude: false,
+                    });
+            }
+            "mute" => {
+                // Hide received lines matching the pattern (the inverse of
+                // `!filter`, like `grep -v`). No pattern mutes everything.
+                let pattern = command_line_split[1..].join(" ");
+
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::SetFilter {
+                        pattern,
+                        exclude: true,
+                    });
+            }
             "flow" => match private.if_type {
                 InterfaceType::Serial => {
                     Self::handle_flow_command(command_line_split, private);
@@ -1512,6 +1537,8 @@ impl InputsConnections {
                 "Type @ to place a tag",
                 "Type $ to start a hex sequence",
                 "Type !rename <name> to rename the session record",
+                "Type !filter <pattern> to show only matching received messages",
+                "Type !mute <pattern> to hide matching received messages",
                 "Type !send_file <path> to stream a file to the device",
                 "Type here and hit <Enter> to send the text",
             ],

@@ -1,6 +1,7 @@
 use super::Serialize;
 use crate::graphics::ansi::ANSI;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
+use crate::graphics::message_filter::MessageFilter;
 use crate::graphics::screen::{Screen, ScreenPosition};
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::inputs::inputs_task::InputMode;
@@ -32,10 +33,10 @@ use crossterm::{
 use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout, Rect},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph, block::Title},
 };
 use std::ops::Deref;
 use std::thread::{sleep, yield_now};
@@ -71,7 +72,13 @@ pub struct GraphicsConnections {
     recorder: Recorder,
     backup: Backup,
     latency: u64,
+    // The full received/sent/log history, kept regardless of the current
+    // filter. `buffer` below is the filtered view derived from it and is what
+    // the screen renders; rebuilding it from here is how clearing or changing
+    // the filter brings previously-hidden lines back.
+    full_buffer: Buffer,
     buffer: Buffer,
+    message_filter: MessageFilter,
     screen: Screen,
     clipboard: Option<Clipboard>,
 }
@@ -81,6 +88,7 @@ pub enum GraphicsCommand {
     SaveData,
     RecordData,
     Rename(String),
+    SetFilter { pattern: String, exclude: bool },
     ScrollLeft,
     ScrollRight,
     ScrollUp,
@@ -177,6 +185,7 @@ impl GraphicsTask {
         frame: &mut Frame,
         rect: Rect,
         latency: u64,
+        filter_label: &str,
     ) {
         let (title, is_connected) = {
             let interface_shared = interface_shared
@@ -250,6 +259,7 @@ impl GraphicsTask {
 
         let block = Block::default()
             .title(format!("[{:03}][{}] {}", history_len, latency, title))
+            .title(Title::from(filter_label.to_string()).alignment(Alignment::Right))
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
             .border_style(Style::default().fg(bar_color));
@@ -337,6 +347,7 @@ impl GraphicsTask {
         rect: Rect,
         latency: u64,
         search_indexes: Option<(usize, usize)>,
+        filter_label: &str,
     ) {
         let (input_mode, is_case_sensitive) = {
             let inputs_shared = inputs_shared
@@ -352,6 +363,7 @@ impl GraphicsTask {
                 frame,
                 rect,
                 latency,
+                filter_label,
             ),
             inputs::inputs_task::InputMode::Search => Self::draw_command_bar_search_mode(
                 inputs_shared,
@@ -604,6 +616,71 @@ impl GraphicsTask {
                             }
                         }
                     }
+                    GraphicsCommand::SetFilter { pattern, exclude } => {
+                        // `exclude` selects the command: `!mute` (hide matches)
+                        // vs `!filter` (show only matches). An empty pattern is
+                        // the reset for each: `!filter` shows everything again,
+                        // `!mute` mutes everything.
+                        let changed = if pattern.is_empty() {
+                            if exclude {
+                                private.message_filter = MessageFilter::mute_all();
+                                warning!(private.logger, "All received messages are muted");
+                            } else {
+                                private.message_filter = MessageFilter::default();
+                                success!(
+                                    private.logger,
+                                    "Filter cleared; showing all received messages"
+                                );
+                            }
+                            true
+                        } else {
+                            match MessageFilter::new(&pattern, exclude) {
+                                Ok(filter) => {
+                                    private.message_filter = filter;
+                                    if exclude {
+                                        success!(
+                                            private.logger,
+                                            "Muting received messages matching \"{}\"",
+                                            pattern
+                                        );
+                                    } else {
+                                        success!(
+                                            private.logger,
+                                            "Showing only received messages matching \"{}\"",
+                                            pattern
+                                        );
+                                    }
+                                    true
+                                }
+                                Err(err) => {
+                                    error!(private.logger, "Invalid pattern: {}", err);
+                                    false
+                                }
+                            }
+                        };
+
+                        // The filter is a view over the full history: re-derive
+                        // the displayed buffer so lines hidden by a previous
+                        // filter come back and lines the new filter rejects go
+                        // away. Line indices change, so drop any stale selection
+                        // and rebuild the search matches.
+                        if changed {
+                            Self::rebuild_displayed_buffer(&mut private);
+
+                            let (search_buffer, is_case_sensitive) = {
+                                let input_sr = private
+                                    .inputs_shared
+                                    .read()
+                                    .expect("Cannot get input lock for read");
+                                (input_sr.search_buffer.clone(), input_sr.is_case_sensitive)
+                            };
+                            Self::update_search_state(
+                                &mut private,
+                                search_buffer,
+                                is_case_sensitive,
+                            );
+                        }
+                    }
                     GraphicsCommand::RecordData => {
                         let filename = private.recorder.get_filename();
 
@@ -630,6 +707,7 @@ impl GraphicsTask {
                     GraphicsCommand::Clear => {
                         private.screen.clear();
                         private.buffer.clear();
+                        private.full_buffer.clear();
                     }
                     GraphicsCommand::ScrollLeft => {
                         let max_main_axis = Self::max_main_axis(&private);
@@ -791,7 +869,20 @@ impl GraphicsTask {
                     error!(private.logger, "{}", err);
                 }
                 private.typewriter += serialized;
-                private.buffer += new_messages;
+
+                // The filter only affects what is displayed; the full history
+                // (like the persistence above) keeps every line, so clearing or
+                // changing the filter can bring hidden lines back. Only RX lines
+                // that fail the current filter are kept out of the scrollback
+                // view.
+                let decoder = private.screen.decoder();
+                let displayed = new_messages
+                    .iter()
+                    .filter(|line| private.message_filter.allows(line, decoder))
+                    .cloned()
+                    .collect::<Vec<_>>();
+                private.full_buffer += new_messages;
+                private.buffer += displayed;
                 private.screen.update_after_new_lines(&private.buffer);
                 save_stats.file_size = private.typewriter.get_size();
                 new_messages = vec![];
@@ -844,6 +935,7 @@ impl GraphicsTask {
                             chunks[1],
                             private.latency,
                             private.screen.search_indexes(),
+                            &private.message_filter.label(),
                         );
                         Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
                     })
@@ -867,6 +959,26 @@ impl GraphicsTask {
         )
         .expect("Cannot disable alternate screen, mouse capture and bracketed paste");
         terminal.show_cursor().expect("Cannot show mouse cursor");
+    }
+
+    /// Rebuilds the displayed `buffer` from the full history under the current
+    /// filter. Called when the filter changes so hidden lines can reappear and
+    /// newly-rejected lines drop out. Because every line is re-indexed, the
+    /// scroll position is re-anchored to the bottom and any active selection is
+    /// dropped (its old line/column no longer point at the same content).
+    fn rebuild_displayed_buffer(private: &mut GraphicsConnections) {
+        let decoder = private.screen.decoder();
+        let displayed = private
+            .full_buffer
+            .iter()
+            .filter(|line| private.message_filter.allows(line, decoder))
+            .cloned()
+            .collect::<Vec<_>>();
+
+        private.buffer.clear();
+        private.buffer += displayed;
+        private.screen.clear();
+        private.screen.update_after_new_lines(&private.buffer);
     }
 
     fn update_search_state(
@@ -952,7 +1064,9 @@ impl GraphicsConnections {
             rx,
             inputs_shared,
             interface_shared,
+            full_buffer: Buffer::new(config.capacity),
             buffer: Buffer::new(config.capacity),
+            message_filter: MessageFilter::default(),
             screen: Screen::default(),
             typewriter: TypeWriter::new(config.storage_base_filename.clone()),
             recorder: Recorder::new(config.storage_base_filename).expect("Cannot create Recorder"),
