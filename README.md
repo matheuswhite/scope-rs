@@ -1,7 +1,7 @@
 <p align="center">
     <br><img src="imgs/scope-logo.png" width="800" alt="Scope Banner">
     <br><img src="https://github.com/matheuswhite/scope-rs/actions/workflows/build.yml/badge.svg" alt="Build Status">
-    <a href="https://opensource.org/licenses/BSD-3-Clause"><img src="https://img.shields.io/badge/License-BSD_3--Clause-blue.svg" alt="License BSD-3"></a>
+    <a href="#license"><img src="https://img.shields.io/badge/License-MIT%2FApache_2.0-blue.svg" alt="License MIT/Apache-2.0"></a>
     <a href="https://crates.io/crates/scope-monitor"><img src="https://img.shields.io/crates/v/scope-monitor.svg" alt="Version info"></a>
     <br><b>Scope</b> is a multi-platform serial monitor with user-extensible features.
 </p>
@@ -352,6 +352,11 @@ For new feature requests and to report a bug, feel free to open a new [issue](ht
 
 ## License
 
-`Scope` is made available under the terms of the BSD 3-Clause License.
+`Scope` is distributed under the terms of both the MIT license and the Apache
+License (Version 2.0), at your option.
 
-See the [LICENSE](https://github.com/matheuswhite/scope-rs/blob/main/LICENSE) for license details.
+See [LICENSE-MIT](LICENSE-MIT) and [LICENSE-APACHE](LICENSE-APACHE) for details.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted
+for inclusion in `Scope` by you, as defined in the Apache-2.0 license, shall be
+dual licensed as above, without any additional terms or conditions.

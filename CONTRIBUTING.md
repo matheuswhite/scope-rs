@@ -228,8 +228,9 @@ driven by `socat` + `tmux` + `asciinema` + `agg`. To add or update one, see
 
 ## License
 
-By contributing to `Scope`, you agree that your contributions will be licensed
-under the project's [BSD 3-Clause License](LICENSE).
+By contributing to `Scope`, you agree that your contributions will be dual
+licensed under the project's [MIT](LICENSE-MIT) and [Apache-2.0](LICENSE-APACHE)
+licenses, without any additional terms or conditions.
 
 ## Getting help
 
