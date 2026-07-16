@@ -1,6 +1,7 @@
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::infra::tags::TagList;
 use crate::inputs::history::{AnyHistory, History, HistoryNavResult, PersistHistory};
+use crate::inputs::key_encode;
 use crate::interfaces::rtt_if::{RttCommand, RttSetup};
 use crate::interfaces::{InterfaceCommand, InterfaceType};
 use crate::{
@@ -44,6 +45,12 @@ pub struct InputsShared {
     pub mode: InputMode,
     pub is_case_sensitive: bool,
     pub tag_list: TagList,
+    /// Headless raw passthrough: when `true`, keystrokes are encoded and sent
+    /// straight to the wire and the display prints received bytes verbatim.
+    /// `Ctrl+K` clears it to drop into the command bar (`InputMode::Normal`),
+    /// and executing a command (or an empty `Enter`) sets it back. Always
+    /// `false` in the TUI.
+    pub raw: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -64,6 +71,7 @@ pub struct InputsConnections {
     rx_channel: Producer<Arc<TimedBytes>>,
     has_tag_failed: bool,
     if_type: InterfaceType,
+    headless: bool,
 }
 
 enum LoopStatus {
@@ -107,6 +115,13 @@ impl InputsTask {
         #[cfg(not(target_os = "macos"))]
         const CTRL_MODIFIER: KeyModifiers = KeyModifiers::CONTROL;
 
+        // Headless raw passthrough short-circuits the whole command-bar match:
+        // the key is encoded and sent to the wire. The read guard is released
+        // at the end of this condition, before `shared` is moved.
+        if shared.read().expect("Cannot get input lock for read").raw {
+            return Self::handle_raw_key_input(private, shared, key);
+        }
+
         match key.code {
             KeyCode::Esc => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
@@ -138,7 +153,12 @@ impl InputsTask {
                     .graphics_cmd_sender
                     .send(GraphicsCommand::RecordData);
             }
-            KeyCode::Char('f') | KeyCode::Char('F') if key.modifiers == KeyModifiers::CONTROL => {
+            // Search is delegated to the terminal emulator in headless mode, so
+            // `Ctrl+F` is swallowed there (never flips into `InputMode::Search`,
+            // which the headless display has no UI for).
+            KeyCode::Char('f') | KeyCode::Char('F')
+                if key.modifiers == KeyModifiers::CONTROL && !private.headless =>
+            {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
                 match sw.mode {
@@ -162,6 +182,10 @@ impl InputsTask {
                     }
                 }
             }
+            // In headless command mode `Ctrl+F` is a no-op (swallowed here so it
+            // is not accumulated as a literal 'f').
+            KeyCode::Char('f') | KeyCode::Char('F')
+                if key.modifiers == KeyModifiers::CONTROL && private.headless => {}
 
             KeyCode::Right if key.modifiers == CTRL_MODIFIER => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
@@ -534,6 +558,12 @@ impl InputsTask {
                                 }));
                             }
 
+                            // An empty Enter in headless command mode is a
+                            // clean cancel: drop straight back to raw.
+                            if private.headless {
+                                sw.raw = true;
+                            }
+
                             return LoopStatus::Continue;
                         }
 
@@ -579,6 +609,12 @@ impl InputsTask {
                                 message: command_line,
                             }));
                         }
+
+                        // Command executed: in headless, return to raw
+                        // passthrough (in the TUI, `raw` is always false).
+                        if private.headless {
+                            sw.raw = true;
+                        }
                     }
                     InputMode::Search => {
                         let _ = private
@@ -588,6 +624,40 @@ impl InputsTask {
                 }
             }
             _ => {}
+        }
+
+        LoopStatus::Continue
+    }
+
+    /// Headless raw passthrough: encode the keystroke and send it straight to
+    /// the wire, with no command-bar buffering. `Ctrl+K` is the one exception —
+    /// it leaves raw mode and opens the scope command bar (`InputMode::Normal`),
+    /// which the `handle_key_input` path then drives until a command is executed
+    /// (or `Esc` quits the app).
+    fn handle_raw_key_input(
+        private: &mut InputsConnections,
+        shared: Arc<RwLock<InputsShared>>,
+        key: KeyEvent,
+    ) -> LoopStatus {
+        if matches!(key.code, KeyCode::Char('k') | KeyCode::Char('K'))
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            let mut sw = shared.write().expect("Cannot get input lock for write");
+            sw.raw = false;
+            sw.command_line.clear();
+            sw.cursor = 0;
+            drop(sw);
+
+            let _ = private.graphics_cmd_sender.send(GraphicsCommand::Redraw);
+            return LoopStatus::Continue;
+        }
+
+        let bytes = key_encode::encode_key(key);
+        if !bytes.is_empty() {
+            private.tx.produce(Arc::new(TimedBytes {
+                timestamp: Local::now(),
+                message: bytes,
+            }));
         }
 
         LoopStatus::Continue
@@ -1282,6 +1352,9 @@ impl InputsTask {
         {
             let mut sw = shared.write().expect("Cannot get input lock for write");
             Self::set_hint(&mut sw.current_hint, &private.hints);
+            // Headless starts in raw passthrough; the TUI starts in the command
+            // bar (`raw` stays its `Default` of `false`).
+            sw.raw = private.headless;
         }
 
         'input_loop: loop {
@@ -1515,6 +1588,7 @@ impl InputsConnections {
         plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
         rx_channel: Producer<Arc<TimedBytes>>,
         if_type: InterfaceType,
+        headless: bool,
     ) -> Self {
         let history = match PersistHistory::new(".scope_history") {
             Ok(h) => AnyHistory::Persist(h),
@@ -1546,6 +1620,7 @@ impl InputsConnections {
             rx_channel,
             has_tag_failed: false,
             if_type,
+            headless,
         }
     }
 }
