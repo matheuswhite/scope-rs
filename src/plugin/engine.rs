@@ -32,6 +32,25 @@ use tokio::{
 };
 pub type PluginEngine = Task<(), PluginEngineCommand>;
 
+/// The Scope standard-library Lua modules, embedded so they can be provisioned
+/// into the plugins directory even when the source tree isn't present (installed
+/// binary). Every loaded plugin sits next to these, so `require("scope")` /
+/// `require("shell")` resolve without the user staging them by hand.
+const STDLIB: &[(&str, &str)] = &[
+    ("scope.lua", include_str!("../../plugins/scope.lua")),
+    ("shell.lua", include_str!("../../plugins/shell.lua")),
+];
+
+/// The directory scope copies loaded plugins into (alongside the bundled
+/// `scope.lua`): `<config_dir>/scope/plugins`, e.g. `~/.config/scope/plugins`.
+/// Falls back to a relative `scope/plugins` when the config dir is unknown,
+/// mirroring the crash-backup directory.
+fn plugins_dir() -> PathBuf {
+    dirs::config_dir()
+        .map(|dir| dir.join("scope").join("plugins"))
+        .unwrap_or_else(|| PathBuf::from("scope").join("plugins"))
+}
+
 pub enum PluginEngineCommand {
     SetLogLevel {
         plugin_name: String,
@@ -781,7 +800,13 @@ impl PluginEngine {
         plugin_list: &mut HashMap<Arc<String>, Plugin>,
         logger: Logger,
     ) -> Result<(), String> {
-        let filepath = match filepath.extension() {
+        // These names belong to the embedded standard-library modules the engine
+        // writes into the plugins directory; a plugin may not shadow them.
+        if matches!(plugin_name.as_str(), "scope" | "shell") {
+            return Err(format!("\"{}\" is a reserved plugin name", plugin_name));
+        }
+
+        let source = match filepath.extension() {
             Some(extension) if extension.as_encoded_bytes() != b"lua" => {
                 return Err(format!("Invalid plugin extension: {:?}", extension));
             }
@@ -789,13 +814,38 @@ impl PluginEngine {
             None => filepath.with_extension("lua"),
         };
 
-        if !filepath.exists() {
-            return Err(format!("Filepath \"{:?}\" doesn't exist!", filepath));
+        if !source.exists() {
+            return Err(format!("Filepath \"{:?}\" doesn't exist!", source));
+        }
+
+        // Copy the plugin into the known plugins directory next to a freshly
+        // written copy of the `scope.lua` helper, then load it from there, so
+        // `require("scope")` resolves without the user staging scope.lua by
+        // hand (issue #206). The original path is kept as the plugin's identity
+        // so `!plugin reload` re-copies the (possibly edited) source.
+        let dir = plugins_dir();
+        std::fs::create_dir_all(&dir)
+            .map_err(|err| format!("Cannot create plugins directory {:?}: {}", dir, err))?;
+        for (name, contents) in STDLIB {
+            let lib = dir.join(name);
+            std::fs::write(&lib, contents)
+                .map_err(|err| format!("Cannot write {:?}: {}", lib, err))?;
+        }
+
+        let dest = dir.join(format!("{}.lua", plugin_name));
+        let same_file = match (std::fs::canonicalize(&source), std::fs::canonicalize(&dest)) {
+            (Ok(s), Ok(d)) => s == d,
+            _ => false,
+        };
+        if !same_file {
+            std::fs::copy(&source, &dest)
+                .map_err(|err| format!("Cannot copy plugin to {:?}: {}", dest, err))?;
         }
 
         let mut plugin = Plugin::new(
             plugin_name.clone(),
-            filepath,
+            source,
+            dest,
             logger.with_source((*plugin_name).clone()),
         )?;
         plugin.spawn_method_call(gate, "on_load", (), false);
