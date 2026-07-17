@@ -1,6 +1,7 @@
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::infra::tags::TagList;
 use crate::inputs::history::{AnyHistory, History, HistoryNavResult, PersistHistory};
+use crate::inputs::key_decode;
 use crate::inputs::key_encode;
 use crate::interfaces::rtt_if::{RttCommand, RttSetup};
 use crate::interfaces::{InterfaceCommand, InterfaceType};
@@ -20,16 +21,17 @@ use crate::{
     success, warning,
 };
 use chrono::Local;
-use core::panic;
 use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton};
 use lipsum::lipsum;
 use rand::{Rng, seq::SliceRandom};
 use serialport::FlowControl;
+use std::fs::File;
+use std::io::{IsTerminal, Read};
 use std::num::ParseIntError;
 use std::ops::Range;
 use std::sync::{
     Arc, RwLock,
-    mpsc::{Receiver, Sender},
+    mpsc::{Receiver, Sender, channel},
 };
 
 pub type InputsTask = Task<InputsShared, ()>;
@@ -1389,12 +1391,17 @@ impl InputsTask {
             sw.raw = private.headless;
         }
 
-        'input_loop: loop {
-            let evt = match event::read() {
-                Ok(evt) => evt,
-                Err(err) => panic!("Error at input task: {:?}", err),
-            };
+        // Input arrives from one merged channel fed by up to two sources: the
+        // keyboard (via crossterm) and/or stdin (raw bytes decoded into keys).
+        // Both converge on `handle_key_input`, so `Ctrl+K`, `@tag`, `$hex` and
+        // arrows behave identically whether typed or piped in. See
+        // `spawn_input_sources`.
+        let evt_receiver = Self::spawn_input_sources();
 
+        // `recv` returns `Err` once every input source ended (e.g. stdin hit EOF
+        // with no keyboard attached), which ends the loop and shuts the app down
+        // as if the user had quit.
+        while let Ok(evt) = evt_receiver.recv() {
             match evt {
                 event::Event::FocusGained => {}
                 event::Event::FocusLost => {}
@@ -1402,16 +1409,7 @@ impl InputsTask {
                     if let LoopStatus::Break =
                         Self::handle_key_input(&mut private, shared.clone(), key)
                     {
-                        let _ = private
-                            .plugin_engine_cmd_sender
-                            .send(PluginEngineCommand::Exit);
-                        let exit_cmd = match private.if_type {
-                            InterfaceType::Serial => InterfaceCommand::Serial(SerialCommand::Exit),
-                            InterfaceType::Rtt => InterfaceCommand::Rtt(RttCommand::Exit),
-                        };
-                        let _ = private.interface_cmd_sender.send(exit_cmd);
-                        let _ = private.graphics_cmd_sender.send(GraphicsCommand::Exit);
-                        break 'input_loop;
+                        break;
                     }
                 }
                 event::Event::Mouse(mouse_evt) => match mouse_evt.kind {
@@ -1463,11 +1461,97 @@ impl InputsTask {
                     Self::handle_paste(&mut private, shared.clone(), data);
                 }
                 event::Event::Resize(_, _) => {}
-                _ => continue 'input_loop,
+                _ => continue,
             }
 
             let _ = private.graphics_cmd_sender.send(GraphicsCommand::Redraw);
         }
+
+        // Reached on an explicit quit (`LoopStatus::Break`) or when every input
+        // source is exhausted: broadcast shutdown to the other tasks.
+        let _ = private
+            .plugin_engine_cmd_sender
+            .send(PluginEngineCommand::Exit);
+        let exit_cmd = match private.if_type {
+            InterfaceType::Serial => InterfaceCommand::Serial(SerialCommand::Exit),
+            InterfaceType::Rtt => InterfaceCommand::Rtt(RttCommand::Exit),
+        };
+        let _ = private.interface_cmd_sender.send(exit_cmd);
+        let _ = private.graphics_cmd_sender.send(GraphicsCommand::Exit);
+    }
+
+    /// Spawn the input source thread(s) and return the merged event channel.
+    ///
+    /// - When **stdin is a terminal** it *is* the keyboard, so crossterm reads
+    ///   it directly and we get its full event set (keys, mouse, paste, resize).
+    /// - When **stdin is not a terminal** (a pipe or file) crossterm would
+    ///   ignore it and fall back to `/dev/tty`, so we read stdin's raw bytes
+    ///   ourselves and decode them into keys. If a controlling terminal is
+    ///   still reachable we *additionally* read the physical keyboard from
+    ///   `/dev/tty`, so a user at the keyboard and a program on stdin can drive
+    ///   the app at the same time.
+    ///
+    /// The returned receiver closes once every spawned source ends, which is
+    /// how a piped, keyboard-less session (stdin EOF) triggers shutdown.
+    fn spawn_input_sources() -> Receiver<event::Event> {
+        let (evt_sender, evt_receiver) = channel::<event::Event>();
+
+        if std::io::stdin().is_terminal() {
+            Self::spawn_crossterm_source(evt_sender);
+        } else {
+            Self::spawn_byte_source(std::io::stdin(), evt_sender.clone());
+            match File::open("/dev/tty") {
+                Ok(tty) => Self::spawn_byte_source(tty, evt_sender),
+                // No controlling terminal (a detached/piped invocation): stdin
+                // is the only source. Dropping the sender lets the channel close
+                // when that source reaches EOF.
+                Err(_) => drop(evt_sender),
+            }
+        }
+
+        evt_receiver
+    }
+
+    /// Keyboard source: crossterm parses the terminal into full `Event`s.
+    fn spawn_crossterm_source(evt_sender: Sender<event::Event>) {
+        std::thread::spawn(move || {
+            // `event::read()` yields `Err` when the reader is unavailable or the
+            // terminal closes, which ends the loop and retires this source.
+            while let Ok(evt) = event::read() {
+                if evt_sender.send(evt).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// Raw-byte source (stdin pipe or `/dev/tty`): read bytes and decode them
+    /// into key events. Only key events are produced — no mouse/paste/resize.
+    fn spawn_byte_source(mut reader: impl Read + Send + 'static, evt_sender: Sender<event::Event>) {
+        std::thread::spawn(move || {
+            let mut decoder = key_decode::KeyDecoder::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        for key in decoder.flush() {
+                            if evt_sender.send(event::Event::Key(key)).is_err() {
+                                return;
+                            }
+                        }
+                        break; // EOF
+                    }
+                    Ok(n) => {
+                        for key in decoder.feed(&buf[..n]) {
+                            if evt_sender.send(event::Event::Key(key)).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
     }
 
     fn set_hint(current_hint: &mut Option<String>, hints: &[&'static str]) {

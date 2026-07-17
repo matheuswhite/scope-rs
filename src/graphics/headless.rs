@@ -86,7 +86,10 @@ fn run_headless(
     mut private: HeadlessConnections,
     cmd_receiver: Receiver<GraphicsCommand>,
 ) {
-    enable_raw_mode().expect("Cannot enable terminal raw mode");
+    // Raw mode only applies when a real terminal is attached. When headless is
+    // driven purely over pipes (no controlling terminal), there is nothing to
+    // set raw — skip it instead of aborting, so an AI can bridge over stdio.
+    let raw_mode = enable_raw_mode().is_ok();
     let stdout = io::stdout();
     let mut out = stdout.lock();
 
@@ -212,7 +215,9 @@ fn run_headless(
     }
     let _ = write!(out, "\r\n");
     let _ = out.flush();
-    disable_raw_mode().expect("Cannot disable terminal raw mode");
+    if raw_mode {
+        let _ = disable_raw_mode();
+    }
 }
 
 /// Whether a log at `level` clears the current threshold, mirroring
