@@ -51,6 +51,36 @@ fn plugins_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("scope").join("plugins"))
 }
 
+/// Stage a plugin for loading: ensure the plugins directory and the bundled
+/// standard libraries exist (each written only when missing, so repeated loads
+/// don't rewrite them and a user's local copy survives), copy the plugin in
+/// (unless the source already *is* the destination), and return the path to
+/// load it from. Pure filesystem work, unit-tested below.
+fn stage_plugin(dir: &Path, source: &Path, name: &str) -> Result<PathBuf, String> {
+    std::fs::create_dir_all(dir)
+        .map_err(|err| format!("Cannot create plugins directory {:?}: {}", dir, err))?;
+
+    for (lib_name, contents) in STDLIB {
+        let lib = dir.join(lib_name);
+        if !lib.exists() {
+            std::fs::write(&lib, contents)
+                .map_err(|err| format!("Cannot write {:?}: {}", lib, err))?;
+        }
+    }
+
+    let dest = dir.join(format!("{}.lua", name));
+    let same_file = match (std::fs::canonicalize(source), std::fs::canonicalize(&dest)) {
+        (Ok(s), Ok(d)) => s == d,
+        _ => false,
+    };
+    if !same_file {
+        std::fs::copy(source, &dest)
+            .map_err(|err| format!("Cannot copy plugin to {:?}: {}", dest, err))?;
+    }
+
+    Ok(dest)
+}
+
 pub enum PluginEngineCommand {
     SetLogLevel {
         plugin_name: String,
@@ -818,34 +848,12 @@ impl PluginEngine {
             return Err(format!("Filepath \"{:?}\" doesn't exist!", source));
         }
 
-        // Copy the plugin into the known plugins directory next to a freshly
-        // written copy of the `scope.lua` helper, then load it from there, so
-        // `require("scope")` resolves without the user staging scope.lua by
-        // hand (issue #206). The original path is kept as the plugin's identity
-        // so `!plugin reload` re-copies the (possibly edited) source.
-        let dir = plugins_dir();
-        std::fs::create_dir_all(&dir)
-            .map_err(|err| format!("Cannot create plugins directory {:?}: {}", dir, err))?;
-        for (name, contents) in STDLIB {
-            let lib = dir.join(name);
-            // Provision the bundled standard library only when it isn't already
-            // there, so repeated loads don't rewrite it and a user's local copy
-            // is left untouched.
-            if !lib.exists() {
-                std::fs::write(&lib, contents)
-                    .map_err(|err| format!("Cannot write {:?}: {}", lib, err))?;
-            }
-        }
-
-        let dest = dir.join(format!("{}.lua", plugin_name));
-        let same_file = match (std::fs::canonicalize(&source), std::fs::canonicalize(&dest)) {
-            (Ok(s), Ok(d)) => s == d,
-            _ => false,
-        };
-        if !same_file {
-            std::fs::copy(&source, &dest)
-                .map_err(|err| format!("Cannot copy plugin to {:?}: {}", dest, err))?;
-        }
+        // Stage the plugin into the known plugins directory next to the bundled
+        // standard libraries and load it from there, so `require("scope")` /
+        // `require("shell")` resolve without the user staging them by hand
+        // (issue #206). The original path is kept as the plugin's identity so
+        // `!plugin reload` re-copies the (possibly edited) source.
+        let dest = stage_plugin(&plugins_dir(), &source, plugin_name.as_str())?;
 
         let mut plugin = Plugin::new(
             plugin_name.clone(),
@@ -882,5 +890,115 @@ impl PluginEngineConnections {
             interface_type,
             interface_cmd_sender,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{STDLIB, stage_plugin};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+
+    /// A self-cleaning unique temp directory (this crate has no tempfile dev-dep).
+    struct TempDir(PathBuf);
+
+    impl TempDir {
+        fn new(tag: &str) -> Self {
+            let dir = std::env::temp_dir().join(format!("scope-stage-test-{tag}"));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).unwrap();
+            TempDir(dir)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn stdlib(name: &str) -> &'static str {
+        STDLIB.iter().find(|(n, _)| *n == name).unwrap().1
+    }
+
+    #[test]
+    fn stage_provisions_stdlib_and_copies_plugin() {
+        let tmp = TempDir::new("provision");
+        let src = tmp.path().join("src");
+        fs::create_dir_all(&src).unwrap();
+        let source = src.join("myplug.lua");
+        fs::write(&source, "-- plugin body\n").unwrap();
+
+        let plugins = tmp.path().join("plugins");
+        let dest = stage_plugin(&plugins, &source, "myplug").unwrap();
+
+        assert_eq!(dest, plugins.join("myplug.lua"));
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "-- plugin body\n");
+        assert_eq!(
+            fs::read_to_string(plugins.join("scope.lua")).unwrap(),
+            stdlib("scope.lua")
+        );
+        assert_eq!(
+            fs::read_to_string(plugins.join("shell.lua")).unwrap(),
+            stdlib("shell.lua")
+        );
+    }
+
+    #[test]
+    fn stage_does_not_overwrite_existing_stdlib() {
+        let tmp = TempDir::new("no-overwrite");
+        let plugins = tmp.path().join("plugins");
+        fs::create_dir_all(&plugins).unwrap();
+        // A user-customized scope.lua already in place.
+        fs::write(plugins.join("scope.lua"), "-- CUSTOM\n").unwrap();
+
+        let source = tmp.path().join("p.lua");
+        fs::write(&source, "-- p\n").unwrap();
+        stage_plugin(&plugins, &source, "p").unwrap();
+
+        // The existing scope.lua is preserved; the missing shell.lua is written.
+        assert_eq!(
+            fs::read_to_string(plugins.join("scope.lua")).unwrap(),
+            "-- CUSTOM\n"
+        );
+        assert_eq!(
+            fs::read_to_string(plugins.join("shell.lua")).unwrap(),
+            stdlib("shell.lua")
+        );
+    }
+
+    #[test]
+    fn restage_recopies_edited_source() {
+        let tmp = TempDir::new("recopy");
+        let plugins = tmp.path().join("plugins");
+        let source = tmp.path().join("p.lua");
+
+        fs::write(&source, "-- v1\n").unwrap();
+        let dest = stage_plugin(&plugins, &source, "p").unwrap();
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "-- v1\n");
+
+        // Editing the source and re-staging re-copies it (the reload path).
+        fs::write(&source, "-- v2\n").unwrap();
+        let dest2 = stage_plugin(&plugins, &source, "p").unwrap();
+        assert_eq!(dest2, dest);
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "-- v2\n");
+    }
+
+    #[test]
+    fn stage_is_noop_copy_when_source_is_destination() {
+        let tmp = TempDir::new("same-file");
+        let plugins = tmp.path().join("plugins");
+        fs::create_dir_all(&plugins).unwrap();
+        // Loading directly from the plugins dir: source == destination.
+        let source = plugins.join("p.lua");
+        fs::write(&source, "-- inplace\n").unwrap();
+
+        let dest = stage_plugin(&plugins, &source, "p").unwrap();
+        assert_eq!(dest, source);
+        assert_eq!(fs::read_to_string(&dest).unwrap(), "-- inplace\n");
     }
 }
