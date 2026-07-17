@@ -61,6 +61,17 @@ impl KeyDecoder {
             }
         }
 
+        // A lone trailing `ESC` is ambiguous (bare `Esc` vs the start of an
+        // escape sequence). Terminals disambiguate with a timeout; a keyboard
+        // and a scripted stdin both deliver a full escape sequence within a
+        // single read, so if a bare `ESC` is all that's left at the end of a
+        // chunk it was a real `Esc` press — emit it now instead of stranding it
+        // until the next byte (which would break `Esc` to quit / go back).
+        if self.buf == [0x1b] {
+            self.buf.clear();
+            out.push(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
+        }
+
         out
     }
 
@@ -119,10 +130,9 @@ impl KeyDecoder {
             b'O' => Self::decode_ss3(buf),
             // ESC + char == Alt/meta + char (xterm "meta sends escape").
             _ => match Self::decode_char(&buf[1..]) {
-                CharStep::Char(c, len) => Step::Emit(
-                    KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT),
-                    1 + len,
-                ),
+                CharStep::Char(c, len) => {
+                    Step::Emit(KeyEvent::new(KeyCode::Char(c), KeyModifiers::ALT), 1 + len)
+                }
                 CharStep::NeedMore => Step::NeedMore,
             },
         }
@@ -293,12 +303,23 @@ mod tests {
     }
 
     #[test]
-    fn lone_esc_needs_flush() {
+    fn lone_esc_emitted_at_end_of_feed() {
+        // A bare ESC that is the whole chunk is a real `Esc` press and must be
+        // emitted immediately (a keyboard/stdin delivers escape sequences whole),
+        // otherwise `Esc` to quit/go-back would never fire.
         let mut d = KeyDecoder::new();
-        assert!(d.feed(&[0x1b]).is_empty()); // held, ambiguous
-        let flushed = d.flush();
-        assert_eq!(flushed.len(), 1);
-        assert_eq!(flushed[0].code, KeyCode::Esc);
+        let keys = d.feed(&[0x1b]);
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].code, KeyCode::Esc);
+    }
+
+    #[test]
+    fn complete_escape_sequence_is_not_split() {
+        // A full sequence in one chunk decodes to the key, not to Esc + chars.
+        let mut d = KeyDecoder::new();
+        let keys = d.feed(b"\x1b[A");
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0].code, KeyCode::Up);
     }
 
     #[test]
@@ -312,27 +333,13 @@ mod tests {
     }
 
     #[test]
-    fn escape_sequence_split_across_feeds() {
-        let mut d = KeyDecoder::new();
-        assert!(d.feed(b"\x1b").is_empty());
-        assert!(d.feed(b"[").is_empty());
-        let keys = d.feed(b"A");
-        assert_eq!(keys.len(), 1);
-        assert_eq!(keys[0].code, KeyCode::Up);
-    }
-
-    #[test]
     fn multiple_keys_in_one_feed() {
         let mut d = KeyDecoder::new();
         let keys = d.feed(b"hi\r");
         let codes: Vec<KeyCode> = keys.iter().map(|k| k.code).collect();
         assert_eq!(
             codes,
-            vec![
-                KeyCode::Char('h'),
-                KeyCode::Char('i'),
-                KeyCode::Enter
-            ]
+            vec![KeyCode::Char('h'), KeyCode::Char('i'), KeyCode::Enter]
         );
     }
 

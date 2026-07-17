@@ -12,6 +12,7 @@ pub struct Consumer<T: Clone> {
     receiver: mpsc::Receiver<T>,
 }
 
+#[derive(Clone)]
 pub struct Producer<T: Clone> {
     channel: Arc<Channel<T>>,
 }

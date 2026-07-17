@@ -1396,7 +1396,7 @@ impl InputsTask {
         // Both converge on `handle_key_input`, so `Ctrl+K`, `@tag`, `$hex` and
         // arrows behave identically whether typed or piped in. See
         // `spawn_input_sources`.
-        let evt_receiver = Self::spawn_input_sources();
+        let evt_receiver = Self::spawn_input_sources(private.tx.clone());
 
         // `recv` returns `Err` once every input source ended (e.g. stdin hit EOF
         // with no keyboard attached), which ends the loop and shuts the app down
@@ -1482,30 +1482,34 @@ impl InputsTask {
 
     /// Spawn the input source thread(s) and return the merged event channel.
     ///
-    /// - When **stdin is a terminal** it *is* the keyboard, so crossterm reads
-    ///   it directly and we get its full event set (keys, mouse, paste, resize).
-    /// - When **stdin is not a terminal** (a pipe or file) crossterm would
-    ///   ignore it and fall back to `/dev/tty`, so we read stdin's raw bytes
-    ///   ourselves and decode them into keys. If a controlling terminal is
-    ///   still reachable we *additionally* read the physical keyboard from
-    ///   `/dev/tty`, so a user at the keyboard and a program on stdin can drive
-    ///   the app at the same time.
+    /// Exactly one source is the **controller** — its keys go through the full
+    /// `handle_key_input` treatment (command bar, `Ctrl+K`, `$hex`, `@tags`).
+    /// A second, keyboard-plus-pipe case adds a **data channel** whose bytes go
+    /// straight to the wire and never touch the command bar, so the two streams
+    /// cannot fight over one shared mode:
     ///
-    /// The returned receiver closes once every spawned source ends, which is
-    /// how a piped, keyboard-less session (stdin EOF) triggers shutdown.
-    fn spawn_input_sources() -> Receiver<event::Event> {
+    /// - **stdin is a terminal** — stdin *is* the keyboard. crossterm parses it
+    ///   as the controller (full event set: keys, mouse, paste, resize).
+    /// - **stdin is a pipe and `/dev/tty` is reachable** — a user is at the
+    ///   keyboard *and* a program feeds stdin. The keyboard (`/dev/tty`) is the
+    ///   controller; the piped stdin is a raw passthrough data channel to the
+    ///   wire. This is what stops stdin's bytes from closing the keyboard's
+    ///   `Ctrl+K` command bar.
+    /// - **stdin is a pipe with no terminal** — a detached/agent invocation.
+    ///   stdin is the sole controller (its `Ctrl+K` etc. drive the command bar),
+    ///   and its EOF closes the channel, which shuts the app down.
+    fn spawn_input_sources(tx: Producer<Arc<TimedBytes>>) -> Receiver<event::Event> {
         let (evt_sender, evt_receiver) = channel::<event::Event>();
 
         if std::io::stdin().is_terminal() {
             Self::spawn_crossterm_source(evt_sender);
         } else {
-            Self::spawn_byte_source(std::io::stdin(), evt_sender.clone());
             match File::open("/dev/tty") {
-                Ok(tty) => Self::spawn_byte_source(tty, evt_sender),
-                // No controlling terminal (a detached/piped invocation): stdin
-                // is the only source. Dropping the sender lets the channel close
-                // when that source reaches EOF.
-                Err(_) => drop(evt_sender),
+                Ok(tty) => {
+                    Self::spawn_byte_source(tty, evt_sender); // keyboard = controller
+                    Self::spawn_data_channel(std::io::stdin(), tx); // stdin = raw data
+                }
+                Err(_) => Self::spawn_byte_source(std::io::stdin(), evt_sender), // stdin = controller
             }
         }
 
@@ -1548,6 +1552,28 @@ impl InputsTask {
                             }
                         }
                     }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    /// Raw passthrough data channel: forward a reader's bytes straight to the
+    /// wire (`tx`), verbatim and mode-agnostic. Used for the piped stdin when a
+    /// keyboard is also present, so streamed data reaches the device without
+    /// ever going through the keyboard-owned command bar. No decoding — arbitrary
+    /// bytes (including binary) pass through unchanged. EOF just ends this
+    /// channel; it does not quit the app (the keyboard is still live).
+    fn spawn_data_channel(mut reader: impl Read + Send + 'static, tx: Producer<Arc<TimedBytes>>) {
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => tx.produce(Arc::new(TimedBytes {
+                        timestamp: Local::now(),
+                        message: buf[..n].to_vec(),
+                    })),
                     Err(_) => break,
                 }
             }
