@@ -828,8 +828,13 @@ impl PluginEngine {
             .map_err(|err| format!("Cannot create plugins directory {:?}: {}", dir, err))?;
         for (name, contents) in STDLIB {
             let lib = dir.join(name);
-            std::fs::write(&lib, contents)
-                .map_err(|err| format!("Cannot write {:?}: {}", lib, err))?;
+            // Provision the bundled standard library only when it isn't already
+            // there, so repeated loads don't rewrite it and a user's local copy
+            // is left untouched.
+            if !lib.exists() {
+                std::fs::write(&lib, contents)
+                    .map_err(|err| format!("Cannot write {:?}: {}", lib, err))?;
+            }
         }
 
         let dest = dir.join(format!("{}.lua", plugin_name));
