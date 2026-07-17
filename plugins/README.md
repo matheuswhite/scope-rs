@@ -12,7 +12,9 @@ Ok, you already know what is a plugin, and now you may be wondering: **What I ca
 
 ## Prerequisites
 
-Before we start to develop plugins, we need two files: [scope.lua](scope.lua) and [shell.lua](shell.lua). These two files could be found at `plugins` folder of the `Scope` repository. These files must be at same folder of our plugin. Think that files as the standard libraries of our plugin.
+Plugins rely on two standard libraries — [scope.lua](scope.lua) and [shell.lua](shell.lua) — which provide the `require("scope")` and `require("shell")` modules used throughout this guide.
+
+You don't need to copy them next to your plugin. When you load a plugin, `Scope` copies it into `<config_dir>/scope/plugins/` (e.g. `~/.config/scope/plugins/`) and writes the standard libraries there alongside it, so `require(...)` resolves automatically. Because your plugin is loaded from that directory, `reload` re-copies it from the original path — keep editing the file you loaded and reload as usual. (Both libraries also live in the `plugins` folder of the `Scope` repository if you want to read them.)
 
 ## Getting Started
 

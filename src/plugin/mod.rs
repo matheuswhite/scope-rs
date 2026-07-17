@@ -32,11 +32,22 @@ pub enum PluginUnloadMode {
 }
 
 impl Plugin {
-    pub fn new(name: Arc<String>, filepath: PathBuf, logger: Logger) -> Result<Self, String> {
+    /// `source_filepath` is where the plugin came from — it is stored as the
+    /// plugin's identity and re-read on reload. `load_filepath` is where the
+    /// code is actually read from and whose directory is added to Lua's
+    /// `package.path` (so `require("scope")` resolves against the `scope.lua`
+    /// sitting next to it). They differ when the engine copies the plugin into
+    /// the known plugins directory before loading it.
+    pub fn new(
+        name: Arc<String>,
+        source_filepath: PathBuf,
+        load_filepath: PathBuf,
+        logger: Logger,
+    ) -> Result<Self, String> {
         let lua = Lua::new_with(mlua::StdLib::ALL_SAFE, LuaOptions::default())
             .map_err(|err| err.to_string())?;
-        let plugin_dir = filepath.parent().unwrap_or(Path::new("/"));
-        let code = std::fs::read_to_string(&filepath).map_err(|err| err.to_string())?;
+        let plugin_dir = load_filepath.parent().unwrap_or(Path::new("/"));
+        let code = std::fs::read_to_string(&load_filepath).map_err(|err| err.to_string())?;
         lua.load(format!(
             "package.path = package.path .. ';{}/?.lua'",
             plugin_dir.to_str().unwrap_or("")
@@ -50,7 +61,7 @@ impl Plugin {
 
         Ok(Self {
             name,
-            filepath,
+            filepath: source_filepath,
             lua: Rc::new(lua),
             index: 0,
             log_level: LogLevel::Info,
@@ -158,6 +169,7 @@ mod tests {
     fn test_plugin_new() {
         let _plugin = Plugin::new(
             Arc::new("echo".to_string()),
+            PathBuf::from("plugins/echo.lua"),
             PathBuf::from("plugins/echo.lua"),
             Logger::new("test".to_string()).0,
         );
