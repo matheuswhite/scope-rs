@@ -12,9 +12,9 @@
 //!   `LogLevel`→color mapping the TUI uses, emitted as raw ANSI SGR);
 //! - transmitted bytes are drained and discarded (no local echo);
 //! - while the Inputs task is in `Ctrl+K` command mode (`InputsShared::raw`
-//!   is `false`), incoming output is held back and a blinking yellow `> `
-//!   prompt mirrors the command being typed; on return to raw the held output
-//!   is flushed.
+//!   is `false`), incoming output is held back and a blinking `> ` prompt
+//!   (black on yellow) mirrors the command being typed; on return to raw the
+//!   held output is flushed.
 //!
 //! It owns the terminal's raw mode (no alternate screen / mouse / bracketed
 //! paste) and is the sole writer of stdout, so there is no rendering race with
@@ -175,9 +175,12 @@ fn run_headless(
                 // `> ` occupies columns 1-2 (1-based), so the first typed
                 // character sits at column 3; place the cursor at `3 + cursor`.
                 if visible {
+                    // Inverted colours (black on yellow) so the command bar
+                    // stands out against the raw device output — same SGR as
+                    // the `Warning` log style.
                     let _ = write!(
                         out,
-                        "\r\x1b[2K\x1b[33m> {}\x1b[0m\r\x1b[{}G",
+                        "\r\x1b[2K\x1b[30;43m> {}\x1b[0m\r\x1b[{}G",
                         command_line,
                         3 + cursor
                     );
@@ -199,9 +202,9 @@ fn run_headless(
         }
     }
 
-    // Teardown. If we were mid-prompt (the usual `Ctrl+K` then `Esc` quit),
-    // clear it and flush anything held; then leave the cursor on a fresh line
-    // and restore cooked mode.
+    // Teardown. If we were mid-prompt (a `Ctrl+K` `Ctrl+Q` quit), clear it and
+    // flush anything held; then leave the cursor on a fresh line and restore
+    // cooked mode.
     if !prev_raw {
         let _ = write!(out, "\r\x1b[2K");
         if !held.is_empty() {

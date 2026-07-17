@@ -47,7 +47,8 @@ struct Cli {
     name: Option<String>,
     /// Run without the TUI: a transparent stdin/stdout bridge to the wire.
     /// Received bytes print straight to stdout; typed keys are sent raw. Hit
-    /// Ctrl+K for the scope command bar, then Esc to quit.
+    /// Ctrl+K for the scope command bar (Esc returns to the bridge); quit with
+    /// Ctrl+K then Ctrl+Q, or the !exit command.
     #[clap(long)]
     headless: bool,
 }

@@ -48,8 +48,8 @@ pub struct InputsShared {
     /// Headless raw passthrough: when `true`, keystrokes are encoded and sent
     /// straight to the wire and the display prints received bytes verbatim.
     /// `Ctrl+K` clears it to drop into the command bar (`InputMode::Normal`),
-    /// and executing a command (or an empty `Enter`) sets it back. Always
-    /// `false` in the TUI.
+    /// and executing a command (or an empty `Enter`, or `Esc`) sets it back.
+    /// Always `false` in the TUI.
     pub raw: bool,
 }
 
@@ -127,7 +127,18 @@ impl InputsTask {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
                 match sw.mode {
-                    InputMode::Normal => return LoopStatus::Break,
+                    InputMode::Normal => {
+                        // In headless, Esc backs the `Ctrl+K` command bar out to
+                        // raw passthrough — it does not quit (that's `Ctrl+Q` or
+                        // `!exit`). In the TUI, Esc in Normal mode quits.
+                        if private.headless {
+                            sw.command_line.clear();
+                            sw.cursor = 0;
+                            sw.raw = true;
+                            return LoopStatus::Continue;
+                        }
+                        return LoopStatus::Break;
+                    }
                     InputMode::Search => {
                         sw.mode = InputMode::Normal;
                         let _ = private
@@ -186,6 +197,14 @@ impl InputsTask {
             // is not accumulated as a literal 'f').
             KeyCode::Char('f') | KeyCode::Char('F')
                 if key.modifiers == KeyModifiers::CONTROL && private.headless => {}
+
+            // Headless: `Ctrl+K` then `Ctrl+Q` quits the app (picocom-style).
+            // The TUI quits with Esc, so this is scoped to headless.
+            KeyCode::Char('q') | KeyCode::Char('Q')
+                if key.modifiers == KeyModifiers::CONTROL && private.headless =>
+            {
+                return LoopStatus::Break;
+            }
 
             KeyCode::Right if key.modifiers == CTRL_MODIFIER => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
@@ -583,12 +602,24 @@ impl InputsTask {
                         sw.cursor = 0;
 
                         if command_line.starts_with("!") {
-                            let command_line_split = command_line
+                            let command_line_split: Vec<String> = command_line
                                 .strip_prefix('!')
                                 .unwrap()
                                 .split_whitespace()
                                 .map(|arg| arg.to_string())
                                 .collect();
+
+                            // Headless: `!exit` / `!quit` quits the app — the
+                            // discoverable companion to the `Ctrl+K` `Ctrl+Q`
+                            // chord. In the TUI, Esc quits.
+                            if private.headless
+                                && matches!(
+                                    command_line_split.first().map(String::as_str),
+                                    Some("exit") | Some("quit")
+                                )
+                            {
+                                return LoopStatus::Break;
+                            }
 
                             Self::handle_user_command(command_line_split, private);
                         } else {
@@ -632,8 +663,9 @@ impl InputsTask {
     /// Headless raw passthrough: encode the keystroke and send it straight to
     /// the wire, with no command-bar buffering. `Ctrl+K` is the one exception —
     /// it leaves raw mode and opens the scope command bar (`InputMode::Normal`),
-    /// which the `handle_key_input` path then drives until a command is executed
-    /// (or `Esc` quits the app).
+    /// which the `handle_key_input` path then drives: running a command (or an
+    /// empty `Enter`, or `Esc`) returns to raw, while `Ctrl+Q` / `!exit` quits
+    /// the app.
     fn handle_raw_key_input(
         private: &mut InputsConnections,
         shared: Arc<RwLock<InputsShared>>,

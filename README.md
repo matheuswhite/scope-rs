@@ -211,7 +211,7 @@ In headless mode:
 - **Scroll, search and copy are delegated to your terminal emulator** — they don't exist inside `Scope` here.
 - **Nothing is written to disk** — no session record, backup, or `!record`. Redirect stdout yourself if you want a capture.
 
-To reach the normal `Scope` commands (`!plugin`, `!connect`, `@tags`, `$hex`, history, …), press **`Ctrl+K`**: a blinking yellow `> ` prompt appears and incoming output is held back while you type. Press **Enter** to run the command (or an empty Enter to cancel) and return to the raw bridge. Every command available in the normal command bar works here. To **quit**, press `Ctrl+K` then `Esc`.
+To reach the normal `Scope` commands (`!plugin`, `!connect`, `@tags`, `$hex`, history, …), press **`Ctrl+K`**: a blinking `> ` prompt (black on yellow) appears and incoming output is held back while you type. Press **Enter** to run the command (or **Esc** / an empty Enter to cancel) and return to the raw bridge. Every command available in the normal command bar works here. To **quit**, press **`Ctrl+K`** then **`Ctrl+Q`**, or run the **`!exit`** (alias `!quit`) command.
 
 ### Cross-platform
 
