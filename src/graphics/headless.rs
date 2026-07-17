@@ -12,9 +12,9 @@
 //!   `LogLevel`→color mapping the TUI uses, emitted as raw ANSI SGR);
 //! - transmitted bytes are drained and discarded (no local echo);
 //! - while the Inputs task is in `Ctrl+K` command mode (`InputsShared::raw`
-//!   is `false`), incoming output is held back and a blinking `> ` prompt
-//!   (black on yellow) mirrors the command being typed; on return to raw the
-//!   held output is flushed.
+//!   is `false`), incoming output is held back and a `> ` prompt mirrors the
+//!   command being typed, blinking between black-on-yellow and plain yellow
+//!   text; on return to raw the held output is flushed.
 //!
 //! It owns the terminal's raw mode (no alternate screen / mouse / bracketed
 //! paste) and is the sole writer of stdout, so there is no rendering race with
@@ -93,7 +93,7 @@ fn run_headless(
     let mut blink_timer = Timer::new(BLINK_PERIOD);
     let mut prev_raw = true; // headless starts in raw passthrough
     let mut held: Vec<u8> = Vec::new();
-    let mut visible = true;
+    let mut inverted = true;
     let mut last_cmd = String::new();
     let mut prompt_dirty = false;
 
@@ -148,7 +148,7 @@ fn run_headless(
         } else {
             // Command mode: hold incoming output and show the blinking prompt.
             if prev_raw {
-                visible = true;
+                inverted = true;
                 blink_timer.start();
                 prompt_dirty = true;
             }
@@ -163,7 +163,7 @@ fn run_headless(
             }
 
             if blink_timer.tick() {
-                visible = !visible;
+                inverted = !inverted;
                 blink_timer.start();
                 prompt_dirty = true;
             }
@@ -174,19 +174,18 @@ fn run_headless(
             if prompt_dirty {
                 // `> ` occupies columns 1-2 (1-based), so the first typed
                 // character sits at column 3; place the cursor at `3 + cursor`.
-                if visible {
-                    // Inverted colours (black on yellow) so the command bar
-                    // stands out against the raw device output — same SGR as
-                    // the `Warning` log style.
-                    let _ = write!(
-                        out,
-                        "\r\x1b[2K\x1b[30;43m> {}\x1b[0m\r\x1b[{}G",
-                        command_line,
-                        3 + cursor
-                    );
-                } else {
-                    let _ = write!(out, "\r\x1b[2K\r\x1b[{}G", 3 + cursor);
-                }
+                // The prompt never blanks — it blinks between inverted (black on
+                // yellow, same SGR as the `Warning` log) and plain yellow text
+                // on the default background, so it stays readable while drawing
+                // the eye and standing out from raw device output.
+                let sgr = if inverted { "\x1b[30;43m" } else { "\x1b[33m" };
+                let _ = write!(
+                    out,
+                    "\r\x1b[2K{}> {}\x1b[0m\r\x1b[{}G",
+                    sgr,
+                    command_line,
+                    3 + cursor
+                );
                 let _ = out.flush();
                 last_cmd = command_line;
                 prompt_dirty = false;
