@@ -213,6 +213,8 @@ In headless mode:
 
 To reach the normal `Scope` commands (`!plugin`, `!connect`, `@tags`, `$hex`, history, …), press **`Ctrl+K`**: a blinking `> ` prompt (black on yellow) appears and incoming output is held back while you type. Press **Enter** to run the command (or **Esc** / an empty Enter to cancel) and return to the raw bridge. Every command available in the normal command bar works here. To **quit**, press **`Ctrl+K`** then **`Ctrl+Q`**, or run the **`!exit`** (alias `!quit`) command.
 
+> **Driving headless mode from an AI agent?** [`matheuswhite/scope-skill`](https://github.com/matheuswhite/scope-skill) is a Claude Code skill that wraps this bridge — it connects, sends text / `$hex` / `@tags` / commands, and reads the device's replies over serial or RTT, all without the TUI.
+
 ### Cross-platform
 
 `Scope` runs on Linux, Windows, and macOS (Apple Silicon), with the same interface and behavior on each.
