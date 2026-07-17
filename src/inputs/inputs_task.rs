@@ -1,6 +1,8 @@
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::infra::tags::TagList;
 use crate::inputs::history::{AnyHistory, History, HistoryNavResult, PersistHistory};
+use crate::inputs::key_decode;
+use crate::inputs::key_encode;
 use crate::interfaces::rtt_if::{RttCommand, RttSetup};
 use crate::interfaces::{InterfaceCommand, InterfaceType};
 use crate::{
@@ -19,16 +21,17 @@ use crate::{
     success, warning,
 };
 use chrono::Local;
-use core::panic;
 use crossterm::event::{self, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton};
 use lipsum::lipsum;
 use rand::{Rng, seq::SliceRandom};
 use serialport::FlowControl;
+use std::fs::File;
+use std::io::{IsTerminal, Read};
 use std::num::ParseIntError;
 use std::ops::Range;
 use std::sync::{
     Arc, RwLock,
-    mpsc::{Receiver, Sender},
+    mpsc::{Receiver, Sender, channel},
 };
 
 pub type InputsTask = Task<InputsShared, ()>;
@@ -44,6 +47,12 @@ pub struct InputsShared {
     pub mode: InputMode,
     pub is_case_sensitive: bool,
     pub tag_list: TagList,
+    /// Headless raw passthrough: when `true`, keystrokes are encoded and sent
+    /// straight to the wire and the display prints received bytes verbatim.
+    /// `Ctrl+K` clears it to drop into the command bar (`InputMode::Normal`),
+    /// and executing a command (or an empty `Enter`, or `Esc`) sets it back.
+    /// Always `false` in the TUI.
+    pub raw: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -64,6 +73,7 @@ pub struct InputsConnections {
     rx_channel: Producer<Arc<TimedBytes>>,
     has_tag_failed: bool,
     if_type: InterfaceType,
+    headless: bool,
 }
 
 enum LoopStatus {
@@ -107,12 +117,30 @@ impl InputsTask {
         #[cfg(not(target_os = "macos"))]
         const CTRL_MODIFIER: KeyModifiers = KeyModifiers::CONTROL;
 
+        // Headless raw passthrough short-circuits the whole command-bar match:
+        // the key is encoded and sent to the wire. The read guard is released
+        // at the end of this condition, before `shared` is moved.
+        if shared.read().expect("Cannot get input lock for read").raw {
+            return Self::handle_raw_key_input(private, shared, key);
+        }
+
         match key.code {
             KeyCode::Esc => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
                 match sw.mode {
-                    InputMode::Normal => return LoopStatus::Break,
+                    InputMode::Normal => {
+                        // In headless, Esc backs the `Ctrl+K` command bar out to
+                        // raw passthrough — it does not quit (that's `Ctrl+Q` or
+                        // `!exit`). In the TUI, Esc in Normal mode quits.
+                        if private.headless {
+                            sw.command_line.clear();
+                            sw.cursor = 0;
+                            sw.raw = true;
+                            return LoopStatus::Continue;
+                        }
+                        return LoopStatus::Break;
+                    }
                     InputMode::Search => {
                         sw.mode = InputMode::Normal;
                         let _ = private
@@ -138,7 +166,12 @@ impl InputsTask {
                     .graphics_cmd_sender
                     .send(GraphicsCommand::RecordData);
             }
-            KeyCode::Char('f') | KeyCode::Char('F') if key.modifiers == KeyModifiers::CONTROL => {
+            // Search is delegated to the terminal emulator in headless mode, so
+            // `Ctrl+F` is swallowed there (never flips into `InputMode::Search`,
+            // which the headless display has no UI for).
+            KeyCode::Char('f') | KeyCode::Char('F')
+                if key.modifiers == KeyModifiers::CONTROL && !private.headless =>
+            {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
                 match sw.mode {
@@ -161,6 +194,18 @@ impl InputsTask {
                             .send(GraphicsCommand::ChangeToNormalMode);
                     }
                 }
+            }
+            // In headless command mode `Ctrl+F` is a no-op (swallowed here so it
+            // is not accumulated as a literal 'f').
+            KeyCode::Char('f') | KeyCode::Char('F')
+                if key.modifiers == KeyModifiers::CONTROL && private.headless => {}
+
+            // Headless: `Ctrl+K` then `Ctrl+Q` quits the app (picocom-style).
+            // The TUI quits with Esc, so this is scoped to headless.
+            KeyCode::Char('q') | KeyCode::Char('Q')
+                if key.modifiers == KeyModifiers::CONTROL && private.headless =>
+            {
+                return LoopStatus::Break;
             }
 
             KeyCode::Right if key.modifiers == CTRL_MODIFIER => {
@@ -534,6 +579,12 @@ impl InputsTask {
                                 }));
                             }
 
+                            // An empty Enter in headless command mode is a
+                            // clean cancel: drop straight back to raw.
+                            if private.headless {
+                                sw.raw = true;
+                            }
+
                             return LoopStatus::Continue;
                         }
 
@@ -553,12 +604,24 @@ impl InputsTask {
                         sw.cursor = 0;
 
                         if command_line.starts_with("!") {
-                            let command_line_split = command_line
+                            let command_line_split: Vec<String> = command_line
                                 .strip_prefix('!')
                                 .unwrap()
                                 .split_whitespace()
                                 .map(|arg| arg.to_string())
                                 .collect();
+
+                            // Headless: `!exit` / `!quit` quits the app — the
+                            // discoverable companion to the `Ctrl+K` `Ctrl+Q`
+                            // chord. In the TUI, Esc quits.
+                            if private.headless
+                                && matches!(
+                                    command_line_split.first().map(String::as_str),
+                                    Some("exit") | Some("quit")
+                                )
+                            {
+                                return LoopStatus::Break;
+                            }
 
                             Self::handle_user_command(command_line_split, private);
                         } else {
@@ -579,6 +642,12 @@ impl InputsTask {
                                 message: command_line,
                             }));
                         }
+
+                        // Command executed: in headless, return to raw
+                        // passthrough (in the TUI, `raw` is always false).
+                        if private.headless {
+                            sw.raw = true;
+                        }
                     }
                     InputMode::Search => {
                         let _ = private
@@ -588,6 +657,41 @@ impl InputsTask {
                 }
             }
             _ => {}
+        }
+
+        LoopStatus::Continue
+    }
+
+    /// Headless raw passthrough: encode the keystroke and send it straight to
+    /// the wire, with no command-bar buffering. `Ctrl+K` is the one exception —
+    /// it leaves raw mode and opens the scope command bar (`InputMode::Normal`),
+    /// which the `handle_key_input` path then drives: running a command (or an
+    /// empty `Enter`, or `Esc`) returns to raw, while `Ctrl+Q` / `!exit` quits
+    /// the app.
+    fn handle_raw_key_input(
+        private: &mut InputsConnections,
+        shared: Arc<RwLock<InputsShared>>,
+        key: KeyEvent,
+    ) -> LoopStatus {
+        if matches!(key.code, KeyCode::Char('k') | KeyCode::Char('K'))
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            let mut sw = shared.write().expect("Cannot get input lock for write");
+            sw.raw = false;
+            sw.command_line.clear();
+            sw.cursor = 0;
+            drop(sw);
+
+            let _ = private.graphics_cmd_sender.send(GraphicsCommand::Redraw);
+            return LoopStatus::Continue;
+        }
+
+        let bytes = key_encode::encode_key(key);
+        if !bytes.is_empty() {
+            private.tx.produce(Arc::new(TimedBytes {
+                timestamp: Local::now(),
+                message: bytes,
+            }));
         }
 
         LoopStatus::Continue
@@ -1282,14 +1386,22 @@ impl InputsTask {
         {
             let mut sw = shared.write().expect("Cannot get input lock for write");
             Self::set_hint(&mut sw.current_hint, &private.hints);
+            // Headless starts in raw passthrough; the TUI starts in the command
+            // bar (`raw` stays its `Default` of `false`).
+            sw.raw = private.headless;
         }
 
-        'input_loop: loop {
-            let evt = match event::read() {
-                Ok(evt) => evt,
-                Err(err) => panic!("Error at input task: {:?}", err),
-            };
+        // Input arrives from one merged channel fed by up to two sources: the
+        // keyboard (via crossterm) and/or stdin (raw bytes decoded into keys).
+        // Both converge on `handle_key_input`, so `Ctrl+K`, `@tag`, `$hex` and
+        // arrows behave identically whether typed or piped in. See
+        // `spawn_input_sources`.
+        let evt_receiver = Self::spawn_input_sources(private.tx.clone());
 
+        // `recv` returns `Err` once every input source ended (e.g. stdin hit EOF
+        // with no keyboard attached), which ends the loop and shuts the app down
+        // as if the user had quit.
+        while let Ok(evt) = evt_receiver.recv() {
             match evt {
                 event::Event::FocusGained => {}
                 event::Event::FocusLost => {}
@@ -1297,16 +1409,7 @@ impl InputsTask {
                     if let LoopStatus::Break =
                         Self::handle_key_input(&mut private, shared.clone(), key)
                     {
-                        let _ = private
-                            .plugin_engine_cmd_sender
-                            .send(PluginEngineCommand::Exit);
-                        let exit_cmd = match private.if_type {
-                            InterfaceType::Serial => InterfaceCommand::Serial(SerialCommand::Exit),
-                            InterfaceType::Rtt => InterfaceCommand::Rtt(RttCommand::Exit),
-                        };
-                        let _ = private.interface_cmd_sender.send(exit_cmd);
-                        let _ = private.graphics_cmd_sender.send(GraphicsCommand::Exit);
-                        break 'input_loop;
+                        break;
                     }
                 }
                 event::Event::Mouse(mouse_evt) => match mouse_evt.kind {
@@ -1358,11 +1461,123 @@ impl InputsTask {
                     Self::handle_paste(&mut private, shared.clone(), data);
                 }
                 event::Event::Resize(_, _) => {}
-                _ => continue 'input_loop,
+                _ => continue,
             }
 
             let _ = private.graphics_cmd_sender.send(GraphicsCommand::Redraw);
         }
+
+        // Reached on an explicit quit (`LoopStatus::Break`) or when every input
+        // source is exhausted: broadcast shutdown to the other tasks.
+        let _ = private
+            .plugin_engine_cmd_sender
+            .send(PluginEngineCommand::Exit);
+        let exit_cmd = match private.if_type {
+            InterfaceType::Serial => InterfaceCommand::Serial(SerialCommand::Exit),
+            InterfaceType::Rtt => InterfaceCommand::Rtt(RttCommand::Exit),
+        };
+        let _ = private.interface_cmd_sender.send(exit_cmd);
+        let _ = private.graphics_cmd_sender.send(GraphicsCommand::Exit);
+    }
+
+    /// Spawn the input source thread(s) and return the merged event channel.
+    ///
+    /// Exactly one source is the **controller** — its keys go through the full
+    /// `handle_key_input` treatment (command bar, `Ctrl+K`, `$hex`, `@tags`).
+    /// A second, keyboard-plus-pipe case adds a **data channel** whose bytes go
+    /// straight to the wire and never touch the command bar, so the two streams
+    /// cannot fight over one shared mode:
+    ///
+    /// - **stdin is a terminal** — stdin *is* the keyboard. crossterm parses it
+    ///   as the controller (full event set: keys, mouse, paste, resize).
+    /// - **stdin is a pipe and `/dev/tty` is reachable** — a user is at the
+    ///   keyboard *and* a program feeds stdin. The keyboard (`/dev/tty`) is the
+    ///   controller; the piped stdin is a raw passthrough data channel to the
+    ///   wire. This is what stops stdin's bytes from closing the keyboard's
+    ///   `Ctrl+K` command bar.
+    /// - **stdin is a pipe with no terminal** — a detached/agent invocation.
+    ///   stdin is the sole controller (its `Ctrl+K` etc. drive the command bar),
+    ///   and its EOF closes the channel, which shuts the app down.
+    fn spawn_input_sources(tx: Producer<Arc<TimedBytes>>) -> Receiver<event::Event> {
+        let (evt_sender, evt_receiver) = channel::<event::Event>();
+
+        if std::io::stdin().is_terminal() {
+            Self::spawn_crossterm_source(evt_sender);
+        } else {
+            match File::open("/dev/tty") {
+                Ok(tty) => {
+                    Self::spawn_byte_source(tty, evt_sender); // keyboard = controller
+                    Self::spawn_data_channel(std::io::stdin(), tx); // stdin = raw data
+                }
+                Err(_) => Self::spawn_byte_source(std::io::stdin(), evt_sender), // stdin = controller
+            }
+        }
+
+        evt_receiver
+    }
+
+    /// Keyboard source: crossterm parses the terminal into full `Event`s.
+    fn spawn_crossterm_source(evt_sender: Sender<event::Event>) {
+        std::thread::spawn(move || {
+            // `event::read()` yields `Err` when the reader is unavailable or the
+            // terminal closes, which ends the loop and retires this source.
+            while let Ok(evt) = event::read() {
+                if evt_sender.send(evt).is_err() {
+                    break;
+                }
+            }
+        });
+    }
+
+    /// Raw-byte source (stdin pipe or `/dev/tty`): read bytes and decode them
+    /// into key events. Only key events are produced — no mouse/paste/resize.
+    fn spawn_byte_source(mut reader: impl Read + Send + 'static, evt_sender: Sender<event::Event>) {
+        std::thread::spawn(move || {
+            let mut decoder = key_decode::KeyDecoder::new();
+            let mut buf = [0u8; 1024];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        for key in decoder.flush() {
+                            if evt_sender.send(event::Event::Key(key)).is_err() {
+                                return;
+                            }
+                        }
+                        break; // EOF
+                    }
+                    Ok(n) => {
+                        for key in decoder.feed(&buf[..n]) {
+                            if evt_sender.send(event::Event::Key(key)).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
+    }
+
+    /// Raw passthrough data channel: forward a reader's bytes straight to the
+    /// wire (`tx`), verbatim and mode-agnostic. Used for the piped stdin when a
+    /// keyboard is also present, so streamed data reaches the device without
+    /// ever going through the keyboard-owned command bar. No decoding — arbitrary
+    /// bytes (including binary) pass through unchanged. EOF just ends this
+    /// channel; it does not quit the app (the keyboard is still live).
+    fn spawn_data_channel(mut reader: impl Read + Send + 'static, tx: Producer<Arc<TimedBytes>>) {
+        std::thread::spawn(move || {
+            let mut buf = [0u8; 1024];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => break,
+                    Ok(n) => tx.produce(Arc::new(TimedBytes {
+                        timestamp: Local::now(),
+                        message: buf[..n].to_vec(),
+                    })),
+                    Err(_) => break,
+                }
+            }
+        });
     }
 
     fn set_hint(current_hint: &mut Option<String>, hints: &[&'static str]) {
@@ -1515,6 +1730,7 @@ impl InputsConnections {
         plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
         rx_channel: Producer<Arc<TimedBytes>>,
         if_type: InterfaceType,
+        headless: bool,
     ) -> Self {
         let history = match PersistHistory::new(".scope_history") {
             Ok(h) => AnyHistory::Persist(h),
@@ -1546,6 +1762,7 @@ impl InputsConnections {
             rx_channel,
             has_tag_failed: false,
             if_type,
+            headless,
         }
     }
 }

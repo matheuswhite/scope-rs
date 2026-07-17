@@ -1,0 +1,33 @@
+#!/bin/sh
+# Pre-commit hook: reject unformatted Rust code so it can't reach CI.
+#
+# This hook is tracked in-repo under .githooks/. Enable it once per clone with:
+#
+#     git config core.hooksPath .githooks
+#
+# Mirrors the CI check (`cargo fmt --all -- --check`): if any staged Rust code
+# is not rustfmt-clean, the commit is aborted with the offending diff shown.
+# Fix with `cargo fmt`, re-stage, and commit again.
+#
+# Bypass once (not recommended) with:  git commit --no-verify
+
+# Nothing to do unless Rust files are part of this commit.
+if ! git diff --cached --name-only --diff-filter=ACM | grep -q '\.rs$'; then
+    exit 0
+fi
+
+if ! command -v cargo >/dev/null 2>&1; then
+    echo "pre-commit: cargo not found on PATH; skipping rustfmt check." >&2
+    exit 0
+fi
+
+if ! cargo fmt --all -- --check; then
+    echo >&2
+    echo "pre-commit: rustfmt found formatting issues (diff above)." >&2
+    echo "  fix with:   cargo fmt" >&2
+    echo "  then re-stage the files and commit again." >&2
+    echo "  (bypass once with: git commit --no-verify)" >&2
+    exit 1
+fi
+
+exit 0

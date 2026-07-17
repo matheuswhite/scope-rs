@@ -45,6 +45,12 @@ struct Cli {
     /// Base name for the session record file. Defaults to a timestamp.
     #[clap(short, long)]
     name: Option<String>,
+    /// Run without the TUI: a transparent stdin/stdout bridge to the wire.
+    /// Received bytes print straight to stdout; typed keys are sent raw. Hit
+    /// Ctrl+K for the scope command bar (Esc returns to the bridge); quit with
+    /// Ctrl+K then Ctrl+Q, or the !exit command.
+    #[clap(long)]
+    headless: bool,
 }
 
 #[derive(Subcommand)]
@@ -74,6 +80,7 @@ fn app_serial(
     baudrate: Option<u32>,
     latency: u64,
     name: Option<String>,
+    headless: bool,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -116,6 +123,7 @@ fn app_serial(
         rx_channel.clone().new_producer(),
         plugin_engine_cmd_sender.clone(),
         latency,
+        headless,
     );
     let inputs_connections = InputsConnections::new(
         logger.clone().with_source("inputs".to_string()),
@@ -125,6 +133,7 @@ fn app_serial(
         plugin_engine_cmd_sender.clone(),
         rx_channel.clone().new_producer(),
         InterfaceType::Serial,
+        headless,
     );
 
     let serial_if = InterfaceTask::spawn_serial_interface(
@@ -154,28 +163,45 @@ fn app_serial(
     );
 
     let inputs_shared = inputs_task.shared_ref();
-    let serial_shared = serial_if.shared_ref();
 
-    let storage_base_filename = session::record_filename(name.as_deref());
-    let graphics_config = graphics::graphics_task::GraphicsConfig {
-        storage_base_filename,
-        capacity,
-        latency,
+    // The display task fills the same slot in both modes (same GraphicsCommand
+    // channel, same tx/rx consumers), so the rest of the wiring is identical.
+    let display = if headless {
+        let headless_connections = graphics::headless::HeadlessConnections::new(
+            logger_receiver,
+            tx_channel_consumers.pop().unwrap(),
+            rx_channel_consumers.pop().unwrap(),
+            inputs_shared,
+            latency,
+        );
+        graphics::headless::spawn_headless_task(
+            headless_connections,
+            graphics_cmd_sender,
+            graphics_cmd_receiver,
+        )
+    } else {
+        let serial_shared = serial_if.shared_ref();
+        let storage_base_filename = session::record_filename(name.as_deref());
+        let graphics_config = graphics::graphics_task::GraphicsConfig {
+            storage_base_filename,
+            capacity,
+            latency,
+        };
+        let graphics_connections = GraphicsConnections::new(
+            logger.clone().with_source("graphics".to_string()),
+            logger_receiver,
+            tx_channel_consumers.pop().unwrap(),
+            rx_channel_consumers.pop().unwrap(),
+            inputs_shared,
+            serial_shared,
+            graphics_config,
+        );
+        GraphicsTask::spawn_graphics_task(
+            graphics_connections,
+            graphics_cmd_sender,
+            graphics_cmd_receiver,
+        )
     };
-    let graphics_connections = GraphicsConnections::new(
-        logger.clone().with_source("graphics".to_string()),
-        logger_receiver,
-        tx_channel_consumers.pop().unwrap(),
-        rx_channel_consumers.pop().unwrap(),
-        inputs_shared,
-        serial_shared,
-        graphics_config,
-    );
-    let text_view = GraphicsTask::spawn_graphics_task(
-        graphics_connections,
-        graphics_cmd_sender,
-        graphics_cmd_receiver,
-    );
     let plugin_engine = PluginEngine::spawn_plugin_engine(
         plugin_engine_connections,
         plugin_engine_cmd_sender,
@@ -184,7 +210,7 @@ fn app_serial(
 
     serial_if.join();
     inputs_task.join();
-    text_view.join();
+    display.join();
     plugin_engine.join();
 
     Ok(())
@@ -197,6 +223,7 @@ fn app_rtt(
     channel_num: Option<usize>,
     latency: u64,
     name: Option<String>,
+    headless: bool,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -237,6 +264,7 @@ fn app_rtt(
         rx_channel.clone().new_producer(),
         plugin_engine_cmd_sender.clone(),
         latency,
+        headless,
     );
     let inputs_connections = InputsConnections::new(
         logger.clone().with_source("inputs".to_string()),
@@ -246,6 +274,7 @@ fn app_rtt(
         plugin_engine_cmd_sender.clone(),
         rx_channel.clone().new_producer(),
         InterfaceType::Rtt,
+        headless,
     );
 
     let rtt_if = InterfaceTask::spawn_rtt_interface(
@@ -275,28 +304,43 @@ fn app_rtt(
     );
 
     let inputs_shared = inputs_task.shared_ref();
-    let rtt_shared = rtt_if.shared_ref();
 
-    let storage_base_filename = session::record_filename(name.as_deref());
-    let graphics_config = graphics::graphics_task::GraphicsConfig {
-        storage_base_filename,
-        capacity,
-        latency,
+    let display = if headless {
+        let headless_connections = graphics::headless::HeadlessConnections::new(
+            logger_receiver,
+            tx_channel_consumers.pop().unwrap(),
+            rx_channel_consumers.pop().unwrap(),
+            inputs_shared,
+            latency,
+        );
+        graphics::headless::spawn_headless_task(
+            headless_connections,
+            graphics_cmd_sender,
+            graphics_cmd_receiver,
+        )
+    } else {
+        let rtt_shared = rtt_if.shared_ref();
+        let storage_base_filename = session::record_filename(name.as_deref());
+        let graphics_config = graphics::graphics_task::GraphicsConfig {
+            storage_base_filename,
+            capacity,
+            latency,
+        };
+        let graphics_connections = GraphicsConnections::new(
+            logger.clone().with_source("graphics".to_string()),
+            logger_receiver,
+            tx_channel_consumers.pop().unwrap(),
+            rx_channel_consumers.pop().unwrap(),
+            inputs_shared,
+            rtt_shared,
+            graphics_config,
+        );
+        GraphicsTask::spawn_graphics_task(
+            graphics_connections,
+            graphics_cmd_sender,
+            graphics_cmd_receiver,
+        )
     };
-    let graphics_connections = GraphicsConnections::new(
-        logger.clone().with_source("graphics".to_string()),
-        logger_receiver,
-        tx_channel_consumers.pop().unwrap(),
-        rx_channel_consumers.pop().unwrap(),
-        inputs_shared,
-        rtt_shared,
-        graphics_config,
-    );
-    let text_view = GraphicsTask::spawn_graphics_task(
-        graphics_connections,
-        graphics_cmd_sender,
-        graphics_cmd_receiver,
-    );
     let plugin_engine = PluginEngine::spawn_plugin_engine(
         plugin_engine_connections,
         plugin_engine_cmd_sender,
@@ -305,7 +349,7 @@ fn app_rtt(
 
     rtt_if.join();
     inputs_task.join();
-    text_view.join();
+    display.join();
     plugin_engine.join();
 
     Ok(())
@@ -338,10 +382,11 @@ fn main() -> Result<(), String> {
             .as_deref()
             .map(session::sanitize_name)
             .transpose()?;
+        let headless = cli.headless;
 
         match cli.command {
             Commands::Serial { port, baudrate } => {
-                app_serial(capacity, tag_file, port, baudrate, latency, name)
+                app_serial(capacity, tag_file, port, baudrate, latency, name, headless)
             }
             Commands::Ble { .. } => {
                 Err("Sorry! We're developing BLE interface and it's not available yet".to_string())
@@ -350,7 +395,15 @@ fn main() -> Result<(), String> {
             Commands::Rtt {
                 target,
                 channel_num,
-            } => app_rtt(capacity, tag_file, target, channel_num, latency, name),
+            } => app_rtt(
+                capacity,
+                tag_file,
+                target,
+                channel_num,
+                latency,
+                name,
+                headless,
+            ),
         }
     })();
 

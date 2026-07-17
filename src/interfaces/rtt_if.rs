@@ -40,6 +40,7 @@ pub struct RttConnections {
     rx: Producer<Arc<TimedBytes>>,
     plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
     latency: u64,
+    headless: bool,
     last_address: Option<u64>,
     probe_speed_message: Option<String>,
     fail_to_attach_message: Option<String>,
@@ -111,6 +112,7 @@ impl RttInterface {
             rx,
             plugin_engine_cmd_sender,
             latency,
+            headless,
             mut last_address,
             mut probe_speed_message,
             mut fail_to_attach_message,
@@ -346,25 +348,37 @@ impl RttInterface {
                     Ok(size) => {
                         if size > 0 {
                             received_data = true;
-                            let mut parts = buffer[..size].split(|byte| *byte == b'\n').rev();
-                            let last = parts.next().unwrap_or(&[]);
-                            let parts = parts.rev();
 
-                            for part in parts {
-                                let mut part = part.to_vec();
-                                part.push(b'\n');
-
+                            if headless {
+                                // Forward the whole read chunk immediately, no
+                                // newline framing, so prompts and ANSI appear
+                                // live (see the serial path for the rationale).
                                 rx.produce(Arc::new(TimedBytes {
                                     timestamp: Local::now(),
-                                    message: part,
+                                    message: buffer[..size].to_vec(),
                                 }));
-
                                 now = Instant::now();
-                            }
+                            } else {
+                                let mut parts = buffer[..size].split(|byte| *byte == b'\n').rev();
+                                let last = parts.next().unwrap_or(&[]);
+                                let parts = parts.rev();
 
-                            if last.len() > 0 {
-                                line.extend_from_slice(last);
-                                now = Instant::now();
+                                for part in parts {
+                                    let mut part = part.to_vec();
+                                    part.push(b'\n');
+
+                                    rx.produce(Arc::new(TimedBytes {
+                                        timestamp: Local::now(),
+                                        message: part,
+                                    }));
+
+                                    now = Instant::now();
+                                }
+
+                                if last.len() > 0 {
+                                    line.extend_from_slice(last);
+                                    now = Instant::now();
+                                }
                             }
                         }
                     }
@@ -735,6 +749,7 @@ impl RttConnections {
         rx: Producer<Arc<TimedBytes>>,
         plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
         latency: u64,
+        headless: bool,
     ) -> Self {
         Self {
             logger,
@@ -742,6 +757,7 @@ impl RttConnections {
             rx,
             plugin_engine_cmd_sender,
             latency,
+            headless,
             last_address: None,
             probe_speed_message: None,
             fail_to_attach_message: None,

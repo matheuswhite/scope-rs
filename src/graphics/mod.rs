@@ -1,6 +1,7 @@
 pub mod ansi;
 pub mod buffer;
 pub mod graphics_task;
+pub mod headless;
 pub mod message_filter;
 pub mod palette;
 pub mod screen;

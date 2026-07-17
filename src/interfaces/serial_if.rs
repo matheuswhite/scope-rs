@@ -62,6 +62,7 @@ pub struct SerialConnections {
     rx: Producer<Arc<TimedBytes>>,
     plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
     latency: u64,
+    headless: bool,
 }
 
 pub enum SerialCommand {
@@ -155,6 +156,7 @@ impl SerialInterface {
             rx,
             plugin_engine_cmd_sender,
             latency,
+            headless,
         } = connections;
         let mut line = vec![];
         let mut buffer = [0u8];
@@ -270,13 +272,24 @@ impl SerialInterface {
             match ser.read(&mut buffer) {
                 Ok(_) => {
                     now = Instant::now();
-                    line.push(buffer[0]);
-                    if buffer[0] == b'\n' {
+                    if headless {
+                        // Headless forwards each byte the moment it arrives, so
+                        // shell prompts and ANSI sequences (which carry no
+                        // newline) appear live instead of waiting for `\n` or
+                        // the idle-flush below.
                         rx.produce(Arc::new(TimedBytes {
                             timestamp: Local::now(),
-                            message: std::mem::take(&mut line),
+                            message: vec![buffer[0]],
                         }));
-                        now = Instant::now();
+                    } else {
+                        line.push(buffer[0]);
+                        if buffer[0] == b'\n' {
+                            rx.produce(Arc::new(TimedBytes {
+                                timestamp: Local::now(),
+                                message: std::mem::take(&mut line),
+                            }));
+                            now = Instant::now();
+                        }
                     }
                 }
                 Err(ref e) if e.kind() == io::ErrorKind::TimedOut => {}
@@ -682,6 +695,7 @@ impl SerialConnections {
         rx: Producer<Arc<TimedBytes>>,
         plugin_engine_cmd_sender: Sender<PluginEngineCommand>,
         latency: u64,
+        headless: bool,
     ) -> Self {
         Self {
             logger,
@@ -689,6 +703,7 @@ impl SerialConnections {
             rx,
             plugin_engine_cmd_sender,
             latency,
+            headless,
         }
     }
 }

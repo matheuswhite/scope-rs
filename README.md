@@ -199,6 +199,20 @@ If you instead want to save only the messages captured *from now on*, use the re
 
 You can rename the current session at runtime with `!rename <name>`; the save file (and any crash-recovery backup) follows the new name. To guard against an accidental close or a crash, `Scope` also mirrors the running session to a `.bkp` file under the user config directory (e.g. `~/.config/scope/backup/`), keeping the most recent backups.
 
+### Headless mode
+
+Passing `--headless` (e.g. `scope --headless serial /dev/ttyUSB0 115200`) drops the TUI and turns `Scope` into a transparent bridge between your terminal and the wire — like `screen`/`minicom` in raw mode. This is the mode to use when you are driving a shell over the link (so keystrokes and ANSI escapes go through untouched) or piping the output to another program (an AI assistant, a log file) that would otherwise choke on the TUI's box-drawing.
+
+In headless mode:
+
+- **Received bytes are written straight to stdout**, verbatim and immediately — no timestamps, no scrollback, no colouring. The device's own ANSI sequences control your terminal directly.
+- **Every key you type is sent raw to the device** the moment you press it (no command-bar buffering, no local echo — the device echoes, as with any serial terminal).
+- **Log messages** (connection notices, errors…) still appear inline, with a coloured background so they stand out from device output; they are never sent to the wire.
+- **Scroll, search and copy are delegated to your terminal emulator** — they don't exist inside `Scope` here.
+- **Nothing is written to disk** — no session record, backup, or `!record`. Redirect stdout yourself if you want a capture.
+
+To reach the normal `Scope` commands (`!plugin`, `!connect`, `@tags`, `$hex`, history, …), press **`Ctrl+K`**: a blinking `> ` prompt (black on yellow) appears and incoming output is held back while you type. Press **Enter** to run the command (or **Esc** / an empty Enter to cancel) and return to the raw bridge. Every command available in the normal command bar works here. To **quit**, press **`Ctrl+K`** then **`Ctrl+Q`**, or run the **`!exit`** (alias `!quit`) command.
+
 ### Cross-platform
 
 `Scope` runs on Linux, Windows, and macOS (Apple Silicon), with the same interface and behavior on each.
@@ -272,6 +286,7 @@ Global options (given before the command):
 | `-t, --tag-file <PATH>` | `tags.yml` | Path to the tag file (see [Tags](#tags)). |
 | `-l, --latency <US>` | `100` | Polling latency in microseconds (clamped to `0..=100000`). |
 | `-n, --name <NAME>` | timestamp | Base name for the session record file. |
+| `--headless` | off | Run without the TUI as a raw terminal↔wire bridge (see [Headless mode](#headless-mode)). |
 
 ## Configuration File
 
