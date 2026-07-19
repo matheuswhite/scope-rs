@@ -20,6 +20,7 @@ use ratatui::{
         block::Title,
     },
 };
+use regex::{Regex, RegexBuilder};
 
 pub struct Screen {
     position: BufferPosition,
@@ -73,12 +74,16 @@ impl Screen {
         self.clamp_position(max_main_axis);
     }
 
-    pub fn change_mode_to_search(&mut self, query: String, is_case_sensitive: bool) {
+    pub fn change_mode_to_search(
+        &mut self,
+        query: String,
+        is_case_sensitive: bool,
+        is_regex: bool,
+    ) {
         self.mode = ScreenMode::Search {
-            query,
             current: 0,
             entries: vec![],
-            is_case_sensitive,
+            matcher: SearchMatcher::build(&query, is_case_sensitive, is_regex),
         };
     }
 
@@ -447,28 +452,114 @@ impl Screen {
     }
 }
 
+/// Turns a search query into the positions it matches on a line. Built once
+/// per search change (not per rendered line) so a regex compiles only once.
+pub enum SearchMatcher {
+    /// Empty query, or a regex that failed to compile: matches nothing.
+    Empty,
+    /// Literal substring search, with case folding when not case-sensitive.
+    Plain {
+        needle: String,
+        is_case_sensitive: bool,
+    },
+    /// The query compiled as a regular expression (case folding is baked into
+    /// the compiled regex).
+    Regex(Regex),
+}
+
+impl SearchMatcher {
+    fn build(query: &str, is_case_sensitive: bool, is_regex: bool) -> Self {
+        if query.is_empty() {
+            return Self::Empty;
+        }
+
+        if is_regex {
+            match RegexBuilder::new(query)
+                .case_insensitive(!is_case_sensitive)
+                .build()
+            {
+                Ok(regex) => Self::Regex(regex),
+                // An in-progress or otherwise invalid pattern matches nothing;
+                // the search bar turning red (0 matches) signals it to the user.
+                Err(_) => Self::Empty,
+            }
+        } else {
+            Self::Plain {
+                needle: query.to_string(),
+                is_case_sensitive,
+            }
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        matches!(self, Self::Empty)
+    }
+
+    /// Non-overlapping matches within `line`, each as `(char_start, char_len)`.
+    /// The offsets are in characters (not bytes) so they line up with the
+    /// screen columns used for highlighting and navigation.
+    fn matches(&self, line: &str) -> Vec<(usize, usize)> {
+        match self {
+            Self::Empty => vec![],
+            Self::Plain {
+                needle,
+                is_case_sensitive,
+            } => {
+                let (haystack, needle) = if *is_case_sensitive {
+                    (line.to_string(), needle.clone())
+                } else {
+                    (line.to_ascii_lowercase(), needle.to_ascii_lowercase())
+                };
+                let needle_chars = needle.chars().count();
+
+                let mut result = vec![];
+                let mut start_byte = 0;
+                while let Some(rel_byte) = haystack[start_byte..].find(&needle) {
+                    let abs_byte = start_byte + rel_byte;
+                    let column = haystack[..abs_byte].chars().count();
+                    result.push((column, needle_chars));
+                    start_byte = abs_byte + needle.len();
+                }
+                result
+            }
+            Self::Regex(regex) => {
+                let mut result = vec![];
+                for m in regex.find_iter(line) {
+                    // Skip zero-width matches (e.g. a trailing `.*` or `a*`):
+                    // there is nothing to highlight and they only inflate the
+                    // match count.
+                    if m.start() == m.end() {
+                        continue;
+                    }
+                    let column = line[..m.start()].chars().count();
+                    let len = line[m.start()..m.end()].chars().count();
+                    result.push((column, len));
+                }
+                result
+            }
+        }
+    }
+}
+
 pub enum ScreenMode {
     Normal,
     Search {
-        query: String,
         current: usize,
         entries: Vec<BufferPosition>,
-        is_case_sensitive: bool,
+        matcher: SearchMatcher,
     },
 }
 
 impl ScreenMode {
-    pub fn set_query(&mut self, query: String, is_case_sensitive: bool) {
+    pub fn set_query(&mut self, query: String, is_case_sensitive: bool, is_regex: bool) {
         if let Self::Search {
-            query: current_query,
             entries,
-            is_case_sensitive: current_is_case_sensitive,
+            matcher,
             current,
             ..
         } = self
         {
-            *current_query = query;
-            *current_is_case_sensitive = is_case_sensitive;
+            *matcher = SearchMatcher::build(&query, is_case_sensitive, is_regex);
             *current = 0;
             entries.clear();
         }
@@ -477,6 +568,15 @@ impl ScreenMode {
     pub fn add_entry(&mut self, entry: BufferPosition) {
         if let Self::Search { entries, .. } = self {
             entries.push(entry);
+        }
+    }
+
+    /// Match positions of the active search query within `line`, as
+    /// `(char_start, char_len)`. Empty outside Search mode.
+    pub fn search_matches(&self, line: &str) -> Vec<(usize, usize)> {
+        match self {
+            Self::Search { matcher, .. } => matcher.matches(line),
+            Self::Normal => vec![],
         }
     }
 
@@ -700,10 +800,9 @@ impl ScreenMode {
 
     fn search_line(&self, line: BufferLine<String>) -> Vec<Span<'static>> {
         let Self::Search {
-            query,
             current,
             entries,
-            is_case_sensitive,
+            matcher,
             ..
         } = self
         else {
@@ -715,55 +814,51 @@ impl ScreenMode {
         let disable_style = Style::default().bg(Color::Reset).fg(Color::DarkGray);
         let message = ANSI::remove_encoding(line.message);
 
-        if query.is_empty() {
+        if matcher.is_empty() {
+            return vec![Span::styled(message, disable_style)];
+        }
+
+        // Match on the whole (decoded, ANSI-stripped) line so regex anchors like
+        // `^`, `$` and `\b` behave against the real line boundaries. The same
+        // `message` and matcher feed `update_search_state`, so the char columns
+        // computed here line up with the navigation entries below.
+        let matches = matcher.matches(&message);
+        if matches.is_empty() {
             return vec![Span::styled(message, disable_style)];
         }
 
         let highlighted_style = Style::default().bg(Color::Reset).fg(Color::Yellow);
         let chosen_style = Style::default().bg(Color::Yellow).fg(Color::Black);
-        let query = if *is_case_sensitive {
-            query.to_string()
-        } else {
-            query.to_ascii_lowercase()
-        };
 
-        let message_splitted = message.to_special_char(|string| {
-            let string = if *is_case_sensitive {
-                string.to_string()
-            } else {
-                string.to_ascii_lowercase()
-            };
-
-            string.find(&query).map(|start| {
-                let start = string[..start].chars().count();
-                (start, query.chars().count()).into()
-            })
-        });
-
+        let chars = message.chars().collect::<Vec<_>>();
         let mut output = vec![];
+        let mut cursor = 0;
 
-        for submsg in message_splitted {
-            let vec_span = match submsg {
-                SpecialCharItem::Plain(submsg) => {
-                    let submsg = ANSI::remove_encoding(submsg);
-                    vec![Span::styled(submsg, disable_style)]
-                }
-                SpecialCharItem::Special(query, column) => {
-                    let query_pos = BufferPosition {
-                        line: line.line,
-                        column,
-                    };
+        for (start, len) in matches {
+            if start > cursor {
+                let plain = chars[cursor..start].iter().collect::<String>();
+                output.push(Span::styled(plain, disable_style));
+            }
 
-                    if entries.get(*current) == Some(&query_pos) {
-                        let chosen = Span::styled(query.to_string(), chosen_style);
-                        Self::highlight_special_characters(chosen)
-                    } else {
-                        vec![Span::styled(query.to_string(), highlighted_style)]
-                    }
-                }
+            let matched = chars[start..start + len].iter().collect::<String>();
+            let query_pos = BufferPosition {
+                line: line.line,
+                column: start,
             };
 
-            output.extend(vec_span);
+            if entries.get(*current) == Some(&query_pos) {
+                let chosen = Span::styled(matched, chosen_style);
+                output.extend(Self::highlight_special_characters(chosen));
+            } else {
+                output.push(Span::styled(matched, highlighted_style));
+            }
+
+            cursor = start + len;
+        }
+
+        if cursor < chars.len() {
+            let plain = chars[cursor..].iter().collect::<String>();
+            output.push(Span::styled(plain, disable_style));
         }
 
         output
@@ -933,5 +1028,75 @@ impl ScreenDecoder {
                     .replace("\t", "    ")
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::SearchMatcher;
+
+    // Regex search on each line (issue #209).
+
+    #[test]
+    fn plain_case_sensitive_finds_all_occurrences() {
+        let matcher = SearchMatcher::build("ab", true, false);
+        assert_eq!(matcher.matches("ab_ab_AB"), vec![(0, 2), (3, 2)]);
+    }
+
+    #[test]
+    fn plain_case_insensitive_matches_regardless_of_case() {
+        let matcher = SearchMatcher::build("ab", false, false);
+        assert_eq!(matcher.matches("ab_ab_AB"), vec![(0, 2), (3, 2), (6, 2)]);
+    }
+
+    #[test]
+    fn columns_are_character_offsets_not_bytes() {
+        // "á" is two bytes but one column; the two "X" matches must land on
+        // char columns 1 and 3, not byte offsets 2 and 5.
+        let matcher = SearchMatcher::build("X", true, false);
+        assert_eq!(matcher.matches("áXbX"), vec![(1, 1), (3, 1)]);
+    }
+
+    #[test]
+    fn regex_matches_pattern_with_char_columns_and_lengths() {
+        let matcher = SearchMatcher::build(r"\d+", true, true);
+        assert_eq!(matcher.matches("ab12cde345"), vec![(2, 2), (7, 3)]);
+    }
+
+    #[test]
+    fn regex_case_insensitive_flag_is_honored() {
+        let sensitive = SearchMatcher::build("ERR", true, true);
+        assert!(sensitive.matches("an err happened").is_empty());
+
+        let insensitive = SearchMatcher::build("ERR", false, true);
+        assert_eq!(insensitive.matches("an err happened"), vec![(3, 3)]);
+    }
+
+    #[test]
+    fn regex_anchor_matches_only_at_line_start() {
+        let matcher = SearchMatcher::build("^ab", true, true);
+        assert_eq!(matcher.matches("abcab"), vec![(0, 2)]);
+        assert!(matcher.matches("xabcab").is_empty());
+    }
+
+    #[test]
+    fn regex_zero_width_matches_are_skipped() {
+        // A trailing `.*` and empty `a*` runs would otherwise inflate the match
+        // count with nothing to highlight.
+        let matcher = SearchMatcher::build("a*", true, true);
+        assert_eq!(matcher.matches("baa"), vec![(1, 2)]);
+    }
+
+    #[test]
+    fn invalid_regex_matches_nothing() {
+        let matcher = SearchMatcher::build("(unclosed", true, true);
+        assert!(matcher.is_empty());
+        assert!(matcher.matches("(unclosed group here").is_empty());
+    }
+
+    #[test]
+    fn empty_query_matches_nothing() {
+        assert!(SearchMatcher::build("", false, false).is_empty());
+        assert!(SearchMatcher::build("", false, true).is_empty());
     }
 }

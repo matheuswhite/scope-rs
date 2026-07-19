@@ -293,6 +293,7 @@ impl GraphicsTask {
         rect: Rect,
         frame: &mut Frame,
         is_case_sensitive: bool,
+        is_regex: bool,
     ) {
         let (text, cursor) = {
             let inputs_shared = inputs_shared
@@ -319,8 +320,9 @@ impl GraphicsTask {
 
         let block = Block::default()
             .title(format!(
-                "[{}][{}/{}] Search Mode",
+                "[{}][{}][{}/{}] Search Mode",
                 if is_case_sensitive { "Aa" } else { "--" },
+                if is_regex { ".*" } else { "  " },
                 current,
                 total
             ))
@@ -349,11 +351,15 @@ impl GraphicsTask {
         search_indexes: Option<(usize, usize)>,
         filter_label: &str,
     ) {
-        let (input_mode, is_case_sensitive) = {
+        let (input_mode, is_case_sensitive, is_regex) = {
             let inputs_shared = inputs_shared
                 .read()
                 .expect("Cannot get inputs lock for read");
-            (inputs_shared.mode, inputs_shared.is_case_sensitive)
+            (
+                inputs_shared.mode,
+                inputs_shared.is_case_sensitive,
+                inputs_shared.is_regex,
+            )
         };
 
         match input_mode {
@@ -371,6 +377,7 @@ impl GraphicsTask {
                 rect,
                 frame,
                 is_case_sensitive,
+                is_regex,
             ),
         }
     }
@@ -684,17 +691,22 @@ impl GraphicsTask {
                         if changed {
                             Self::rebuild_displayed_buffer(&mut private);
 
-                            let (search_buffer, is_case_sensitive) = {
+                            let (search_buffer, is_case_sensitive, is_regex) = {
                                 let input_sr = private
                                     .inputs_shared
                                     .read()
                                     .expect("Cannot get input lock for read");
-                                (input_sr.search_buffer.clone(), input_sr.is_case_sensitive)
+                                (
+                                    input_sr.search_buffer.clone(),
+                                    input_sr.is_case_sensitive,
+                                    input_sr.is_regex,
+                                )
                             };
                             Self::update_search_state(
                                 &mut private,
                                 search_buffer,
                                 is_case_sensitive,
+                                is_regex,
                             );
                         }
                     }
@@ -798,15 +810,24 @@ impl GraphicsTask {
                             .jump_to_previous_search(max_main_axis as usize);
                     }
                     GraphicsCommand::SearchChange => {
-                        let (search_buffer, is_case_sensitive) = {
+                        let (search_buffer, is_case_sensitive, is_regex) = {
                             let input_sr = private
                                 .inputs_shared
                                 .read()
                                 .expect("Cannot get input lock for read");
-                            (input_sr.search_buffer.clone(), input_sr.is_case_sensitive)
+                            (
+                                input_sr.search_buffer.clone(),
+                                input_sr.is_case_sensitive,
+                                input_sr.is_regex,
+                            )
                         };
 
-                        Self::update_search_state(&mut private, search_buffer, is_case_sensitive);
+                        Self::update_search_state(
+                            &mut private,
+                            search_buffer,
+                            is_case_sensitive,
+                            is_regex,
+                        );
                     }
                     GraphicsCommand::ChangeToNormalMode => {
                         let max_main_axis = Self::max_main_axis(&private);
@@ -820,10 +841,11 @@ impl GraphicsTask {
                             .expect("Cannot get input lock for read");
                         let query = shared.search_buffer.clone();
                         let is_case_sensitive = shared.is_case_sensitive;
+                        let is_regex = shared.is_regex;
 
                         private
                             .screen
-                            .change_mode_to_search(query, is_case_sensitive);
+                            .change_mode_to_search(query, is_case_sensitive, is_regex);
                     }
                     GraphicsCommand::Exit => break 'draw_loop,
                 }
@@ -904,15 +926,19 @@ impl GraphicsTask {
                 save_stats.file_size = private.typewriter.get_size();
                 new_messages = vec![];
 
-                let (search_buffer, is_case_sensitive) = {
+                let (search_buffer, is_case_sensitive, is_regex) = {
                     let input_sr = private
                         .inputs_shared
                         .read()
                         .expect("Cannot get input lock for read");
-                    (input_sr.search_buffer.clone(), input_sr.is_case_sensitive)
+                    (
+                        input_sr.search_buffer.clone(),
+                        input_sr.is_case_sensitive,
+                        input_sr.is_regex,
+                    )
                 };
 
-                Self::update_search_state(&mut private, search_buffer, is_case_sensitive);
+                Self::update_search_state(&mut private, search_buffer, is_case_sensitive, is_regex);
             }
 
             if need_redraw {
@@ -1002,19 +1028,15 @@ impl GraphicsTask {
         private: &mut GraphicsConnections,
         pattern: String,
         is_case_sensitive: bool,
+        is_regex: bool,
     ) {
         let decoder = private.screen.decoder();
         let mode = private.screen.mode_mut();
 
-        let pattern = if !is_case_sensitive {
-            pattern.to_ascii_lowercase()
-        } else {
-            pattern
-        };
+        let is_empty = pattern.is_empty();
+        mode.set_query(pattern, is_case_sensitive, is_regex);
 
-        mode.set_query(pattern.clone(), is_case_sensitive);
-
-        if pattern.is_empty() {
+        if is_empty {
             return;
         }
 
@@ -1023,23 +1045,10 @@ impl GraphicsTask {
             let message = message.decode(decoder).message;
             let message = ANSI::remove_encoding(message);
 
-            let message = if !is_case_sensitive {
-                message.to_ascii_lowercase()
-            } else {
-                message
-            };
-
-            let mut search_start_byte = 0;
-            while let Some(rel_byte) = message[search_start_byte..].find(&pattern) {
-                let abs_byte = search_start_byte + rel_byte;
-
-                let column_chars = message[..abs_byte].chars().count();
-                mode.add_entry(BufferPosition {
-                    line,
-                    column: column_chars,
-                });
-
-                search_start_byte = abs_byte + pattern.len();
+            // Same matcher and same `message` as `search_line`, so the columns
+            // recorded here match the highlighted spans exactly (regex or not).
+            for (column, _len) in mode.search_matches(&message) {
+                mode.add_entry(BufferPosition { line, column });
             }
         }
 
