@@ -504,6 +504,13 @@ impl InputsTask {
             KeyCode::Up => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
+                // While the tag pop-up is up, the arrows drive its selection
+                // instead of the command history (issue #177).
+                if sw.mode == InputMode::Normal && sw.tag_list.has_suggestions() {
+                    sw.tag_list.select_prev();
+                    return LoopStatus::Continue;
+                }
+
                 match sw.mode {
                     InputMode::Normal => {
                         if let HistoryNavResult::Entry(entry) =
@@ -524,6 +531,11 @@ impl InputsTask {
             }
             KeyCode::Down => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                if sw.mode == InputMode::Normal && sw.tag_list.has_suggestions() {
+                    sw.tag_list.select_next();
+                    return LoopStatus::Continue;
+                }
 
                 match sw.mode {
                     InputMode::Normal => {
@@ -754,7 +766,7 @@ impl InputsTask {
     fn handle_tab_input(private: &mut InputsConnections, shared: Arc<RwLock<InputsShared>>) {
         let mut sw = shared.write().expect("Cannot get input lock for write");
 
-        let Some(first_entry) = sw.tag_list.get_first_autocomplete_list() else {
+        let Some(first_entry) = sw.tag_list.get_selected_autocomplete() else {
             return;
         };
 
