@@ -46,6 +46,10 @@ pub struct InputsShared {
     pub current_hint: Option<String>,
     pub mode: InputMode,
     pub is_case_sensitive: bool,
+    /// Search mode only: when `true`, the search buffer is treated as a regular
+    /// expression matched against each line instead of a literal substring.
+    /// Toggled with `Ctrl+E`.
+    pub is_regex: bool,
     pub tag_list: TagList,
     /// Headless raw passthrough: when `true`, keystrokes are encoded and sent
     /// straight to the wire and the display prints received bytes verbatim.
@@ -264,6 +268,17 @@ impl InputsTask {
 
                 if matches!(sw.mode, InputMode::Search) {
                     sw.is_case_sensitive = !sw.is_case_sensitive;
+
+                    let _ = private
+                        .graphics_cmd_sender
+                        .send(GraphicsCommand::SearchChange);
+                }
+            }
+            KeyCode::Char('e') | KeyCode::Char('E') if key.modifiers == KeyModifiers::CONTROL => {
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                if matches!(sw.mode, InputMode::Search) {
+                    sw.is_regex = !sw.is_regex;
 
                     let _ = private
                         .graphics_cmd_sender

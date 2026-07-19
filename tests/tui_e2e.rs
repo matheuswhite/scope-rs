@@ -266,6 +266,45 @@ fn tag_autocomplete_lists_only_matching_tags() {
 }
 
 #[test]
+fn regex_search_toggles_with_ctrl_e_and_matches_each_line() {
+    // Issue #209: Ctrl+E toggles regex mode in search. As a literal string
+    // `\d+` matches nothing; as a regex it matches the digit run on each line.
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    // Two TX lines with digit runs give the regex something to match.
+    tui.type_text("err 12");
+    tui.press_enter();
+    tui.wait_for("err 12\\r\\n", SETTLE);
+    tui.type_text("err 345");
+    tui.press_enter();
+    tui.wait_for("err 345\\r\\n", SETTLE);
+
+    // Enter search mode (Ctrl+F = 0x06) and type the pattern.
+    tui.type_text("\x06");
+    tui.type_text("\\d+");
+    // Wait until the pattern shows in the search bar (keystrokes landed). Regex
+    // is off by default, so the literal `\d+` matches nothing.
+    let plain = tui.wait_for("\\d+", SETTLE);
+    assert!(
+        plain.contains("[  ]"),
+        "regex should start disabled ([  ]).\n{plain}"
+    );
+    assert!(
+        plain.contains("[--/--]"),
+        "literal \\d+ should match nothing.\n{plain}"
+    );
+
+    // Toggle regex on (Ctrl+E = 0x05): the two digit runs now match.
+    tui.type_text("\x05");
+    let regex = tui.wait_for("[1/2]", SETTLE);
+    assert!(
+        regex.contains("[.*]"),
+        "regex box should read [.*] once enabled.\n{regex}"
+    );
+}
+
+#[test]
 fn tag_autocomplete_down_arrow_then_tab_completes_selected_tag() {
     // Issue #177: the arrows move the highlight inside the pop-up and Tab
     // completes the *selected* entry, not just the first one. With the list
