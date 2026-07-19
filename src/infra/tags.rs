@@ -11,6 +11,7 @@ pub struct TagList {
     tags: Arc<HashMap<String, String>>,
     pattern: Arc<String>,
     autocomplete_list: Vec<Arc<String>>,
+    selected: usize,
 }
 
 impl TagList {
@@ -30,8 +31,32 @@ impl TagList {
         })
     }
 
-    pub fn get_first_autocomplete_list(&self) -> Option<Arc<String>> {
-        self.autocomplete_list.first().cloned()
+    /// The tag entry currently highlighted in the autocomplete pop-up, if any.
+    pub fn get_selected_autocomplete(&self) -> Option<Arc<String>> {
+        self.autocomplete_list.get(self.selected).cloned()
+    }
+
+    /// Index of the highlighted entry within the autocomplete list.
+    pub fn selected(&self) -> usize {
+        self.selected
+    }
+
+    /// Move the highlight down one entry, stopping at the last item.
+    pub fn select_next(&mut self) {
+        if self.autocomplete_list.is_empty() {
+            return;
+        }
+        self.selected = (self.selected + 1).min(self.autocomplete_list.len() - 1);
+    }
+
+    /// Move the highlight up one entry, stopping at the first item.
+    pub fn select_prev(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    /// Whether the autocomplete pop-up currently has entries to show.
+    pub fn has_suggestions(&self) -> bool {
+        !self.pattern.is_empty() && !self.autocomplete_list.is_empty()
     }
 
     pub fn new(file_path: PathBuf) -> Result<Self, String> {
@@ -112,11 +137,15 @@ impl TagList {
             .collect();
         self.autocomplete_list
             .sort_by_key(|a| a.to_ascii_lowercase());
+        // The list is rebuilt on every keystroke, so the highlight returns to
+        // the top; the user drives it away with the up/down arrows.
+        self.selected = 0;
     }
 
     pub fn clear(&mut self) {
         self.pattern = Arc::new(String::new());
         self.autocomplete_list.clear();
+        self.selected = 0;
     }
 
     pub fn full_clear(&mut self) {
@@ -225,5 +254,99 @@ mod tests {
             }
         }
         assert_eq!(resolved, "\"hello\"");
+    }
+
+    // Autocomplete pop-up navigation (issue #177).
+
+    fn tag_list_showing(tags: &[(&str, &str)], pattern: &str) -> TagList {
+        let mut tag_list = tag_list_with(tags);
+        tag_list.update_pattern(pattern, pattern.chars().count());
+        tag_list.update_autocomplete_list();
+        tag_list
+    }
+
+    #[test]
+    fn test_selection_starts_at_first_entry() {
+        let tag_list = tag_list_showing(&[("alpha", "1"), ("beta", "2"), ("gamma", "3")], "@");
+        assert_eq!(tag_list.selected(), 0);
+        assert_eq!(
+            tag_list
+                .get_selected_autocomplete()
+                .as_deref()
+                .map(String::as_str),
+            Some("alpha")
+        );
+    }
+
+    #[test]
+    fn test_select_next_and_prev_walk_the_list() {
+        // Sorted case-insensitively -> [alpha, beta, gamma].
+        let mut tag_list = tag_list_showing(&[("beta", "2"), ("alpha", "1"), ("gamma", "3")], "@");
+
+        tag_list.select_next();
+        assert_eq!(tag_list.selected(), 1);
+        assert_eq!(
+            tag_list
+                .get_selected_autocomplete()
+                .as_deref()
+                .map(String::as_str),
+            Some("beta")
+        );
+
+        tag_list.select_prev();
+        assert_eq!(tag_list.selected(), 0);
+    }
+
+    #[test]
+    fn test_selection_clamps_at_both_ends() {
+        let mut tag_list = tag_list_showing(&[("alpha", "1"), ("beta", "2")], "@");
+
+        // Cannot step above the first entry.
+        tag_list.select_prev();
+        assert_eq!(tag_list.selected(), 0);
+
+        // Cannot step past the last entry.
+        tag_list.select_next();
+        tag_list.select_next();
+        tag_list.select_next();
+        assert_eq!(tag_list.selected(), 1);
+    }
+
+    #[test]
+    fn test_selection_resets_when_list_is_rebuilt() {
+        let mut tag_list = tag_list_showing(&[("alpha", "1"), ("beta", "2")], "@");
+        tag_list.select_next();
+        assert_eq!(tag_list.selected(), 1);
+
+        // A keystroke rebuilds the list and returns the highlight to the top.
+        tag_list.update_autocomplete_list();
+        assert_eq!(tag_list.selected(), 0);
+    }
+
+    #[test]
+    fn test_clear_resets_selection_and_hides_popup() {
+        let mut tag_list = tag_list_showing(&[("alpha", "1"), ("beta", "2")], "@");
+        tag_list.select_next();
+        assert!(tag_list.has_suggestions());
+
+        tag_list.clear();
+        assert_eq!(tag_list.selected(), 0);
+        assert!(!tag_list.has_suggestions());
+        assert!(tag_list.get_selected_autocomplete().is_none());
+    }
+
+    #[test]
+    fn test_has_suggestions_requires_pattern_and_matches() {
+        // No pattern typed yet -> no pop-up.
+        let empty = tag_list_with(&[("alpha", "1")]);
+        assert!(!empty.has_suggestions());
+
+        // Pattern with no matching tag -> no pop-up.
+        let no_match = tag_list_showing(&[("alpha", "1")], "@zzz");
+        assert!(!no_match.has_suggestions());
+
+        // Pattern with matches -> pop-up shows.
+        let matching = tag_list_showing(&[("alpha", "1")], "@al");
+        assert!(matching.has_suggestions());
     }
 }

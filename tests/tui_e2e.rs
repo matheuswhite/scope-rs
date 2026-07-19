@@ -266,6 +266,25 @@ fn tag_autocomplete_lists_only_matching_tags() {
 }
 
 #[test]
+fn tag_autocomplete_down_arrow_then_tab_completes_selected_tag() {
+    // Issue #177: the arrows move the highlight inside the pop-up and Tab
+    // completes the *selected* entry, not just the first one. With the list
+    // sorted [tag1, tag2], one Down selects tag2, so Tab must yield "@tag2"
+    // (which resolves to tag2's value on Enter), never "@tag1".
+    let mut tui = Tui::start(&[("tag1", "hello"), ("tag2", "world")]);
+    tui.wait_until_ready();
+
+    tui.type_text("@ta");
+    tui.wait_for("@tag2", SETTLE);
+
+    tui.type_text("\x1b[B"); // Down arrow: highlight tag2
+    tui.type_text("\t"); // Tab: complete the highlighted entry
+    tui.press_enter();
+
+    tui.wait_for("world\\r\\n", SETTLE);
+}
+
+#[test]
 fn bracketed_paste_inserts_into_command_bar() {
     // A terminal delivers a paste wrapped in the bracketed-paste markers
     // (ESC[200~ ... ESC[201~). It must land in the command bar and be sendable.

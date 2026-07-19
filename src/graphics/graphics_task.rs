@@ -34,7 +34,7 @@ use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, BorderType, Borders, Clear, Paragraph, block::Title},
 };
@@ -380,7 +380,7 @@ impl GraphicsTask {
         frame: &mut Frame,
         command_bar_y: u16,
     ) {
-        let (autocomplete_list, pattern, input_mode, cursor, command) = {
+        let (autocomplete_list, pattern, input_mode, cursor, command, selected) = {
             let inputs_shared = inputs_shared
                 .read()
                 .expect("Cannot get inputs lock for read");
@@ -391,6 +391,7 @@ impl GraphicsTask {
                 inputs_shared.mode,
                 inputs_shared.cursor,
                 inputs_shared.command_line.clone(),
+                inputs_shared.tag_list.selected(),
             )
         };
 
@@ -398,16 +399,21 @@ impl GraphicsTask {
             return;
         }
 
-        let max_entries = min(frame.size().height as usize / 2, autocomplete_list.len());
-        let mut entries = autocomplete_list[..max_entries].to_vec();
-        if entries.len() < autocomplete_list.len() {
-            entries.push(Arc::new("...".to_string()));
-        }
+        // Window the list so the highlighted entry is always on screen, keeping
+        // as many earlier entries visible as fit; a trailing `...` marks that
+        // more entries exist below the window.
+        let cap = min(frame.size().height as usize / 2, autocomplete_list.len()).max(1);
+        let start = selected
+            .saturating_sub(cap - 1)
+            .min(autocomplete_list.len() - cap);
+        let window = &autocomplete_list[start..start + cap];
+        let has_more_below = start + cap < autocomplete_list.len();
 
-        let longest_entry_len = entries
+        let longest_entry_len = window
             .iter()
             .fold(0u16, |len, x| max(len, x.chars().count() as u16));
-        let area_size = (longest_entry_len + 5, entries.len() as u16 + 2);
+        let row_count = window.len() as u16 + if has_more_below { 1 } else { 0 };
+        let area_size = (longest_entry_len + 5, row_count + 2);
         let max_x = frame.size().x
             + frame
                 .size()
@@ -430,29 +436,40 @@ impl GraphicsTask {
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
             .style(Style::default().fg(Color::Cyan));
-        let text = entries
+        let inner_width = area_size.0.saturating_sub(2) as usize;
+        let skip_chars = pattern.chars().count().saturating_sub(1);
+        let mut text = window
             .iter()
-            .map(|x| {
-                let is_last =
-                    (x == entries.last().unwrap()) && (entries.len() < autocomplete_list.len());
+            .enumerate()
+            .map(|(i, x)| {
+                let suffix = x.as_str().chars().skip(skip_chars).collect::<String>();
 
-                Line::from(vec![
-                    Span::styled(
-                        format!(" {}", if !is_last { &pattern } else { "" }),
-                        Style::default().fg(Color::Cyan),
-                    ),
-                    Span::styled(
-                        if x.as_str() == "..." {
-                            x.to_string()
-                        } else {
-                            let skip_chars = pattern.chars().count().saturating_sub(1);
-                            x.as_str().chars().skip(skip_chars).collect::<String>()
-                        },
-                        Style::default().fg(Color::DarkGray),
-                    ),
-                ])
+                if start + i == selected {
+                    // Highlighted entry: a full-width cyan bar so the current
+                    // selection is unmistakable.
+                    let content = format!(" {}{}", pattern, suffix);
+                    let pad = inner_width.saturating_sub(content.chars().count());
+                    Line::from(Span::styled(
+                        format!("{}{}", content, " ".repeat(pad)),
+                        Style::default()
+                            .fg(Color::Black)
+                            .bg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ))
+                } else {
+                    Line::from(vec![
+                        Span::styled(format!(" {}", pattern), Style::default().fg(Color::Cyan)),
+                        Span::styled(suffix, Style::default().fg(Color::DarkGray)),
+                    ])
+                }
             })
             .collect::<Vec<_>>();
+        if has_more_below {
+            text.push(Line::from(Span::styled(
+                " ...",
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
         let paragraph = Paragraph::new(text).block(block);
 
         frame.render_widget(Clear, area);
