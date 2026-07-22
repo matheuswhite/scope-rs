@@ -10,6 +10,19 @@ use crate::{
 use chrono::{DateTime, Local};
 use std::ops::AddAssign;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Monotonic source of per-line identifiers. A line keeps its `id` for its whole
+/// lifetime, independent of its position in the buffer, so features that pin to a
+/// specific line (bookmarks) survive re-indexing on capacity drop and the
+/// re-derivation of the displayed view when the filter changes. Every
+/// `BufferLine` is created on the graphics thread, so a `Relaxed` counter is
+/// enough — we only need uniqueness, not cross-thread ordering.
+static NEXT_LINE_ID: AtomicU64 = AtomicU64::new(0);
+
+fn next_line_id() -> u64 {
+    NEXT_LINE_ID.fetch_add(1, Ordering::Relaxed)
+}
 
 /// The payload of a stored buffer line. It is reference-counted so the filtered
 /// view (`Buffer`) can hold cheap clones of the lines in the full history
@@ -126,6 +139,11 @@ where
     T: AsRef<[u8]>,
 {
     pub line: usize,
+    /// Stable identity assigned at creation and preserved across cloning,
+    /// re-indexing and filter changes (see [`next_line_id`]). Unlike `line`
+    /// (the current index, which shifts as lines drop off the top), this never
+    /// changes for a given logical line, so it is what bookmarks pin to.
+    pub id: u64,
     pub timestamp: DateTime<Local>,
     pub level: Option<LogLevel>,
     pub message: T,
@@ -136,6 +154,7 @@ impl BufferLine<LineBytes> {
     pub fn decode(&self, decoder: ScreenDecoder) -> BufferLine<String> {
         BufferLine {
             line: self.line,
+            id: self.id,
             timestamp: self.timestamp,
             level: self.level,
             message: decoder.decode(&self.message),
@@ -146,6 +165,7 @@ impl BufferLine<LineBytes> {
     pub fn new_rx(timestamp: DateTime<Local>, message: Vec<u8>) -> Self {
         Self {
             line: 0,
+            id: next_line_id(),
             timestamp,
             level: None,
             message: message.into(),
@@ -156,6 +176,7 @@ impl BufferLine<LineBytes> {
     pub fn new_tx(timestamp: DateTime<Local>, message: Vec<u8>) -> Self {
         Self {
             line: 0,
+            id: next_line_id(),
             timestamp,
             level: None,
             message: message.into(),
@@ -166,6 +187,7 @@ impl BufferLine<LineBytes> {
     pub fn new_log(timestamp: DateTime<Local>, level: LogLevel, message: Vec<u8>) -> Self {
         Self {
             line: 0,
+            id: next_line_id(),
             timestamp,
             level: Some(level),
             message: message.into(),

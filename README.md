@@ -133,6 +133,10 @@ Press `Ctrl+F` to enter **search mode** and type a query to find it in the captu
 
 ![Search gif](videos/015_search/video.gif)
 
+#### Bookmarks
+
+Jumping to a specific line in a long history is tedious. **Right-click** a line to bookmark it (right-click again to remove the bookmark); a bookmarked line is marked by a **yellow timestamp**. Press `Tab` to jump to the next bookmark and `Shift+Tab` for the previous one, cycling around the ends — the same navigation feel as search. Bookmarks follow their line as the history scrolls and survive changing the filter (a bookmark hidden by a filter reappears once the line is shown again); `Ctrl+L` clears them along with the screen.
+
 #### Message Filter
 
 When received data floods the history — for example a stream of `dbg` lines — use the `!filter` and `!mute` commands to control which received messages are shown. The current filter is shown between square brackets at the top-right of the command bar (e.g. `[.*]`). The two commands share that slot, so setting one replaces the other.
@@ -252,7 +256,8 @@ Anything typed on the command bar that starts with `!` is a command. A line with
 | `Up` / `Down` | Navigate the command history. In search mode: previous / next match. |
 | `Ctrl`+`F` | Toggle search mode. |
 | `Ctrl`+`W` | In search mode: toggle case sensitivity. |
-| `Tab` | Autocomplete a `@tag` from the tag file. |
+| `Tab` | Autocomplete a `@tag` from the tag file (while the pop-up is up); otherwise jump to the next bookmark. |
+| `Shift`+`Tab` | Jump to the previous bookmark. |
 | `Ctrl`+`S` | Save the whole session to a `.txt` file. |
 | `Ctrl`+`R` | Start / stop a record session. |
 | `Ctrl`+`C` | Copy the current selection to the clipboard. |
@@ -266,6 +271,7 @@ Anything typed on the command bar that starts with `!` is a command. A line with
 | `Backspace` / `Delete` | Delete the character before / at the cursor. |
 | Mouse wheel | Scroll the history (hold `Ctrl` to scroll horizontally). |
 | Mouse drag | Select text (copy it with `Ctrl`+`C`). |
+| Mouse right-click | Toggle a bookmark on the clicked line (navigate with `Tab` / `Shift`+`Tab`). |
 
 ## Command-Line Options
 

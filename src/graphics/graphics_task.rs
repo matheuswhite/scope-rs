@@ -108,6 +108,9 @@ pub enum GraphicsCommand {
     Click(ScreenPosition),
     Move(ScreenPosition),
     CopyToClipboard,
+    ToggleBookmark(ScreenPosition),
+    NextBookmark,
+    PrevBookmark,
 }
 
 pub struct SaveStats {
@@ -582,6 +585,23 @@ impl GraphicsTask {
                     }
                     GraphicsCommand::Move(end_pos) => {
                         private.screen.set_selection_end(end_pos);
+                    }
+                    GraphicsCommand::ToggleBookmark(pos) => {
+                        private.screen.toggle_bookmark(&private.buffer, pos);
+                    }
+                    GraphicsCommand::NextBookmark => {
+                        let max_main_axis = Self::max_main_axis(&private);
+
+                        private
+                            .screen
+                            .jump_to_next_bookmark(&private.buffer, max_main_axis as usize);
+                    }
+                    GraphicsCommand::PrevBookmark => {
+                        let max_main_axis = Self::max_main_axis(&private);
+
+                        private
+                            .screen
+                            .jump_to_previous_bookmark(&private.buffer, max_main_axis as usize);
                     }
                     GraphicsCommand::CopyToClipboard => {
                         if let Err(res) =
