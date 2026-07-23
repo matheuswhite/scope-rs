@@ -283,7 +283,12 @@ impl Screen {
 
         let lines = self
             .mode
-            .to_lines(decoded_lines, self.selection.as_ref(), &self.bookmarks)
+            .to_lines(
+                decoded_lines,
+                self.selection.as_ref(),
+                &self.bookmarks,
+                self.current_bookmark,
+            )
             .into_iter()
             .map(|line| Self::crop(line, self.position.column, max_width))
             .collect::<Vec<_>>();
@@ -727,15 +732,16 @@ impl ScreenMode {
         cropped_lines: Vec<BufferLine<String>>,
         selection: Option<&Selection>,
         bookmarks: &BTreeSet<u64>,
+        current_bookmark: Option<u64>,
     ) -> Vec<Line<'static>> {
         match self {
             Self::Normal => cropped_lines
                 .into_iter()
-                .map(|line| self.to_normal_line(line, selection, bookmarks))
+                .map(|line| self.to_normal_line(line, selection, bookmarks, current_bookmark))
                 .collect::<Vec<_>>(),
             Self::Search { .. } => cropped_lines
                 .into_iter()
-                .map(|line| self.to_search_line(line, selection, bookmarks))
+                .map(|line| self.to_search_line(line, selection, bookmarks, current_bookmark))
                 .collect::<Vec<_>>(),
         }
     }
@@ -886,10 +892,17 @@ impl ScreenMode {
         line: BufferLine<String>,
         selection: Option<&Selection>,
         bookmarks: &BTreeSet<u64>,
+        current_bookmark: Option<u64>,
     ) -> Line<'static> {
         let is_reversed = selection.is_some_and(|sel| sel.is_inside(line.line));
         let is_bookmarked = bookmarks.contains(&line.id);
-        let timestamp = Self::timestamp_line(line.timestamp, is_reversed, is_bookmarked);
+        let is_current_bookmark = current_bookmark == Some(line.id);
+        let timestamp = Self::timestamp_line(
+            line.timestamp,
+            is_reversed,
+            is_bookmarked,
+            is_current_bookmark,
+        );
 
         let line_number = line.line;
         let content = if line.level.is_some() {
@@ -914,10 +927,17 @@ impl ScreenMode {
         line: BufferLine<String>,
         selection: Option<&Selection>,
         bookmarks: &BTreeSet<u64>,
+        current_bookmark: Option<u64>,
     ) -> Line<'static> {
         let is_reversed = selection.is_some_and(|sel| sel.is_inside(line.line));
         let is_bookmarked = bookmarks.contains(&line.id);
-        let timestamp = Self::timestamp_line(line.timestamp, is_reversed, is_bookmarked);
+        let is_current_bookmark = current_bookmark == Some(line.id);
+        let timestamp = Self::timestamp_line(
+            line.timestamp,
+            is_reversed,
+            is_bookmarked,
+            is_current_bookmark,
+        );
         let line_number = line.line;
         let content = self.search_line(line);
         let content = Self::reverse_content(content, selection, line_number);
@@ -1020,13 +1040,18 @@ impl ScreenMode {
         timestamp: DateTime<Local>,
         is_reversed: bool,
         is_bookmarked: bool,
+        is_current_bookmark: bool,
     ) -> Vec<Span<'static>> {
         let timestamp = timestamp_fmt(timestamp);
-        // A bookmark is a persistent mark, so it wins over the transient
-        // selection highlight: the yellow timestamp stays visible even while a
-        // selection is dragged across the line.
-        let style = if is_bookmarked {
+        // Two-tier bookmark styling so `Tab` navigation is legible: the bookmark
+        // the cursor is parked on gets the full yellow-background highlight,
+        // while every other bookmark keeps a subtler yellow foreground on the
+        // normal background. Both win over the transient selection highlight, so
+        // a bookmark stays marked even while a selection is dragged across it.
+        let style = if is_current_bookmark {
             Style::default().bg(Color::Yellow).fg(Color::Black)
+        } else if is_bookmarked {
+            Style::default().fg(Color::Yellow)
         } else if is_reversed {
             Style::default().bg(Color::White).fg(Color::DarkGray)
         } else {
@@ -1421,6 +1446,35 @@ mod tests {
 
             screen.jump_to_next_bookmark(&buffer, max_main_axis);
             assert_eq!(screen.current_bookmark, None);
+        }
+
+        // The `Tab`-focused bookmark must stand out from the others: it keeps the
+        // full yellow-background highlight, while every other bookmark drops to a
+        // subtler yellow foreground on the normal background.
+        #[test]
+        fn current_bookmark_is_highlighted_apart_from_other_bookmarks() {
+            use super::super::ScreenMode;
+            use ratatui::style::Color;
+
+            let ts = Local::now();
+            let style_of = |is_bookmarked, is_current| {
+                ScreenMode::timestamp_line(ts, false, is_bookmarked, is_current)[0].style
+            };
+
+            // A plain (non-bookmarked) line: dim gray text, no background.
+            let plain = style_of(false, false);
+            assert_eq!(plain.bg, None);
+            assert_eq!(plain.fg, Some(Color::DarkGray));
+
+            // A bookmark that isn't the current one: yellow text, normal background.
+            let other = style_of(true, false);
+            assert_eq!(other.bg, None);
+            assert_eq!(other.fg, Some(Color::Yellow));
+
+            // The current bookmark: full yellow-background highlight.
+            let current = style_of(true, true);
+            assert_eq!(current.bg, Some(Color::Yellow));
+            assert_eq!(current.fg, Some(Color::Black));
         }
     }
 }
