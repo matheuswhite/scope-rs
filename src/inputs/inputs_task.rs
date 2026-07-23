@@ -582,7 +582,35 @@ impl InputsTask {
                 }
             }
             KeyCode::Tab => {
-                Self::handle_tab_input(private, shared.clone());
+                // While the tag pop-up is up, Tab confirms the highlighted entry
+                // (issue #177). Otherwise, in the command bar, it jumps to the
+                // next bookmark (issue #208) — mirroring search navigation.
+                let (is_normal, has_suggestions) = {
+                    let sr = shared.read().expect("Cannot get input lock for read");
+                    (sr.mode == InputMode::Normal, sr.tag_list.has_suggestions())
+                };
+
+                if is_normal && has_suggestions {
+                    Self::handle_tab_input(private, shared.clone());
+                } else if is_normal {
+                    let _ = private
+                        .graphics_cmd_sender
+                        .send(GraphicsCommand::NextBookmark);
+                }
+            }
+            KeyCode::BackTab => {
+                // Shift+Tab: jump to the previous bookmark (issue #208), the
+                // reverse of Tab. Suppressed while the tag pop-up is up so it
+                // does not fight the autocomplete flow.
+                let jump = {
+                    let sr = shared.read().expect("Cannot get input lock for read");
+                    sr.mode == InputMode::Normal && !sr.tag_list.has_suggestions()
+                };
+                if jump {
+                    let _ = private
+                        .graphics_cmd_sender
+                        .send(GraphicsCommand::PrevBookmark);
+                }
             }
             KeyCode::Enter if key.modifiers == ACTION_MODIFIER => {
                 let sr = shared.read().expect("Cannot get input lock for read");
@@ -1481,6 +1509,16 @@ impl InputsTask {
                         let _ = private
                             .graphics_cmd_sender
                             .send(GraphicsCommand::Move(point));
+                    }
+                    event::MouseEventKind::Down(MouseButton::Right) => {
+                        let point = ScreenPosition {
+                            x: mouse_evt.column,
+                            y: mouse_evt.row,
+                        };
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::ToggleBookmark(point));
                     }
                     _ => {}
                 },

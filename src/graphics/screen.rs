@@ -21,6 +21,7 @@ use ratatui::{
     },
 };
 use regex::{Regex, RegexBuilder};
+use std::collections::BTreeSet;
 
 pub struct Screen {
     position: BufferPosition,
@@ -29,6 +30,15 @@ pub struct Screen {
     decoder: ScreenDecoder,
     size: Rect,
     selection: Option<Selection>,
+    /// Bookmarked lines, tracked by their stable [`BufferLine::id`](crate::graphics::buffer::BufferLine)
+    /// so they follow a line through capacity drops and filter changes rather
+    /// than pinning to a positional index that shifts underneath them.
+    bookmarks: BTreeSet<u64>,
+    /// Id of the bookmark the last `Tab`/`Shift+Tab` jump landed on, so repeated
+    /// presses advance from where the user is instead of re-deriving an anchor
+    /// from the (possibly clamped) scroll offset. Cleared when that bookmark is
+    /// removed or the screen is cleared.
+    current_bookmark: Option<u64>,
 }
 
 pub struct ScreenPosition {
@@ -50,6 +60,8 @@ impl Default for Screen {
                 height: u16::MAX,
             },
             selection: None,
+            bookmarks: BTreeSet::new(),
+            current_bookmark: None,
         }
     }
 }
@@ -143,6 +155,8 @@ impl Screen {
         self.auto_scroll = true;
         self.position = Default::default();
         self.selection = None;
+        self.bookmarks.clear();
+        self.current_bookmark = None;
     }
 
     pub fn disable_auto_scroll(&mut self) {
@@ -269,7 +283,12 @@ impl Screen {
 
         let lines = self
             .mode
-            .to_lines(decoded_lines, self.selection.as_ref())
+            .to_lines(
+                decoded_lines,
+                self.selection.as_ref(),
+                &self.bookmarks,
+                self.current_bookmark,
+            )
             .into_iter()
             .map(|line| Self::crop(line, self.position.column, max_width))
             .collect::<Vec<_>>();
@@ -450,6 +469,114 @@ impl Screen {
 
         self.jump_to_centered_position(pos, max_main_axis);
     }
+
+    /// Toggle the bookmark on the line under `point` (a right-click). A click on
+    /// the borders or the empty area past the last line is a no-op. The bookmark
+    /// pins to the line's stable id, so it stays on the same line even after the
+    /// buffer rotates or the filter is changed.
+    pub fn toggle_bookmark(&mut self, buffer: &Buffer, point: ScreenPosition) {
+        // Content starts one row below the top border; clicks on it (or above)
+        // do not map to a line.
+        let row = point.y as usize;
+        if row < Self::CONTENT_OFFSET_Y {
+            return;
+        }
+
+        let line = (row + self.position.line) - Self::CONTENT_OFFSET_Y;
+        let Some(buffer_line) = buffer.get_range(line, line + 1).first() else {
+            return;
+        };
+        let id = buffer_line.id;
+
+        if self.bookmarks.remove(&id) {
+            if self.current_bookmark == Some(id) {
+                self.current_bookmark = None;
+            }
+        } else {
+            self.bookmarks.insert(id);
+        }
+    }
+
+    /// The bookmarked lines currently present in the displayed buffer, as
+    /// `(line index, id)` pairs ordered top-to-bottom. Derived on demand: a
+    /// bookmark whose line is filtered out or has scrolled off simply does not
+    /// appear here, and comes back if the line does.
+    fn bookmark_positions(&self, buffer: &Buffer) -> Vec<(usize, u64)> {
+        buffer
+            .iter()
+            .filter(|line| self.bookmarks.contains(&line.id))
+            .map(|line| (line.line, line.id))
+            .collect()
+    }
+
+    pub fn jump_to_next_bookmark(&mut self, buffer: &Buffer, max_main_axis: usize) {
+        let positions = self.bookmark_positions(buffer);
+        let anchor = self.position.line + self.screen_center_y() as usize;
+        let Some(index) =
+            Self::next_bookmark_index(&positions, self.current_bookmark, anchor, true)
+        else {
+            return;
+        };
+        self.focus_bookmark(positions[index], max_main_axis);
+    }
+
+    pub fn jump_to_previous_bookmark(&mut self, buffer: &Buffer, max_main_axis: usize) {
+        let positions = self.bookmark_positions(buffer);
+        let anchor = self.position.line + self.screen_center_y() as usize;
+        let Some(index) =
+            Self::next_bookmark_index(&positions, self.current_bookmark, anchor, false)
+        else {
+            return;
+        };
+        self.focus_bookmark(positions[index], max_main_axis);
+    }
+
+    /// Which bookmark to jump to next. When `current` is still in view, step one
+    /// entry from it (wrapping around the ends); otherwise start from where the
+    /// user is looking — the first bookmark past the `anchor` line when going
+    /// forward, the last before it when going backward — wrapping if there is
+    /// none on that side. Returns `None` only when there are no bookmarks.
+    fn next_bookmark_index(
+        positions: &[(usize, u64)],
+        current: Option<u64>,
+        anchor: usize,
+        forward: bool,
+    ) -> Option<usize> {
+        let len = positions.len();
+        if len == 0 {
+            return None;
+        }
+
+        if let Some(current) = current
+            && let Some(i) = positions.iter().position(|(_, id)| *id == current)
+        {
+            return Some(if forward {
+                (i + 1) % len
+            } else {
+                (i + len - 1) % len
+            });
+        }
+
+        Some(if forward {
+            positions
+                .iter()
+                .position(|(line, _)| *line > anchor)
+                .unwrap_or(0)
+        } else {
+            positions
+                .iter()
+                .rposition(|(line, _)| *line < anchor)
+                .unwrap_or(len - 1)
+        })
+    }
+
+    fn focus_bookmark(&mut self, (line, id): (usize, u64), max_main_axis: usize) {
+        self.current_bookmark = Some(id);
+        self.jump_to_centered_position(BufferPosition { line, column: 0 }, max_main_axis);
+        // Parking on a bookmark should hold that view; keep new lines from
+        // yanking it back to the bottom even when the bookmark is the last line.
+        self.auto_scroll = false;
+    }
 }
 
 /// Turns a search query into the positions it matches on a line. Built once
@@ -604,15 +731,17 @@ impl ScreenMode {
         &self,
         cropped_lines: Vec<BufferLine<String>>,
         selection: Option<&Selection>,
+        bookmarks: &BTreeSet<u64>,
+        current_bookmark: Option<u64>,
     ) -> Vec<Line<'static>> {
         match self {
             Self::Normal => cropped_lines
                 .into_iter()
-                .map(|line| self.to_normal_line(line, selection))
+                .map(|line| self.to_normal_line(line, selection, bookmarks, current_bookmark))
                 .collect::<Vec<_>>(),
             Self::Search { .. } => cropped_lines
                 .into_iter()
-                .map(|line| self.to_search_line(line, selection))
+                .map(|line| self.to_search_line(line, selection, bookmarks, current_bookmark))
                 .collect::<Vec<_>>(),
         }
     }
@@ -762,9 +891,18 @@ impl ScreenMode {
         &self,
         line: BufferLine<String>,
         selection: Option<&Selection>,
+        bookmarks: &BTreeSet<u64>,
+        current_bookmark: Option<u64>,
     ) -> Line<'static> {
         let is_reversed = selection.is_some_and(|sel| sel.is_inside(line.line));
-        let timestamp = Self::timestamp_line(line.timestamp, is_reversed);
+        let is_bookmarked = bookmarks.contains(&line.id);
+        let is_current_bookmark = current_bookmark == Some(line.id);
+        let timestamp = Self::timestamp_line(
+            line.timestamp,
+            is_reversed,
+            is_bookmarked,
+            is_current_bookmark,
+        );
 
         let line_number = line.line;
         let content = if line.level.is_some() {
@@ -788,9 +926,18 @@ impl ScreenMode {
         &self,
         line: BufferLine<String>,
         selection: Option<&Selection>,
+        bookmarks: &BTreeSet<u64>,
+        current_bookmark: Option<u64>,
     ) -> Line<'static> {
         let is_reversed = selection.is_some_and(|sel| sel.is_inside(line.line));
-        let timestamp = Self::timestamp_line(line.timestamp, is_reversed);
+        let is_bookmarked = bookmarks.contains(&line.id);
+        let is_current_bookmark = current_bookmark == Some(line.id);
+        let timestamp = Self::timestamp_line(
+            line.timestamp,
+            is_reversed,
+            is_bookmarked,
+            is_current_bookmark,
+        );
         let line_number = line.line;
         let content = self.search_line(line);
         let content = Self::reverse_content(content, selection, line_number);
@@ -889,12 +1036,26 @@ impl ScreenMode {
         Span::styled(line.message, style)
     }
 
-    fn timestamp_line(timestamp: DateTime<Local>, is_reversed: bool) -> Vec<Span<'static>> {
+    fn timestamp_line(
+        timestamp: DateTime<Local>,
+        is_reversed: bool,
+        is_bookmarked: bool,
+        is_current_bookmark: bool,
+    ) -> Vec<Span<'static>> {
         let timestamp = timestamp_fmt(timestamp);
-        let style = if !is_reversed {
-            Style::default().fg(Color::DarkGray)
-        } else {
+        // Two-tier bookmark styling so `Tab` navigation is legible: the bookmark
+        // the cursor is parked on gets the full yellow-background highlight,
+        // while every other bookmark keeps a subtler yellow foreground on the
+        // normal background. Both win over the transient selection highlight, so
+        // a bookmark stays marked even while a selection is dragged across it.
+        let style = if is_current_bookmark {
+            Style::default().bg(Color::Yellow).fg(Color::Black)
+        } else if is_bookmarked {
+            Style::default().fg(Color::Yellow)
+        } else if is_reversed {
             Style::default().bg(Color::White).fg(Color::DarkGray)
+        } else {
+            Style::default().fg(Color::DarkGray)
         };
 
         vec![Span::styled(timestamp, style), Span::raw(" ")]
@@ -1098,5 +1259,222 @@ mod tests {
     fn empty_query_matches_nothing() {
         assert!(SearchMatcher::build("", false, false).is_empty());
         assert!(SearchMatcher::build("", false, true).is_empty());
+    }
+
+    // Bookmarks (issue #208).
+    mod bookmarks {
+        use super::super::{Screen, ScreenPosition};
+        use crate::graphics::buffer::{Buffer, BufferLine};
+        use chrono::Local;
+        use ratatui::layout::Rect;
+
+        fn buffer_with(n: usize) -> Buffer {
+            let mut buffer = Buffer::new(n.max(1));
+            for _ in 0..n {
+                buffer += BufferLine::new_rx(Local::now(), b"x".to_vec());
+            }
+            buffer
+        }
+
+        fn ids(buffer: &Buffer) -> Vec<u64> {
+            buffer.iter().map(|line| line.id).collect()
+        }
+
+        fn sized_screen(height: u16, buffer_len: usize) -> Screen {
+            let mut screen = Screen::default();
+            screen.set_size(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 80,
+                    height,
+                },
+                buffer_len,
+            );
+            screen
+        }
+
+        #[test]
+        fn right_click_toggles_the_line_under_the_cursor() {
+            let buffer = buffer_with(5);
+            let ids = ids(&buffer);
+            let mut screen = sized_screen(10, buffer.len());
+
+            // Content starts one row below the top border, so line 2 is at y=3.
+            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 3 });
+            assert!(screen.bookmarks.contains(&ids[2]));
+
+            // A second right-click on the same line removes it.
+            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 3 });
+            assert!(!screen.bookmarks.contains(&ids[2]));
+        }
+
+        #[test]
+        fn clicks_off_the_content_are_ignored() {
+            let buffer = buffer_with(5);
+            let mut screen = sized_screen(10, buffer.len());
+
+            // Top border row.
+            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 0 });
+            // Well past the last line.
+            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 50 });
+
+            assert!(screen.bookmarks.is_empty());
+        }
+
+        #[test]
+        fn removing_the_current_bookmark_forgets_it() {
+            let buffer = buffer_with(5);
+            let ids = ids(&buffer);
+            let mut screen = sized_screen(10, buffer.len());
+
+            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 3 });
+            screen.current_bookmark = Some(ids[2]);
+
+            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 3 });
+            assert_eq!(screen.current_bookmark, None);
+        }
+
+        #[test]
+        fn clear_drops_all_bookmarks() {
+            let buffer = buffer_with(5);
+            let mut screen = sized_screen(10, buffer.len());
+            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 3 });
+            screen.current_bookmark = Some(0);
+
+            screen.clear();
+
+            assert!(screen.bookmarks.is_empty());
+            assert_eq!(screen.current_bookmark, None);
+        }
+
+        #[test]
+        fn next_index_without_current_anchors_to_the_viewport() {
+            let positions = [(2, 100), (10, 101), (18, 102)];
+
+            // Forward: first bookmark below the anchor line.
+            assert_eq!(
+                Screen::next_bookmark_index(&positions, None, 4, true),
+                Some(1)
+            );
+            // Backward: last bookmark above the anchor line.
+            assert_eq!(
+                Screen::next_bookmark_index(&positions, None, 4, false),
+                Some(0)
+            );
+            // Forward with nothing below wraps to the first.
+            assert_eq!(
+                Screen::next_bookmark_index(&positions, None, 100, true),
+                Some(0)
+            );
+            // Backward with nothing above wraps to the last.
+            assert_eq!(
+                Screen::next_bookmark_index(&positions, None, 0, false),
+                Some(2)
+            );
+        }
+
+        #[test]
+        fn next_index_steps_and_wraps_from_the_current_bookmark() {
+            let positions = [(2, 100), (10, 101), (18, 102)];
+
+            assert_eq!(
+                Screen::next_bookmark_index(&positions, Some(101), 999, true),
+                Some(2)
+            );
+            // Forward off the end wraps to the first.
+            assert_eq!(
+                Screen::next_bookmark_index(&positions, Some(102), 999, true),
+                Some(0)
+            );
+            // Backward off the front wraps to the last.
+            assert_eq!(
+                Screen::next_bookmark_index(&positions, Some(100), 999, false),
+                Some(2)
+            );
+        }
+
+        #[test]
+        fn next_index_falls_back_to_anchor_when_current_is_gone() {
+            let positions = [(2, 100), (10, 101), (18, 102)];
+            // Id 999 is not among the positions (its line was filtered out or
+            // scrolled off), so navigation restarts from the viewport anchor.
+            assert_eq!(
+                Screen::next_bookmark_index(&positions, Some(999), 4, true),
+                Some(1)
+            );
+        }
+
+        #[test]
+        fn next_index_is_none_when_there_are_no_bookmarks() {
+            assert_eq!(Screen::next_bookmark_index(&[], None, 4, true), None);
+            assert_eq!(Screen::next_bookmark_index(&[], Some(1), 4, false), None);
+        }
+
+        #[test]
+        fn navigation_cycles_through_bookmarks_by_id() {
+            let buffer = buffer_with(20);
+            let ids = ids(&buffer);
+            let mut screen = sized_screen(10, buffer.len());
+            for line in [2usize, 10, 18] {
+                screen.bookmarks.insert(ids[line]);
+            }
+            let max_main_axis = buffer.len().saturating_sub(8);
+
+            // Fresh (no current): anchor is the screen centre (line 4), so the
+            // first Tab lands on the first bookmark below it.
+            screen.jump_to_next_bookmark(&buffer, max_main_axis);
+            assert_eq!(screen.current_bookmark, Some(ids[10]));
+
+            screen.jump_to_next_bookmark(&buffer, max_main_axis);
+            assert_eq!(screen.current_bookmark, Some(ids[18]));
+
+            // Wrap around to the top.
+            screen.jump_to_next_bookmark(&buffer, max_main_axis);
+            assert_eq!(screen.current_bookmark, Some(ids[2]));
+
+            // Shift+Tab steps back, wrapping to the bottom.
+            screen.jump_to_previous_bookmark(&buffer, max_main_axis);
+            assert_eq!(screen.current_bookmark, Some(ids[18]));
+        }
+
+        #[test]
+        fn navigation_is_a_no_op_without_bookmarks() {
+            let buffer = buffer_with(20);
+            let mut screen = sized_screen(10, buffer.len());
+            let max_main_axis = buffer.len().saturating_sub(8);
+
+            screen.jump_to_next_bookmark(&buffer, max_main_axis);
+            assert_eq!(screen.current_bookmark, None);
+        }
+
+        // The `Tab`-focused bookmark must stand out from the others: it keeps the
+        // full yellow-background highlight, while every other bookmark drops to a
+        // subtler yellow foreground on the normal background.
+        #[test]
+        fn current_bookmark_is_highlighted_apart_from_other_bookmarks() {
+            use super::super::ScreenMode;
+            use ratatui::style::Color;
+
+            let ts = Local::now();
+            let style_of = |is_bookmarked, is_current| {
+                ScreenMode::timestamp_line(ts, false, is_bookmarked, is_current)[0].style
+            };
+
+            // A plain (non-bookmarked) line: dim gray text, no background.
+            let plain = style_of(false, false);
+            assert_eq!(plain.bg, None);
+            assert_eq!(plain.fg, Some(Color::DarkGray));
+
+            // A bookmark that isn't the current one: yellow text, normal background.
+            let other = style_of(true, false);
+            assert_eq!(other.bg, None);
+            assert_eq!(other.fg, Some(Color::Yellow));
+
+            // The current bookmark: full yellow-background highlight.
+            let current = style_of(true, true);
+            assert_eq!(current.bg, Some(Color::Yellow));
+            assert_eq!(current.fg, Some(Color::Black));
+        }
     }
 }

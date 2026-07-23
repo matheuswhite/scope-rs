@@ -39,7 +39,7 @@ Every subsystem is a `Task<S, M>`: it owns shared state `S` behind an `Arc<RwLoc
 
 - **Interface** (`interfaces/`) — owns the serial port or RTT connection. Enum-dispatched: `InterfaceTask` / `InterfaceCommand` / `InterfaceShared` / `InterfaceType` select between `serial_if.rs` and `rtt_if.rs`.
 - **Inputs** (`inputs/inputs_task.rs`) — the command bar. Parses keystrokes, manages input history (`inputs/history.rs`), and has two `InputMode`s: `Normal` and `Search` (plus a `raw` passthrough flag used only in headless mode).
-- **Graphics** (`graphics/graphics_task.rs`) — renders the TUI, owns the scrollback buffer, handles selection/scrolling, persists the session to a timestamped `.txt` file, and is the sink for log messages. In headless mode it is replaced by `graphics/headless.rs` (same task slot, plain stdout, no TUI).
+- **Graphics** (`graphics/graphics_task.rs`) — renders the TUI, owns the scrollback buffer, handles selection/scrolling, persists the session to a timestamped `.txt` file, and is the sink for log messages. In headless mode it is replaced by `graphics/headless.rs` (same task slot, plain stdout, no TUI). Line-pinned features (bookmarks: right-click to toggle, `Tab`/`Shift+Tab` to jump, yellow timestamp) live in `graphics/screen.rs` and key off the stable per-line `BufferLine::id` so they survive scrollback rotation and filter changes.
 - **PluginEngine** (`plugin/engine.rs`) — runs a Tokio runtime hosting Lua plugins.
 
 ### Data buses (`infra/mpmc.rs`)
