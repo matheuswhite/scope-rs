@@ -12,6 +12,7 @@
 //! silently do nothing.
 
 use serde::Deserialize;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 const CONFIG_FILE_NAME: &str = "config.toml";
@@ -27,6 +28,17 @@ pub struct Config {
     /// Path to the tag file (CLI: `-t/--tag-file`). Used verbatim — no shell is
     /// involved, so `~` and `$VAR` are not expanded; use an absolute path.
     pub tag_file: Option<PathBuf>,
+    /// Optional shortcut overrides: `action-name = "Key+Combo"` (e.g.
+    /// `record = "Ctrl+G"`). There is no CLI flag, so precedence is
+    /// config.toml > built-in default; an omitted action keeps its default.
+    ///
+    /// The action-name vocabulary and combo parsing live in
+    /// [`crate::inputs::keymap`] — this module deliberately does not enumerate
+    /// them. Unknown *top-level* keys are still rejected by
+    /// `deny_unknown_fields`; unknown *action* names (and bad combos, reserved
+    /// keys, duplicate bindings) are rejected by `Keymap::from_config`.
+    #[serde(default)]
+    pub shortcuts: Option<BTreeMap<String, String>>,
 }
 
 impl Config {
@@ -109,6 +121,28 @@ mod tests {
         let config = Config::load_from(&path).unwrap();
         assert_eq!(config.capacity, None);
         assert_eq!(config.tag_file, None);
+        assert!(config.shortcuts.is_none());
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn parses_shortcuts_table() {
+        let path = temp_path("shortcuts");
+        std::fs::write(
+            &path,
+            "capacity = 100\n\n[shortcuts]\nrecord = \"Ctrl+G\"\nnext_bookmark = \"F2\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(config.capacity, Some(100));
+        let shortcuts = config.shortcuts.expect("shortcuts table present");
+        assert_eq!(shortcuts.get("record").map(String::as_str), Some("Ctrl+G"));
+        assert_eq!(
+            shortcuts.get("next_bookmark").map(String::as_str),
+            Some("F2")
+        );
 
         let _ = std::fs::remove_file(&path);
     }

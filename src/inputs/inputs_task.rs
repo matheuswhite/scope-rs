@@ -3,6 +3,7 @@ use crate::infra::tags::TagList;
 use crate::inputs::history::{AnyHistory, History, HistoryNavResult, PersistHistory};
 use crate::inputs::key_decode;
 use crate::inputs::key_encode;
+use crate::inputs::keymap::{Action, Keymap};
 use crate::interfaces::rtt_if::{RttCommand, RttSetup};
 use crate::interfaces::{InterfaceCommand, InterfaceType};
 use crate::{
@@ -78,11 +79,23 @@ pub struct InputsConnections {
     has_tag_failed: bool,
     if_type: InterfaceType,
     headless: bool,
+    /// Effective action→key bindings (built-in defaults merged with the
+    /// optional `[shortcuts]` config section). Owned solely by this task.
+    keymap: Keymap,
 }
 
 enum LoopStatus {
     Continue,
     Break,
+}
+
+/// What running a remapped [`Action`] did to the current key event: either the
+/// action fully handled it, or it declined so the intrinsic key match should
+/// still run (e.g. `Tab` bound to `next_bookmark` yields to `@tag` autocomplete
+/// while the pop-up is up).
+enum ActionOutcome {
+    Handled,
+    Fallthrough,
 }
 
 impl InputsTask {
@@ -116,16 +129,23 @@ impl InputsTask {
         #[cfg(not(windows))]
         const ACTION_MODIFIER: KeyModifiers = KeyModifiers::ALT;
 
-        #[cfg(target_os = "macos")]
-        const CTRL_MODIFIER: KeyModifiers = KeyModifiers::ALT;
-        #[cfg(not(target_os = "macos"))]
-        const CTRL_MODIFIER: KeyModifiers = KeyModifiers::CONTROL;
-
         // Headless raw passthrough short-circuits the whole command-bar match:
         // the key is encoded and sent to the wire. The read guard is released
         // at the end of this condition, before `shared` is moved.
         if shared.read().expect("Cannot get input lock for read").raw {
             return Self::handle_raw_key_input(private, shared, key);
+        }
+
+        // Remappable actions (see `keymap`) resolve first. A matched action
+        // either fully handles the key or falls through to the intrinsic match
+        // below (e.g. `Tab` bound to `next_bookmark` yields to `@tag`
+        // autocomplete while the pop-up is up). Text-editing and control keys
+        // are never in the keymap; they are handled by the match that follows.
+        if let Some(action) = private.keymap.action_for(&key) {
+            match Self::try_run_action(private, &shared, action, &key) {
+                ActionOutcome::Handled => return LoopStatus::Continue,
+                ActionOutcome::Fallthrough => {}
+            }
         }
 
         match key.code {
@@ -154,56 +174,6 @@ impl InputsTask {
                     }
                 }
             }
-            KeyCode::Char('c') | KeyCode::Char('C') if key.modifiers == KeyModifiers::CONTROL => {
-                let _ = private
-                    .graphics_cmd_sender
-                    .send(GraphicsCommand::CopyToClipboard);
-            }
-            KeyCode::Char('l') | KeyCode::Char('L') if key.modifiers == KeyModifiers::CONTROL => {
-                let _ = private.graphics_cmd_sender.send(GraphicsCommand::Clear);
-            }
-            KeyCode::Char('s') | KeyCode::Char('S') if key.modifiers == KeyModifiers::CONTROL => {
-                let _ = private.graphics_cmd_sender.send(GraphicsCommand::SaveData);
-            }
-            KeyCode::Char('r') | KeyCode::Char('R') if key.modifiers == KeyModifiers::CONTROL => {
-                let _ = private
-                    .graphics_cmd_sender
-                    .send(GraphicsCommand::RecordData);
-            }
-            // Search is delegated to the terminal emulator in headless mode, so
-            // `Ctrl+F` is swallowed there (never flips into `InputMode::Search`,
-            // which the headless display has no UI for).
-            KeyCode::Char('f') | KeyCode::Char('F')
-                if key.modifiers == KeyModifiers::CONTROL && !private.headless =>
-            {
-                let mut sw = shared.write().expect("Cannot get input lock for write");
-
-                match sw.mode {
-                    InputMode::Normal => {
-                        sw.mode = InputMode::Search;
-
-                        let _ = private
-                            .graphics_cmd_sender
-                            .send(GraphicsCommand::ChangeToSearchMode);
-
-                        let _ = private
-                            .graphics_cmd_sender
-                            .send(GraphicsCommand::SearchChange);
-                    }
-                    InputMode::Search => {
-                        sw.mode = InputMode::Normal;
-
-                        let _ = private
-                            .graphics_cmd_sender
-                            .send(GraphicsCommand::ChangeToNormalMode);
-                    }
-                }
-            }
-            // In headless command mode `Ctrl+F` is a no-op (swallowed here so it
-            // is not accumulated as a literal 'f').
-            KeyCode::Char('f') | KeyCode::Char('F')
-                if key.modifiers == KeyModifiers::CONTROL && private.headless => {}
-
             // Headless: `Ctrl+K` then `Ctrl+Q` quits the app (picocom-style).
             // The TUI quits with Esc, so this is scoped to headless.
             KeyCode::Char('q') | KeyCode::Char('Q')
@@ -212,80 +182,11 @@ impl InputsTask {
                 return LoopStatus::Break;
             }
 
-            KeyCode::Right if key.modifiers == CTRL_MODIFIER => {
-                let mut sw = shared.write().expect("Cannot get input lock for write");
-
-                let (pos, buffer) = match sw.mode {
-                    InputMode::Normal => (sw.cursor, &sw.command_line),
-                    InputMode::Search => (sw.search_cursor, &sw.search_buffer),
-                };
-
-                let new_pos = buffer
-                    .chars()
-                    .skip(pos)
-                    .zip(buffer.chars().skip(pos + 1))
-                    .enumerate()
-                    .find(|(_, (prev, current))| prev.is_whitespace() && !current.is_whitespace())
-                    .map(|(i, _)| pos + i + 1)
-                    .unwrap_or(buffer.chars().count());
-
-                match sw.mode {
-                    InputMode::Normal => sw.cursor = new_pos,
-                    InputMode::Search => sw.search_cursor = new_pos,
-                };
-
-                Self::update_tag_list(&mut sw, private);
-            }
-            KeyCode::Left if key.modifiers == CTRL_MODIFIER => {
-                let mut sw = shared.write().expect("Cannot get input lock for write");
-
-                let (pos, buffer) = match sw.mode {
-                    InputMode::Normal => (sw.cursor, &sw.command_line),
-                    InputMode::Search => (sw.search_cursor, &sw.search_buffer),
-                };
-
-                let rev_pos = buffer.chars().count() - pos;
-
-                let new_pos = buffer
-                    .chars()
-                    .rev()
-                    .skip(rev_pos + 1)
-                    .zip(buffer.chars().rev().skip(rev_pos))
-                    .enumerate()
-                    .find(|(_, (prev, current))| prev.is_whitespace() && !current.is_whitespace())
-                    .map(|(i, _)| pos - i - 1)
-                    .unwrap_or(0);
-
-                match sw.mode {
-                    InputMode::Normal => sw.cursor = new_pos,
-                    InputMode::Search => sw.search_cursor = new_pos,
-                };
-
-                Self::update_tag_list(&mut sw, private);
-            }
-            KeyCode::Char('w') | KeyCode::Char('W') if key.modifiers == KeyModifiers::CONTROL => {
-                let mut sw = shared.write().expect("Cannot get input lock for write");
-
-                if matches!(sw.mode, InputMode::Search) {
-                    sw.is_case_sensitive = !sw.is_case_sensitive;
-
-                    let _ = private
-                        .graphics_cmd_sender
-                        .send(GraphicsCommand::SearchChange);
-                }
-            }
-            KeyCode::Char('e') | KeyCode::Char('E') if key.modifiers == KeyModifiers::CONTROL => {
-                let mut sw = shared.write().expect("Cannot get input lock for write");
-
-                if matches!(sw.mode, InputMode::Search) {
-                    sw.is_regex = !sw.is_regex;
-
-                    let _ = private
-                        .graphics_cmd_sender
-                        .send(GraphicsCommand::SearchChange);
-                }
-            }
-            KeyCode::Char(c) => {
+            // A character that resolved to no action: insert it, unless it is a
+            // lone `Ctrl+` or `Alt+` combo — a shortcut that happens to be
+            // unbound (e.g. `Ctrl+C` after `copy` was remapped away), which is
+            // swallowed rather than typed literally. See `char_is_literal_text`.
+            KeyCode::Char(c) if Self::char_is_literal_text(key.modifiers) => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
                 match sw.mode {
@@ -337,20 +238,6 @@ impl InputsTask {
                             .send(GraphicsCommand::SearchChange);
                     }
                 }
-            }
-            KeyCode::PageUp if key.modifiers == ACTION_MODIFIER => {
-                let _ = private
-                    .graphics_cmd_sender
-                    .send(GraphicsCommand::JumpToStart);
-            }
-            KeyCode::PageDown if key.modifiers == ACTION_MODIFIER => {
-                let _ = private.graphics_cmd_sender.send(GraphicsCommand::JumpToEnd);
-            }
-            KeyCode::PageUp => {
-                let _ = private.graphics_cmd_sender.send(GraphicsCommand::PageUp);
-            }
-            KeyCode::PageDown => {
-                let _ = private.graphics_cmd_sender.send(GraphicsCommand::PageDown);
             }
             KeyCode::Backspace => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
@@ -582,9 +469,12 @@ impl InputsTask {
                 }
             }
             KeyCode::Tab => {
-                // While the tag pop-up is up, Tab confirms the highlighted entry
-                // (issue #177). Otherwise, in the command bar, it jumps to the
-                // next bookmark (issue #208) — mirroring search navigation.
+                // Tab now carries only `@tag` autocomplete (issue #177): while
+                // the pop-up is up it confirms the highlighted entry. The
+                // bookmark jump (issue #208) is the `next_bookmark` action
+                // resolved above; when it is bound to Tab (its default) and the
+                // pop-up is up, `try_run_action` falls through to here so
+                // autocomplete wins.
                 let (is_normal, has_suggestions) = {
                     let sr = shared.read().expect("Cannot get input lock for read");
                     (sr.mode == InputMode::Normal, sr.tag_list.has_suggestions())
@@ -592,24 +482,6 @@ impl InputsTask {
 
                 if is_normal && has_suggestions {
                     Self::handle_tab_input(private, shared.clone());
-                } else if is_normal {
-                    let _ = private
-                        .graphics_cmd_sender
-                        .send(GraphicsCommand::NextBookmark);
-                }
-            }
-            KeyCode::BackTab => {
-                // Shift+Tab: jump to the previous bookmark (issue #208), the
-                // reverse of Tab. Suppressed while the tag pop-up is up so it
-                // does not fight the autocomplete flow.
-                let jump = {
-                    let sr = shared.read().expect("Cannot get input lock for read");
-                    sr.mode == InputMode::Normal && !sr.tag_list.has_suggestions()
-                };
-                if jump {
-                    let _ = private
-                        .graphics_cmd_sender
-                        .send(GraphicsCommand::PrevBookmark);
                 }
             }
             KeyCode::Enter if key.modifiers == ACTION_MODIFIER => {
@@ -750,6 +622,211 @@ impl InputsTask {
         }
 
         LoopStatus::Continue
+    }
+
+    /// Whether a `Char` key event with these modifiers is literal text to be
+    /// inserted, as opposed to a `Ctrl+`/`Alt+` shortcut that resolved to no
+    /// action and must be swallowed. A lone `Ctrl` or lone `Alt` (i.e. exactly
+    /// one of them) marks a shortcut; neither — or *both together*, which is the
+    /// AltGr signature on Windows international layouts (`@ { } [ ] \ |` …) —
+    /// marks text. `Shift` is irrelevant here (it only sets the character case).
+    fn char_is_literal_text(modifiers: KeyModifiers) -> bool {
+        modifiers.contains(KeyModifiers::CONTROL) == modifiers.contains(KeyModifiers::ALT)
+    }
+
+    /// Execute a remappable [`Action`] resolved from the keymap. Every arm is
+    /// the verbatim body of the shortcut it replaced. Returns
+    /// [`ActionOutcome::Fallthrough`] only when a `Tab`-bound `next_bookmark`
+    /// must yield to `@tag` autocomplete; everything else is
+    /// [`ActionOutcome::Handled`].
+    fn try_run_action(
+        private: &mut InputsConnections,
+        shared: &Arc<RwLock<InputsShared>>,
+        action: Action,
+        key: &KeyEvent,
+    ) -> ActionOutcome {
+        match action {
+            Action::Copy => {
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::CopyToClipboard);
+            }
+            Action::Clear => {
+                let _ = private.graphics_cmd_sender.send(GraphicsCommand::Clear);
+            }
+            Action::Save => {
+                let _ = private.graphics_cmd_sender.send(GraphicsCommand::SaveData);
+            }
+            Action::Record => {
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::RecordData);
+            }
+            Action::PageUp => {
+                let _ = private.graphics_cmd_sender.send(GraphicsCommand::PageUp);
+            }
+            Action::PageDown => {
+                let _ = private.graphics_cmd_sender.send(GraphicsCommand::PageDown);
+            }
+            Action::JumpStart => {
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::JumpToStart);
+            }
+            Action::JumpEnd => {
+                let _ = private.graphics_cmd_sender.send(GraphicsCommand::JumpToEnd);
+            }
+            Action::SearchToggle => {
+                // Search is delegated to the terminal emulator in headless mode,
+                // so this is swallowed there (never flips into `Search`, which
+                // the headless display has no UI for).
+                if private.headless {
+                    return ActionOutcome::Handled;
+                }
+
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+                match sw.mode {
+                    InputMode::Normal => {
+                        sw.mode = InputMode::Search;
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::ChangeToSearchMode);
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::SearchChange);
+                    }
+                    InputMode::Search => {
+                        sw.mode = InputMode::Normal;
+
+                        let _ = private
+                            .graphics_cmd_sender
+                            .send(GraphicsCommand::ChangeToNormalMode);
+                    }
+                }
+            }
+            Action::ToggleCase => {
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                if matches!(sw.mode, InputMode::Search) {
+                    sw.is_case_sensitive = !sw.is_case_sensitive;
+
+                    let _ = private
+                        .graphics_cmd_sender
+                        .send(GraphicsCommand::SearchChange);
+                }
+            }
+            Action::ToggleRegex => {
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                if matches!(sw.mode, InputMode::Search) {
+                    sw.is_regex = !sw.is_regex;
+
+                    let _ = private
+                        .graphics_cmd_sender
+                        .send(GraphicsCommand::SearchChange);
+                }
+            }
+            Action::WordRight => {
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                let (pos, buffer) = match sw.mode {
+                    InputMode::Normal => (sw.cursor, &sw.command_line),
+                    InputMode::Search => (sw.search_cursor, &sw.search_buffer),
+                };
+
+                let new_pos = buffer
+                    .chars()
+                    .skip(pos)
+                    .zip(buffer.chars().skip(pos + 1))
+                    .enumerate()
+                    .find(|(_, (prev, current))| prev.is_whitespace() && !current.is_whitespace())
+                    .map(|(i, _)| pos + i + 1)
+                    .unwrap_or(buffer.chars().count());
+
+                match sw.mode {
+                    InputMode::Normal => sw.cursor = new_pos,
+                    InputMode::Search => sw.search_cursor = new_pos,
+                };
+
+                Self::update_tag_list(&mut sw, private);
+            }
+            Action::WordLeft => {
+                let mut sw = shared.write().expect("Cannot get input lock for write");
+
+                let (pos, buffer) = match sw.mode {
+                    InputMode::Normal => (sw.cursor, &sw.command_line),
+                    InputMode::Search => (sw.search_cursor, &sw.search_buffer),
+                };
+
+                let rev_pos = buffer.chars().count() - pos;
+
+                let new_pos = buffer
+                    .chars()
+                    .rev()
+                    .skip(rev_pos + 1)
+                    .zip(buffer.chars().rev().skip(rev_pos))
+                    .enumerate()
+                    .find(|(_, (prev, current))| prev.is_whitespace() && !current.is_whitespace())
+                    .map(|(i, _)| pos - i - 1)
+                    .unwrap_or(0);
+
+                match sw.mode {
+                    InputMode::Normal => sw.cursor = new_pos,
+                    InputMode::Search => sw.search_cursor = new_pos,
+                };
+
+                Self::update_tag_list(&mut sw, private);
+            }
+            Action::NextBookmark | Action::PrevBookmark => {
+                return Self::run_bookmark_action(private, shared, action, key);
+            }
+        }
+
+        ActionOutcome::Handled
+    }
+
+    /// Dispatch `next_bookmark` / `prev_bookmark`, preserving the original
+    /// contextual rules from the `Tab`/`BackTab` arms: both are Normal-mode
+    /// only; a `Tab`-bound `next_bookmark` yields to autocomplete while the tag
+    /// pop-up is up; a `BackTab`-bound `prev_bookmark` is suppressed while the
+    /// pop-up is up so it does not fight autocomplete.
+    fn run_bookmark_action(
+        private: &InputsConnections,
+        shared: &Arc<RwLock<InputsShared>>,
+        action: Action,
+        key: &KeyEvent,
+    ) -> ActionOutcome {
+        let (is_normal, has_suggestions) = {
+            let sr = shared.read().expect("Cannot get input lock for read");
+            (sr.mode == InputMode::Normal, sr.tag_list.has_suggestions())
+        };
+
+        if !is_normal {
+            return ActionOutcome::Handled;
+        }
+
+        match action {
+            Action::NextBookmark => {
+                if key.code == KeyCode::Tab && has_suggestions {
+                    return ActionOutcome::Fallthrough;
+                }
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::NextBookmark);
+            }
+            Action::PrevBookmark => {
+                if key.code == KeyCode::BackTab && has_suggestions {
+                    return ActionOutcome::Handled;
+                }
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::PrevBookmark);
+            }
+            _ => unreachable!("run_bookmark_action called with a non-bookmark action"),
+        }
+
+        ActionOutcome::Handled
     }
 
     fn replace_range_chars(text: &str, range: Range<usize>, replacement: &str) -> String {
@@ -1796,6 +1873,7 @@ impl InputsConnections {
         rx_channel: Producer<Arc<TimedBytes>>,
         if_type: InterfaceType,
         headless: bool,
+        keymap: Keymap,
     ) -> Self {
         let history = match PersistHistory::new(".scope_history") {
             Ok(h) => AnyHistory::Persist(h),
@@ -1828,6 +1906,7 @@ impl InputsConnections {
             has_tag_failed: false,
             if_type,
             headless,
+            keymap,
         }
     }
 }
@@ -1835,6 +1914,27 @@ impl InputsConnections {
 #[cfg(test)]
 mod tests {
     use super::InputsTask;
+    use crossterm::event::KeyModifiers as M;
+
+    #[test]
+    fn char_typing_swallows_lone_ctrl_or_alt() {
+        // A lone Ctrl+ or Alt+ combo is a (possibly unbound) shortcut, not text.
+        assert!(!InputsTask::char_is_literal_text(M::CONTROL));
+        assert!(!InputsTask::char_is_literal_text(M::ALT));
+        assert!(!InputsTask::char_is_literal_text(M::CONTROL | M::SHIFT));
+        assert!(!InputsTask::char_is_literal_text(M::ALT | M::SHIFT));
+    }
+
+    #[test]
+    fn char_typing_keeps_plain_shift_and_altgr() {
+        // Plain, Shift (uppercase), and AltGr (Ctrl+Alt on Windows) are text.
+        assert!(InputsTask::char_is_literal_text(M::NONE));
+        assert!(InputsTask::char_is_literal_text(M::SHIFT));
+        assert!(InputsTask::char_is_literal_text(M::CONTROL | M::ALT));
+        assert!(InputsTask::char_is_literal_text(
+            M::CONTROL | M::ALT | M::SHIFT
+        ));
+    }
 
     #[test]
     fn test_rhs_one() {

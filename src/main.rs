@@ -20,6 +20,7 @@ use infra::logger::Logger;
 use infra::mpmc::Channel;
 use infra::session;
 use inputs::inputs_task::{InputsConnections, InputsTask};
+use inputs::keymap::Keymap;
 use interfaces::serial_if::{SerialConnections, SerialSetup};
 use list::list_serial_ports;
 use plugin::engine::{PluginEngine, PluginEngineConnections};
@@ -81,6 +82,7 @@ fn app_serial(
     latency: u64,
     name: Option<String>,
     headless: bool,
+    keymap: Keymap,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -134,6 +136,7 @@ fn app_serial(
         rx_channel.clone().new_producer(),
         InterfaceType::Serial,
         headless,
+        keymap,
     );
 
     let serial_if = InterfaceTask::spawn_serial_interface(
@@ -224,6 +227,7 @@ fn app_rtt(
     latency: u64,
     name: Option<String>,
     headless: bool,
+    keymap: Keymap,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -275,6 +279,7 @@ fn app_rtt(
         rx_channel.clone().new_producer(),
         InterfaceType::Rtt,
         headless,
+        keymap,
     );
 
     let rtt_if = InterfaceTask::spawn_rtt_interface(
@@ -377,6 +382,10 @@ fn main() -> Result<(), String> {
             .tag_file
             .or(config.tag_file)
             .unwrap_or_else(|| PathBuf::from(DEFAULT_TAG_FILE));
+        // Shortcuts have no CLI flag, so precedence is config.toml > default.
+        // A bad key string, unknown action, reserved key or duplicate binding
+        // is fatal, joining the single `[ERR]` funnel below.
+        let keymap = Keymap::from_config(config.shortcuts.as_ref())?;
         let name = cli
             .name
             .as_deref()
@@ -385,9 +394,9 @@ fn main() -> Result<(), String> {
         let headless = cli.headless;
 
         match cli.command {
-            Commands::Serial { port, baudrate } => {
-                app_serial(capacity, tag_file, port, baudrate, latency, name, headless)
-            }
+            Commands::Serial { port, baudrate } => app_serial(
+                capacity, tag_file, port, baudrate, latency, name, headless, keymap,
+            ),
             Commands::Ble { .. } => {
                 Err("Sorry! We're developing BLE interface and it's not available yet".to_string())
             }
@@ -403,6 +412,7 @@ fn main() -> Result<(), String> {
                 latency,
                 name,
                 headless,
+                keymap,
             ),
         }
     })();

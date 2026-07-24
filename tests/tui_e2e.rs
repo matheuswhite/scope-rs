@@ -72,6 +72,16 @@ impl Tui {
     /// Launch `scope serial` connected to a fresh virtual serial port, with an
     /// optional tag file built from `tags`.
     fn start(tags: &[(&str, &str)]) -> Tui {
+        Self::start_with_config(tags, None, false)
+    }
+
+    /// Like [`start`](Self::start), but also (optionally) writes `config_toml`
+    /// where `scope` will read it, and can launch in `--headless` mode. The
+    /// config directory is always isolated to the temp tree (via
+    /// `HOME`/`XDG_CONFIG_HOME`), so a real user config can never affect a test;
+    /// when `config_toml` is `Some`, the file is written to the location
+    /// `dirs::config_dir()` resolves on each platform.
+    fn start_with_config(tags: &[(&str, &str)], config_toml: Option<&str>, headless: bool) -> Tui {
         let serial = VirtualSerial::new();
         let tmp = tempfile::tempdir().expect("tempdir");
 
@@ -85,6 +95,20 @@ impl Tui {
         };
         std::fs::write(&tags_path, tags_yaml).expect("write tag file");
 
+        // Config isolation. On Linux `dirs::config_dir()` honors
+        // `XDG_CONFIG_HOME`; on macOS it uses `$HOME/Library/Application
+        // Support` and ignores XDG. Point both at the temp tree, and (when a
+        // config is given) write it to both candidate paths so whichever the
+        // platform picks is present.
+        let xdg = tmp.path().join("xdg");
+        let mac_cfg = tmp.path().join("Library").join("Application Support");
+        if let Some(cfg) = config_toml {
+            for base in [xdg.join("scope"), mac_cfg.join("scope")] {
+                std::fs::create_dir_all(&base).expect("create config dir");
+                std::fs::write(base.join("config.toml"), cfg).expect("write config");
+            }
+        }
+
         let pair = native_pty_system()
             .openpty(PtySize {
                 rows: ROWS,
@@ -96,11 +120,16 @@ impl Tui {
 
         let mut cmd = CommandBuilder::new(env!("CARGO_BIN_EXE_scope"));
         cmd.args(["-t", tags_path.to_str().unwrap()]);
+        if headless {
+            cmd.arg("--headless"); // global flag, before the subcommand
+        }
         cmd.arg("serial");
         cmd.arg(serial.path.to_str().unwrap());
         cmd.arg("115200");
         cmd.cwd(tmp.path()); // session log + .scope_history land here, cleaned with tmp
         cmd.env("TERM", "xterm-256color");
+        cmd.env("HOME", tmp.path());
+        cmd.env("XDG_CONFIG_HOME", &xdg);
 
         let child = pair.slave.spawn_command(cmd).expect("spawn scope");
         drop(pair.slave);
@@ -478,4 +507,51 @@ fn received_bytes_are_displayed() {
     tui.serial.master.flush().expect("flush wire");
 
     tui.wait_for("ping", SETTLE);
+}
+
+#[test]
+fn custom_shortcut_from_config_remaps_action() {
+    // Issue #211: a `[shortcuts]` override both moves an action to a new key and
+    // disables the built-in one. Move `record` from Ctrl+R to Ctrl+G. (Ctrl+G is
+    // 0x07; we avoid Ctrl+J=0x0a / Ctrl+I=0x09, which terminals send as
+    // Enter/Tab.)
+    let mut tui = Tui::start_with_config(&[], Some("[shortcuts]\nrecord = \"Ctrl+G\"\n"), false);
+    tui.wait_until_ready();
+
+    // The old key is now unbound: Ctrl+R (0x12) must NOT start a recording. Use
+    // a sent-text sentinel as an ordering barrier — the single input pipeline
+    // guarantees Ctrl+R was processed by the time the sentinel is rendered.
+    tui.type_text("\x12"); // Ctrl+R
+    tui.type_text("probe");
+    tui.press_enter();
+    let screen = tui.wait_for("probe", SETTLE);
+    assert!(
+        !screen.contains("Recording content on"),
+        "Ctrl+R must be unbound after remapping record to Ctrl+G.\n{screen}"
+    );
+
+    // The new key works: Ctrl+G (0x07) starts a recording.
+    tui.type_text("\x07"); // Ctrl+G
+    tui.wait_for("Recording content on", SETTLE);
+}
+
+#[test]
+fn headless_ctrl_f_is_swallowed_in_command_bar() {
+    // `search_toggle` (Ctrl+F) must be a no-op in headless mode: it must neither
+    // flip into a Search mode the headless bridge cannot render, nor leave a
+    // literal 'f' in the command bar. Enter the command bar with Ctrl+K, press
+    // Ctrl+F, then type a sentinel 'Z'. The blinking prompt mirrors the command
+    // line as `> <text>`, so a correct swallow shows `> Z`; a leaked 'f' would
+    // show `> fZ` (and `> Z` would never appear).
+    let mut tui = Tui::start_with_config(&[], None, true);
+
+    tui.type_text("\x0b"); // Ctrl+K -> command bar
+    tui.type_text("\x06"); // Ctrl+F -> must be swallowed
+    tui.type_text("Z"); // sentinel
+
+    let screen = tui.wait_for("> Z", SETTLE);
+    assert!(
+        !screen.contains("fZ"),
+        "Ctrl+F must not be typed into the headless command bar.\n{screen}"
+    );
 }
