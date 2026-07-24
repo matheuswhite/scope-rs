@@ -1321,35 +1321,50 @@ impl InputsTask {
                 }
             }
             "plugin" => {
-                if command_line_split.len() < 3 {
+                let Some(subcommand) = command_line_split.get(1).map(String::as_str) else {
                     error!(
                         private.logger,
-                        "Insufficient arguments for \"!plugin\" command"
+                        "Please, use \"load\", \"reload\", \"install\", \"list\" or \"unload\" subcommands"
                     );
+                    return;
+                };
+
+                // `list` is the only subcommand that takes no argument.
+                if subcommand == "list" {
+                    let _ = private
+                        .plugin_engine_cmd_sender
+                        .send(PluginEngineCommand::ListInstalledPlugins);
                     return;
                 }
 
-                let command = command_line_split[1].as_str();
+                let Some(arg) = command_line_split.get(2).cloned() else {
+                    error!(
+                        private.logger,
+                        "Insufficient arguments for \"!plugin {}\" command", subcommand
+                    );
+                    return;
+                };
 
-                match command {
+                match subcommand {
                     "load" | "reload" => {
-                        let filepath = command_line_split[2].clone();
-
                         let _ = private
                             .plugin_engine_cmd_sender
-                            .send(PluginEngineCommand::LoadPlugin { filepath });
+                            .send(PluginEngineCommand::LoadPlugin { filepath: arg });
+                    }
+                    "install" => {
+                        let _ = private
+                            .plugin_engine_cmd_sender
+                            .send(PluginEngineCommand::InstallPlugin { filepath: arg });
                     }
                     "unload" => {
-                        let plugin_name = command_line_split[2].clone();
-
                         let _ = private
                             .plugin_engine_cmd_sender
-                            .send(PluginEngineCommand::UnloadPlugin { plugin_name });
+                            .send(PluginEngineCommand::UnloadPlugin { plugin_name: arg });
                     }
                     _ => {
                         error!(
                             private.logger,
-                            "Invalid command. Please, choose one of these options: load, reload, unload"
+                            "Invalid command. Please, choose one of these options: load, reload, install, list, unload"
                         );
                     }
                 }

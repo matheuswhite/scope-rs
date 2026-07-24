@@ -34,6 +34,8 @@ return M
 
 To execute this plugin you need to load it into the `Scope`. With the `Scope` open, you could type `!plugin load hello.lua`. If you remember the analogy of the chip and the handheld tool, then you need to insert the chip into handheld to it works. Likewise, we need to "insert" (or load) our plugin into our "handheld" (or the `Scope` program). With the plugin loaded, all messages will be replied. The replied message will have the following suffix: `Hello,`.
 
+`!plugin load` lasts only for the current session. If a plugin is part of your everyday workflow, **install** it instead with `!plugin install hello.lua`: this loads it now and records it so every subsequent `Scope` session auto-loads it at start-up (the name is stored in `installed.toml`, next to the staged plugins in `<config_dir>/scope/plugins/`). Use `!plugin list` to see what's installed.
+
 ## Hello, World
 
 Let's break down each line of the sample above. At the first line we're importing the `serial` functions from the scope standard library. We need this import to interact with the current connected serial port.

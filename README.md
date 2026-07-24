@@ -241,9 +241,11 @@ Anything typed on the command bar that starts with `!` is a command. A line with
 | `!mute <pattern>` | Hide received messages matching the regex `<pattern>` (the inverse of `!filter`, like `grep -v`). Call with no argument to mute every received message (a warning is logged). Display-only — the session record keeps every message. |
 | `!send_file <path>` | Stream a file to the target over the active interface. |
 | `!log <module> <level>` | Set the log level. `<module>` is `system` (`sys`) or a plugin name; `<level>` is one of `debug`, `info`, `success`, `warning`, `error`. |
-| `!plugin load <file>` | Load a Lua plugin from a file. |
+| `!plugin load <file>` | Load a Lua plugin from a file (for this session only). |
 | `!plugin reload <file>` | Reload a plugin from a file. |
-| `!plugin unload <name>` | Unload a plugin by name. |
+| `!plugin install <file>` | Load a plugin **and** install it, so every subsequent `Scope` session auto-loads it. |
+| `!plugin list` | List the installed (auto-loaded) plugins. |
+| `!plugin unload <name>` | Unload a plugin by name (for this session; does not uninstall). |
 | `!<plugin> <command> [args...]` | Call a command exported by a loaded plugin (see [Plugins](#plugins)). |
 
 ## Keyboard & Mouse Shortcuts
@@ -352,7 +354,7 @@ end
 return M
 ```
 
-Load a plugin with `!plugin load <file>` (and `!plugin reload <file>` / `!plugin unload <name>` to reload or remove it). To call one of your plugin's commands, type `!` followed by the plugin name, the command name and its arguments — for example `!echo hello`. Inside a plugin you can react to lifecycle and I/O events (`on_load`, `on_unload`, `on_serial_recv`/`on_serial_send`, `on_rtt_recv`/`on_rtt_send`) and interact with `Scope` and the target: connect/disconnect, send data, read RTT memory, print messages, run shell commands and more. For the full guide see the [Plugins Developer Guide](plugins/README.md).
+Load a plugin with `!plugin load <file>` (and `!plugin reload <file>` / `!plugin unload <name>` to reload or unload it). To keep a plugin across sessions, use `!plugin install <file>`: it loads the plugin now and records it so every subsequent `Scope` session auto-loads it at start-up (see `!plugin list` to review the installed set). To call one of your plugin's commands, type `!` followed by the plugin name, the command name and its arguments — for example `!echo hello`. Inside a plugin you can react to lifecycle and I/O events (`on_load`, `on_unload`, `on_serial_recv`/`on_serial_send`, `on_rtt_recv`/`on_rtt_send`) and interact with `Scope` and the target: connect/disconnect, send data, read RTT memory, print messages, run shell commands and more. For the full guide see the [Plugins Developer Guide](plugins/README.md).
 
 ![Plugin usage](videos/011_plugin/video.gif)
 
