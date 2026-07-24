@@ -95,6 +95,12 @@ pub enum PluginEngineCommand {
     InstallPlugin {
         filepath: String,
     },
+    /// Remove a plugin from the persistent manifest and delete its staged copy,
+    /// so it no longer auto-loads at start-up (issue #37). Does not unload a
+    /// running instance — that is `UnloadPlugin`.
+    UninstallPlugin {
+        plugin_name: String,
+    },
     /// Log the names of the currently installed (auto-loaded) plugins.
     ListInstalledPlugins,
     UnloadPlugin {
@@ -300,6 +306,64 @@ impl PluginEngine {
                                 plugin_name
                             );
                         }
+                    }
+                    PluginEngineCommand::UninstallPlugin { plugin_name } => {
+                        // Accept `foo`, `foo.lua`, or a path — normalize to the
+                        // bare name the manifest stores.
+                        let Some(plugin_name) = Self::get_plugin_name(&plugin_name) else {
+                            continue 'plugin_engine_loop;
+                        };
+
+                        let dir = plugins_dir();
+
+                        let mut installed = match Installed::load(&dir) {
+                            Ok(installed) => installed,
+                            Err(err) => {
+                                error!(private.logger, "{}", err);
+                                continue 'plugin_engine_loop;
+                            }
+                        };
+
+                        if !installed.remove(&plugin_name) {
+                            error!(
+                                private.logger,
+                                "Plugin \"{}\" is not installed", plugin_name
+                            );
+                            continue 'plugin_engine_loop;
+                        }
+                        if let Err(err) = installed.save(&dir) {
+                            error!(private.logger, "{}", err);
+                            continue 'plugin_engine_loop;
+                        }
+
+                        // Delete the staged copy so it's gone from the plugins
+                        // folder. A missing file is fine (already gone); any other
+                        // error is a non-fatal warning — the manifest, which drives
+                        // auto-load, is already updated. A bundled stdlib file is
+                        // never deleted: `!plugin install` rejects reserved names,
+                        // so a manifest listing `scope`/`shell` can only come from a
+                        // hand-edited file, and losing a user-customized `scope.lua`
+                        // to it would be a nasty surprise (the manifest entry is
+                        // still cleaned above).
+                        let staged_name = format!("{}.lua", plugin_name);
+                        let is_stdlib = STDLIB.iter().any(|(lib, _)| *lib == staged_name);
+                        let staged = dir.join(&staged_name);
+                        if !is_stdlib
+                            && let Err(err) = std::fs::remove_file(&staged)
+                            && err.kind() != std::io::ErrorKind::NotFound
+                        {
+                            warning!(
+                                private.logger,
+                                "Could not delete staged plugin {:?}: {}",
+                                staged,
+                                err
+                            );
+                        }
+
+                        // A running instance is intentionally left loaded for this
+                        // session (use `!plugin unload` to stop it now); uninstall
+                        // only removes it from the persistent auto-load set.
+                        success!(private.logger, "Plugin \"{}\" uninstalled", plugin_name);
                     }
                     PluginEngineCommand::ListInstalledPlugins => {
                         match Installed::load(&plugins_dir()) {

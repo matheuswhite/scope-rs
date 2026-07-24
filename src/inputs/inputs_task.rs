@@ -1324,7 +1324,7 @@ impl InputsTask {
                 let Some(subcommand) = command_line_split.get(1).map(String::as_str) else {
                     error!(
                         private.logger,
-                        "Please, use \"load\", \"reload\", \"install\", \"list\" or \"unload\" subcommands"
+                        "Please, use \"load\", \"reload\", \"install\", \"uninstall\", \"list\" or \"unload\" subcommands"
                     );
                     return;
                 };
@@ -1356,6 +1356,11 @@ impl InputsTask {
                             .plugin_engine_cmd_sender
                             .send(PluginEngineCommand::InstallPlugin { filepath: arg });
                     }
+                    "uninstall" => {
+                        let _ = private
+                            .plugin_engine_cmd_sender
+                            .send(PluginEngineCommand::UninstallPlugin { plugin_name: arg });
+                    }
                     "unload" => {
                         let _ = private
                             .plugin_engine_cmd_sender
@@ -1364,7 +1369,7 @@ impl InputsTask {
                     _ => {
                         error!(
                             private.logger,
-                            "Invalid command. Please, choose one of these options: load, reload, install, list, unload"
+                            "Invalid command. Please, choose one of these options: load, reload, install, uninstall, list, unload"
                         );
                     }
                 }
