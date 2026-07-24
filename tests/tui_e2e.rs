@@ -68,20 +68,50 @@ struct Tui {
     _tmp: tempfile::TempDir,
 }
 
+/// Options for [`Tui::start_with`]. Defaults spawn a plain TUI `scope serial`
+/// with no tags, config, or pre-installed plugins.
+#[derive(Default)]
+struct StartOpts<'a> {
+    /// Tag file entries (`name`, `value`).
+    tags: &'a [(&'a str, &'a str)],
+    /// Contents of `config.toml`, or `None` for no config file.
+    config_toml: Option<&'a str>,
+    /// Launch with the `--headless` global flag.
+    headless: bool,
+    /// Plugins to pre-install as `(name, lua_source)`: each is written as
+    /// `<plugins_dir>/<name>.lua` and listed in a generated `installed.toml`.
+    installed_plugins: &'a [(&'a str, &'a str)],
+    /// Verbatim `installed.toml` contents, overriding the generated manifest.
+    /// Use to seed a malformed manifest; the plugin `.lua` files (if any) still
+    /// come from `installed_plugins`.
+    raw_manifest: Option<&'a str>,
+}
+
 impl Tui {
     /// Launch `scope serial` connected to a fresh virtual serial port, with an
     /// optional tag file built from `tags`.
     fn start(tags: &[(&str, &str)]) -> Tui {
-        Self::start_with_config(tags, None, false)
+        Self::start_with(StartOpts {
+            tags,
+            ..Default::default()
+        })
     }
 
-    /// Like [`start`](Self::start), but also (optionally) writes `config_toml`
-    /// where `scope` will read it, and can launch in `--headless` mode. The
-    /// config directory is always isolated to the temp tree (via
-    /// `HOME`/`XDG_CONFIG_HOME`), so a real user config can never affect a test;
-    /// when `config_toml` is `Some`, the file is written to the location
-    /// `dirs::config_dir()` resolves on each platform.
-    fn start_with_config(tags: &[(&str, &str)], config_toml: Option<&str>, headless: bool) -> Tui {
+    /// Launch `scope` under [`StartOpts`]. The config directory is always
+    /// isolated to the temp tree (via `HOME`/`XDG_CONFIG_HOME`), so a real user
+    /// config can never affect a test; `config_toml` (when set) is written to the
+    /// location `dirs::config_dir()` resolves on each platform, and any
+    /// pre-installed plugins / manifest are seeded into the plugins directory so
+    /// the engine auto-loads them at start-up (issue #36).
+    fn start_with(opts: StartOpts) -> Tui {
+        let StartOpts {
+            tags,
+            config_toml,
+            headless,
+            installed_plugins,
+            raw_manifest,
+        } = opts;
+
         let serial = VirtualSerial::new();
         let tmp = tempfile::tempdir().expect("tempdir");
 
@@ -106,6 +136,32 @@ impl Tui {
             for base in [xdg.join("scope"), mac_cfg.join("scope")] {
                 std::fs::create_dir_all(&base).expect("create config dir");
                 std::fs::write(base.join("config.toml"), cfg).expect("write config");
+            }
+        }
+
+        // Pre-install plugins: write each `<name>.lua` into the plugins dir and
+        // a manifest (either the verbatim `raw_manifest`, or one generated from
+        // the plugin names), under both candidate config roots, so the engine
+        // sees them at start-up regardless of platform.
+        if !installed_plugins.is_empty() || raw_manifest.is_some() {
+            let manifest = raw_manifest.map(str::to_string).unwrap_or_else(|| {
+                format!(
+                    "plugins = [{}]\n",
+                    installed_plugins
+                        .iter()
+                        .map(|(name, _)| format!("\"{name}\""))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+            });
+            for base in [xdg.join("scope"), mac_cfg.join("scope")] {
+                let plugins = base.join("plugins");
+                std::fs::create_dir_all(&plugins).expect("create plugins dir");
+                for (name, source) in installed_plugins {
+                    std::fs::write(plugins.join(format!("{name}.lua")), source)
+                        .expect("write plugin");
+                }
+                std::fs::write(plugins.join("installed.toml"), &manifest).expect("write manifest");
             }
         }
 
@@ -158,6 +214,17 @@ impl Tui {
             serial,
             _tmp: tmp,
         }
+    }
+
+    /// The staged-plugins directory the running app uses (`<config_dir>/scope/
+    /// plugins`), resolved to the platform-correct root under the isolated temp
+    /// config tree. Used to seed or inspect the install manifest.
+    fn plugins_dir(&self) -> PathBuf {
+        #[cfg(target_os = "macos")]
+        let base = self._tmp.path().join("Library").join("Application Support");
+        #[cfg(not(target_os = "macos"))]
+        let base = self._tmp.path().join("xdg");
+        base.join("scope").join("plugins")
     }
 
     /// The currently rendered screen as plain text (like `tmux capture-pane -p`).
@@ -515,7 +582,10 @@ fn custom_shortcut_from_config_remaps_action() {
     // disables the built-in one. Move `record` from Ctrl+R to Ctrl+G. (Ctrl+G is
     // 0x07; we avoid Ctrl+J=0x0a / Ctrl+I=0x09, which terminals send as
     // Enter/Tab.)
-    let mut tui = Tui::start_with_config(&[], Some("[shortcuts]\nrecord = \"Ctrl+G\"\n"), false);
+    let mut tui = Tui::start_with(StartOpts {
+        config_toml: Some("[shortcuts]\nrecord = \"Ctrl+G\"\n"),
+        ..Default::default()
+    });
     tui.wait_until_ready();
 
     // The old key is now unbound: Ctrl+R (0x12) must NOT start a recording. Use
@@ -543,7 +613,10 @@ fn headless_ctrl_f_is_swallowed_in_command_bar() {
     // Ctrl+F, then type a sentinel 'Z'. The blinking prompt mirrors the command
     // line as `> <text>`, so a correct swallow shows `> Z`; a leaked 'f' would
     // show `> fZ` (and `> Z` would never appear).
-    let mut tui = Tui::start_with_config(&[], None, true);
+    let mut tui = Tui::start_with(StartOpts {
+        headless: true,
+        ..Default::default()
+    });
 
     tui.type_text("\x0b"); // Ctrl+K -> command bar
     tui.type_text("\x06"); // Ctrl+F -> must be swallowed
@@ -553,5 +626,133 @@ fn headless_ctrl_f_is_swallowed_in_command_bar() {
     assert!(
         !screen.contains("fZ"),
         "Ctrl+F must not be typed into the headless command bar.\n{screen}"
+    );
+}
+
+#[test]
+fn plugin_install_persists_to_manifest() {
+    // Issue #36: `!plugin install <file>` loads the plugin and records it in the
+    // manifest so future sessions auto-load it. Install a trivial plugin from an
+    // absolute path (independent of the app's cwd), then assert the success log
+    // and that `installed.toml` now lists it.
+    let plugin_home = tempfile::tempdir().expect("plugin tempdir");
+    let plugin_path = plugin_home.path().join("e2e_installed.lua");
+    std::fs::write(&plugin_path, "local M = {}\nreturn M\n").expect("write plugin");
+
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    tui.type_text(&format!(
+        "!plugin install {}",
+        plugin_path.to_str().unwrap()
+    ));
+    tui.press_enter();
+
+    tui.wait_for("installed", SETTLE);
+
+    let manifest = std::fs::read_to_string(tui.plugins_dir().join("installed.toml"))
+        .expect("manifest written after install");
+    assert!(
+        manifest.contains("e2e_installed"),
+        "manifest must list the installed plugin.\n{manifest}"
+    );
+}
+
+#[test]
+fn installed_plugin_autoloads_at_startup() {
+    // A plugin recorded in the manifest is auto-loaded at start-up (the whole
+    // point of install): no `!plugin load` is typed, yet the load log appears.
+    let tui = Tui::start_with(StartOpts {
+        installed_plugins: &[("autoloaded_plugin", "local M = {}\nreturn M\n")],
+        ..Default::default()
+    });
+
+    tui.wait_for("autoloaded_plugin", SETTLE);
+}
+
+#[test]
+fn plugin_install_failure_does_not_persist() {
+    // Safety invariant: a plugin that fails to load must NOT be recorded in the
+    // manifest (else every future session would try to auto-load a broken
+    // plugin). Install a path that doesn't exist and assert the error is logged
+    // and the manifest never gains the name.
+    let plugin_home = tempfile::tempdir().expect("plugin tempdir");
+    let ghost = plugin_home.path().join("ghost_plugin.lua"); // deliberately not created
+
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    tui.type_text(&format!("!plugin install {}", ghost.to_str().unwrap()));
+    tui.press_enter();
+
+    tui.wait_for("doesn't exist", SETTLE);
+
+    let recorded =
+        std::fs::read_to_string(tui.plugins_dir().join("installed.toml")).unwrap_or_default();
+    assert!(
+        !recorded.contains("ghost_plugin"),
+        "a failed install must not persist to the manifest.\n{recorded}"
+    );
+}
+
+#[test]
+fn malformed_manifest_at_startup_is_non_fatal() {
+    // A corrupt manifest must be logged and skipped, never abort start-up (it is
+    // program-managed state, not the user's config.toml). The app must still
+    // become interactive; the parse error being logged proves the engine handled
+    // it gracefully (rather than the process aborting or the engine dying mute).
+    let tui = Tui::start_with(StartOpts {
+        raw_manifest: Some("plugins = not_a_list\n"),
+        ..Default::default()
+    });
+
+    tui.wait_until_ready();
+    tui.wait_for("Cannot parse plugin manifest", SETTLE);
+}
+
+#[test]
+fn plugin_list_shows_installed_set() {
+    // `!plugin list` reports the empty set and, after an install, the names.
+    let plugin_home = tempfile::tempdir().expect("plugin tempdir");
+    let plugin_path = plugin_home.path().join("listed_plugin.lua");
+    std::fs::write(&plugin_path, "local M = {}\nreturn M\n").expect("write plugin");
+
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    tui.type_text("!plugin list");
+    tui.press_enter();
+    tui.wait_for("No plugins installed", SETTLE);
+
+    tui.type_text(&format!(
+        "!plugin install {}",
+        plugin_path.to_str().unwrap()
+    ));
+    tui.press_enter();
+    tui.wait_for("installed", SETTLE);
+
+    tui.type_text("!plugin list");
+    tui.press_enter();
+    // The "Installed plugins:" prefix only comes from the list command's
+    // non-empty branch (the name alone is already on screen from the install).
+    tui.wait_for("Installed plugins:", SETTLE);
+}
+
+#[test]
+fn plugin_install_rejects_reserved_name() {
+    // `scope`/`shell` are the bundled stdlib names; installing one must error and
+    // not be persisted.
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    tui.type_text("!plugin install scope");
+    tui.press_enter();
+    tui.wait_for("reserved plugin name", SETTLE);
+
+    let recorded =
+        std::fs::read_to_string(tui.plugins_dir().join("installed.toml")).unwrap_or_default();
+    assert!(
+        !recorded.contains("scope"),
+        "a reserved name must not be installed.\n{recorded}"
     );
 }

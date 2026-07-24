@@ -1,10 +1,11 @@
 use super::{
     Plugin, PluginUnloadMode,
     bridge::{PluginEngineGate, PluginMethodCallGate},
+    installed::Installed,
     messages::{self, PluginExternalRequest, PluginMethodMessage, PluginResponse},
 };
 use crate::{
-    error,
+    error, info,
     infra::{
         logger::{LogLevel, Logger},
         messages::TimedBytes,
@@ -89,6 +90,13 @@ pub enum PluginEngineCommand {
     LoadPlugin {
         filepath: String,
     },
+    /// Load the plugin now (like `LoadPlugin`) and record it in the persistent
+    /// manifest so every subsequent session auto-loads it (issue #36).
+    InstallPlugin {
+        filepath: String,
+    },
+    /// Log the names of the currently installed (auto-loaded) plugins.
+    ListInstalledPlugins,
     UnloadPlugin {
         plugin_name: String,
     },
@@ -171,6 +179,18 @@ impl PluginEngine {
         let mut rtt_read_reqs = vec![];
         let err_regex = Regex::new(r#".*: \[string ".*"]:"#).unwrap();
 
+        // Auto-load every installed plugin (issue #36) before entering the
+        // command loop, so a user's persistent set is ready without manual
+        // `!plugin load`s. Each load logs per plugin; a missing/broken installed
+        // plugin is reported and skipped rather than aborting start-up.
+        Self::load_installed_plugins(
+            &mut engine_gate,
+            &mut plugin_list,
+            &private.logger,
+            &err_regex,
+        )
+        .await;
+
         'plugin_engine_loop: loop {
             if let Ok(cmd) = cmd_receiver.try_recv() {
                 match cmd {
@@ -225,6 +245,75 @@ impl PluginEngine {
                         {
                             Ok(_) => success!(private.logger, "Plugin \"{}\" loaded", plugin_name),
                             Err(err) => error!(private.logger, "{}", err_regex.replace(&err, "")),
+                        }
+                    }
+                    PluginEngineCommand::InstallPlugin { filepath } => {
+                        let Some(plugin_name) = Self::get_plugin_name(&filepath) else {
+                            continue 'plugin_engine_loop;
+                        };
+
+                        let dir = plugins_dir();
+
+                        // Read the manifest up front so a corrupt file surfaces
+                        // here instead of silently dropping the install.
+                        let mut installed = match Installed::load(&dir) {
+                            Ok(installed) => installed,
+                            Err(err) => {
+                                error!(private.logger, "{}", err);
+                                continue 'plugin_engine_loop;
+                            }
+                        };
+
+                        // Make sure the plugin is loaded this session. If it
+                        // isn't yet, load it now and bail on failure so a broken
+                        // plugin is never persisted into the auto-load set.
+                        if !plugin_list.contains_key(&plugin_name) {
+                            let Ok(source) = PathBuf::from_str(&filepath);
+
+                            if let Err(err) = Self::load_plugin(
+                                engine_gate.new_method_call_gate(),
+                                Arc::new(plugin_name.clone()),
+                                source,
+                                &mut plugin_list,
+                                private.logger.clone(),
+                            )
+                            .await
+                            {
+                                error!(private.logger, "{}", err_regex.replace(&err, ""));
+                                continue 'plugin_engine_loop;
+                            }
+                        }
+
+                        // Persist. `add` dedupes, so re-installing is idempotent.
+                        let newly_added = installed.add(&plugin_name);
+                        if let Err(err) = installed.save(&dir) {
+                            error!(private.logger, "{}", err);
+                            continue 'plugin_engine_loop;
+                        }
+
+                        if newly_added {
+                            success!(private.logger, "Plugin \"{}\" installed", plugin_name);
+                        } else {
+                            success!(
+                                private.logger,
+                                "Plugin \"{}\" is already installed",
+                                plugin_name
+                            );
+                        }
+                    }
+                    PluginEngineCommand::ListInstalledPlugins => {
+                        match Installed::load(&plugins_dir()) {
+                            Ok(installed) if installed.names().is_empty() => {
+                                info!(private.logger, "No plugins installed");
+                            }
+                            Ok(installed) => {
+                                info!(
+                                    private.logger,
+                                    "Installed plugins: {}",
+                                    installed.names().join(", ")
+                                );
+                            }
+                            Err(err) => error!(private.logger, "{}", err),
                         }
                     }
                     PluginEngineCommand::UnloadPlugin { plugin_name } => {
@@ -821,6 +910,44 @@ impl PluginEngine {
             .file_name()
             .and_then(|filename| filename.to_str())
             .map(|filename| filename.to_string())
+    }
+
+    /// Load every plugin recorded in the install manifest, staging each from its
+    /// copy in the plugins directory. A malformed manifest, a missing file, or a
+    /// broken plugin is logged and skipped so a bad entry can't stop scope from
+    /// starting. Each successful load logs per plugin, mirroring `!plugin load`.
+    async fn load_installed_plugins(
+        engine_gate: &mut PluginEngineGate,
+        plugin_list: &mut HashMap<Arc<String>, Plugin>,
+        logger: &Logger,
+        err_regex: &Regex,
+    ) {
+        let dir = plugins_dir();
+        let installed = match Installed::load(&dir) {
+            Ok(installed) => installed,
+            Err(err) => {
+                error!(logger, "{}", err);
+                return;
+            }
+        };
+
+        for name in installed.names() {
+            // Load from the staged copy in the plugins directory; `load_plugin`
+            // re-stages (a no-op when source == dest) and loads it.
+            let source = dir.join(format!("{}.lua", name));
+            match Self::load_plugin(
+                engine_gate.new_method_call_gate(),
+                Arc::new(name.clone()),
+                source,
+                plugin_list,
+                logger.clone(),
+            )
+            .await
+            {
+                Ok(_) => success!(logger, "Plugin \"{}\" loaded", name),
+                Err(err) => error!(logger, "{}", err_regex.replace(&err, "")),
+            }
+        }
     }
 
     async fn load_plugin(

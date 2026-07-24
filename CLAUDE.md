@@ -66,6 +66,8 @@ Special-character rendering for the display lives in `graphics/special_char.rs` 
 
 Plugins are Lua scripts (mlua, `lua54` vendored) returning a table `M`. The engine calls lifecycle/event hooks by name: `on_load`, `on_unload`, `on_serial_connect`/`on_serial_disconnect`/`on_serial_send`/`on_serial_recv` (and `on_rtt_*` equivalents), plus any `M.<name>` the user calls via `!plugin <name>`. Plugins reach back into the app through the `bridge`/`method_call` gates. See `plugins/README.md` for the plugin developer guide.
 
+- **Installed plugins** (`plugin/installed.rs`, issue #36): `!plugin install <file>` loads a plugin *and* records its name in a TOML manifest `<config_dir>/scope/plugins/installed.toml` (next to the staged `.lua` files); `!plugin list` prints the set. The engine owns the manifest: `PluginEngineCommand::{InstallPlugin,ListInstalledPlugins}` handle the commands, and `load_installed_plugins` (called once at the top of `task_async`, before the command loop) auto-loads each installed plugin from its staged copy, logging per plugin like `!plugin load`. Install persists only after a successful load, dedupes, and treats a missing/malformed manifest or a broken entry as logged-and-skipped (never fatal — it's program-managed state, not the user's `config.toml`). Uninstall is issue #37.
+
 ## Logging
 
 `infra/logger.rs` provides a channel-based logger; each task gets a clone tagged with its source name. Use the `error!`, `warning!`, `success!`, `info!` macros — messages fan in to the Graphics task for display.
