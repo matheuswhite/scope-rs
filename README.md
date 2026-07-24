@@ -248,30 +248,36 @@ Anything typed on the command bar that starts with `!` is a command. A line with
 
 ## Keyboard & Mouse Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `Enter` | Send the message / run the command. In search mode: next match. |
-| `Alt`+`Enter` | Send without the trailing `\r\n`. |
-| `Alt`+`Enter` (`Ctrl`+`Enter` on Windows) | In search mode: previous match. |
-| `Up` / `Down` | Navigate the command history. In search mode: previous / next match. |
-| `Ctrl`+`F` | Toggle search mode. |
-| `Ctrl`+`W` | In search mode: toggle case sensitivity. |
-| `Tab` | Autocomplete a `@tag` from the tag file (while the pop-up is up); otherwise jump to the next bookmark. |
-| `Shift`+`Tab` | Jump to the previous bookmark. |
-| `Ctrl`+`S` | Save the whole session to a `.txt` file. |
-| `Ctrl`+`R` | Start / stop a record session. |
-| `Ctrl`+`C` | Copy the current selection to the clipboard. |
-| Terminal paste shortcut | Paste text into the command bar (via bracketed paste). |
-| `Ctrl`+`L` | Clear the screen. |
-| `Esc` | Leave search mode, or quit `Scope` when in normal mode. |
-| `PageUp` / `PageDown` | Scroll the history one page up / down. |
-| `Alt`+`PageUp` / `Alt`+`PageDown` (`Ctrl` on Windows) | Jump to the start / end of the history. |
-| `Home` / `End` | Move the cursor to the start / end of the input. |
-| `Ctrl`+`Left` / `Ctrl`+`Right` (`Alt` on macOS) | Move the cursor one word left / right. |
-| `Backspace` / `Delete` | Delete the character before / at the cursor. |
-| Mouse wheel | Scroll the history (hold `Ctrl` to scroll horizontally). |
-| Mouse drag | Select text (copy it with `Ctrl`+`C`). |
-| Mouse right-click | Toggle a bookmark on the clicked line (navigate with `Tab` / `Shift`+`Tab`). |
+Rows with a **Config action** name are remappable via the `[shortcuts]` table in
+`config.toml` (see [Configuration File](#configuration-file)). The rest — typing,
+`Enter`, `Esc`, arrows, `Home`/`End`, `Backspace`/`Delete`, and the headless
+`Ctrl`+`K` / `Ctrl`+`Q` chords — are fixed and cannot be rebound.
+
+| Shortcut | Action | Config action |
+|----------|--------|---------------|
+| `Enter` | Send the message / run the command. In search mode: next match. | — |
+| `Alt`+`Enter` | Send without the trailing `\r\n`. | — |
+| `Alt`+`Enter` (`Ctrl`+`Enter` on Windows) | In search mode: previous match. | — |
+| `Up` / `Down` | Navigate the command history. In search mode: previous / next match. | — |
+| `Ctrl`+`F` | Toggle search mode. | `search_toggle` |
+| `Ctrl`+`W` | In search mode: toggle case sensitivity. | `toggle_case` |
+| `Ctrl`+`E` | In search mode: toggle regular-expression matching. | `toggle_regex` |
+| `Tab` | Autocomplete a `@tag` from the tag file (while the pop-up is up); otherwise jump to the next bookmark. | `next_bookmark` |
+| `Shift`+`Tab` | Jump to the previous bookmark. | `prev_bookmark` |
+| `Ctrl`+`S` | Save the whole session to a `.txt` file. | `save` |
+| `Ctrl`+`R` | Start / stop a record session. | `record` |
+| `Ctrl`+`C` | Copy the current selection to the clipboard. | `copy` |
+| Terminal paste shortcut | Paste text into the command bar (via bracketed paste). | — |
+| `Ctrl`+`L` | Clear the screen. | `clear` |
+| `Esc` | Leave search mode, or quit `Scope` when in normal mode. | — |
+| `PageUp` / `PageDown` | Scroll the history one page up / down. | `page_up` / `page_down` |
+| `Alt`+`PageUp` / `Alt`+`PageDown` (`Ctrl` on Windows) | Jump to the start / end of the history. | `jump_start` / `jump_end` |
+| `Home` / `End` | Move the cursor to the start / end of the input. | — |
+| `Ctrl`+`Left` / `Ctrl`+`Right` (`Alt` on macOS) | Move the cursor one word left / right. | `word_left` / `word_right` |
+| `Backspace` / `Delete` | Delete the character before / at the cursor. | — |
+| Mouse wheel | Scroll the history (hold `Ctrl` to scroll horizontally). | — |
+| Mouse drag | Select text (copy it with `Ctrl`+`C`). | — |
+| Mouse right-click | Toggle a bookmark on the clicked line (navigate with `Tab` / `Shift`+`Tab`). | — |
 
 ## Command-Line Options
 
@@ -298,14 +304,32 @@ Global options (given before the command):
 
 ## Configuration File
 
-The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It currently supports the `capacity` and `tag_file` fields:
+The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It supports the `capacity` and `tag_file` fields and an optional `[shortcuts]` table:
 
 ```toml
 capacity = 5000
 tag_file = "/home/user/.config/scope/tags.yml"
+
+[shortcuts]
+record        = "Ctrl+G"   # move record off Ctrl+R
+next_bookmark = "F2"
+prev_bookmark = "F3"
+# every other action keeps its default
 ```
 
 Values resolve as **CLI flag > `config.toml` > built-in default**, so a flag always wins over the file, and the file wins over the defaults. A missing file (or a missing field) just falls back to the defaults; a malformed file or an unknown key is reported as an error. Paths are used verbatim — `~` and environment variables are **not** expanded, so use an absolute path.
+
+### Custom shortcuts
+
+The `[shortcuts]` table remaps any of the action/navigation keys listed in the [Keyboard & Mouse Shortcuts](#keyboard--mouse-shortcuts) table — the entries with a **Config action** name. Each entry is `action = "Key+Combo"`; there is no CLI flag, so a shortcut resolves as `config.toml` > built-in default, and every action you don't list keeps its default. The valid action names are:
+
+`copy`, `clear`, `save`, `record`, `search_toggle`, `toggle_case`, `toggle_regex`, `page_up`, `page_down`, `jump_start`, `jump_end`, `word_left`, `word_right`, `next_bookmark`, `prev_bookmark`.
+
+A key combo is zero or more modifiers followed by a key, joined with `+` (case-insensitive): modifiers `Ctrl`, `Alt`, `Shift`; keys are a single character (`c`, `/`, `.`), a named key (`Space`, `Tab`, `Enter`, `Esc`, `Backspace`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`, `Up`, `Down`, `Left`, `Right`) or a function key (`F1`–`F12`). `Shift+Tab` means the "back-tab" key. Examples: `"Ctrl+G"`, `"F2"`, `"Alt+Home"`, `"Ctrl+Alt+End"`.
+
+Modifiers are **logical** and translated to what your terminal actually delivers, so a config file is portable: `Ctrl+Left` keeps working on macOS (where the terminal sends it as `Alt+Left`), and the `jump_start` / `jump_end` defaults are `Ctrl+PageUp` / `Ctrl+PageDown` on Windows but `Alt+PageUp` / `Alt+PageDown` elsewhere. An unknown action name, an unparseable combo, a binding onto a fixed key (e.g. `Enter`, an arrow, a bare character, or the headless `Ctrl+K` / `Ctrl+Q`), or two actions bound to the same key are all reported as errors on startup.
+
+> **Note:** terminals send `Ctrl+I`, `Ctrl+J`, and `Ctrl+M` as `Tab`, `Enter`, and `Enter` respectively, so those three combos can't be used as shortcuts — they parse without error but the keystroke never reaches the app as `Ctrl+<letter>`. Pick another key (e.g. `Ctrl+G`).
 
 ## Plugins
 
