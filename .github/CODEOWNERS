@@ -1,0 +1,15 @@
+# Code owners for the release pipeline and its guardrails.
+#
+# Combined with the `main` ruleset's "require code owner review", changes to any
+# of these paths need the repository owner's approval before they can merge —
+# so the release machinery (and the tests that protect it) stays a
+# maintainer-controlled surface. See CONTRIBUTING.md ("Release security").
+
+/.github/workflows/          @matheuswhite
+/.github/CODEOWNERS          @matheuswhite
+/dist-workspace.toml         @matheuswhite
+/build.rs                    @matheuswhite
+/wix/                        @matheuswhite
+/installer/                  @matheuswhite
+/tests/release_security.rs   @matheuswhite
+/Cargo.toml                  @matheuswhite

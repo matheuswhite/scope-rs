@@ -210,6 +210,32 @@ You can also drive and eyeball the running TUI without hardware using the
 Keep pull requests focused: one logical change per PR is much easier to review
 than a large mixed one.
 
+## Release security
+
+Cutting a release is a **maintainer-only** action, enforced in depth so that no
+pull request (and no non-owner collaborator) can trigger one:
+
+- **A release only fires on a `vX.Y.Z` git tag.** A pull request never
+  publishes — the dist `release.yml` runs `dist plan` on PRs (gated by
+  `publishing: !github.event.pull_request`), and `publish-crates.yml` triggers
+  on tags only.
+- **Only admins can create tags.** The `release-tags` repository ruleset
+  restricts creating/updating/deleting *any* tag to admins, so a collaborator
+  with push access cannot push a `v*` tag to start a release.
+- **crates.io publishing is reviewer-gated.** `publish-crates.yml` deploys
+  through the `crates` environment (required reviewer: the owner) and is
+  additionally guarded by `if: github.actor == github.repository_owner`; it also
+  refuses to publish when the tag doesn't match `Cargo.toml`.
+- **The guardrails themselves are protected.** `main` requires a PR, a passing
+  build on all three OSes, and **code-owner review** for the release-critical
+  paths listed in [`.github/CODEOWNERS`](.github/CODEOWNERS) (workflows,
+  `dist-workspace.toml`, `wix/`, `build.rs`, `installer/`, `Cargo.toml`, and the
+  security tests). `tests/release_security.rs` parses the workflows and fails CI
+  if any of these invariants regress.
+
+Maintainer release flow: bump the version in `Cargo.toml`, then push the
+matching `vX.Y.Z` tag (approve the `crates` deployment when prompted).
+
 ## Contributing plugins
 
 Extensibility is a core pillar, and plugins are a great first contribution.
