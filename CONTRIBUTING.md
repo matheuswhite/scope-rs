@@ -191,10 +191,12 @@ You can also drive and eyeball the running TUI without hardware using the
   Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`.
 - **Reference the issue** in the commit body or the PR (e.g. `(#45)` or
   `Closes #45`).
-- **Do not bump the version** in `Cargo.toml`. Releases are automated: when the
-  version on `main` changes, CI tags the release, publishes to crates.io, and
-  uploads binaries. Version bumps are a maintainer action, and a CI check
-  (`version-guard`) will fail your pull request if it changes the version field.
+- **Do not bump the version** in `Cargo.toml`. Releasing is a maintainer action:
+  the maintainer bumps the version and pushes a matching `vX.Y.Z` tag, which
+  triggers CI ([cargo-dist](https://opensource.axo.dev/cargo-dist/)) to build the
+  binaries and installers and a companion workflow to publish to crates.io. A CI
+  check (`version-guard`) will fail your pull request if it changes the version
+  field.
 
 ## Opening a pull request
 
