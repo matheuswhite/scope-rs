@@ -8,6 +8,7 @@ mod inputs;
 mod interfaces;
 mod list;
 mod plugin;
+mod selector;
 
 use crate::infra::tags::TagList;
 use crate::interfaces::rtt_if::{RttCommand, RttConnections, RttSetup};
@@ -24,6 +25,7 @@ use inputs::keymap::Keymap;
 use interfaces::serial_if::{SerialConnections, SerialSetup};
 use list::list_serial_ports;
 use plugin::engine::{PluginEngine, PluginEngineConnections};
+use std::io::{IsTerminal, stdin, stdout};
 use std::path::PathBuf;
 use std::process::exit;
 use std::sync::Arc;
@@ -360,6 +362,50 @@ fn app_rtt(
     Ok(())
 }
 
+/// Whether the icon-mode picker can run: it draws a TUI and reads keys, so it
+/// only makes sense when both stdin and stdout are a real terminal. Piped or
+/// headless-scripted runs fall through and start disconnected, as before.
+fn is_interactive() -> bool {
+    stdin().is_terminal() && stdout().is_terminal()
+}
+
+/// Resolve the serial port/baud, prompting via the icon-mode picker when either
+/// is missing and we have an interactive terminal. `Ok(None)` means the user
+/// quit the picker before starting the app.
+fn resolve_serial(
+    port: Option<String>,
+    baudrate: Option<u32>,
+) -> Result<Option<(Option<String>, Option<u32>)>, String> {
+    if (port.is_some() && baudrate.is_some()) || !is_interactive() {
+        return Ok(Some((port, baudrate)));
+    }
+
+    match selector::select_serial(port.clone(), baudrate)? {
+        selector::Outcome::Selected((port, baud)) => Ok(Some((Some(port), Some(baud)))),
+        // Skip keeps whatever the CLI gave (possibly nothing) → start disconnected.
+        selector::Outcome::Skip => Ok(Some((port, baudrate))),
+        selector::Outcome::Quit => Ok(None),
+    }
+}
+
+/// Resolve the RTT target/channel, prompting via the icon-mode picker when the
+/// target is missing and we have an interactive terminal. `Ok(None)` means the
+/// user quit the picker before starting the app.
+fn resolve_rtt(
+    target: Option<String>,
+    channel_num: Option<usize>,
+) -> Result<Option<(Option<String>, Option<usize>)>, String> {
+    if target.is_some() || !is_interactive() {
+        return Ok(Some((target, channel_num)));
+    }
+
+    match selector::select_rtt(target, channel_num)? {
+        selector::Outcome::Selected((target, channel)) => Ok(Some((Some(target), Some(channel)))),
+        selector::Outcome::Skip => Ok(Some((None, channel_num))),
+        selector::Outcome::Quit => Ok(None),
+    }
+}
+
 fn main() -> Result<(), String> {
     #[cfg(target_os = "windows")]
     ctrlc::set_handler(|| { /* Do nothing on user ctrl+c */ })
@@ -394,9 +440,13 @@ fn main() -> Result<(), String> {
         let headless = cli.headless;
 
         match cli.command {
-            Commands::Serial { port, baudrate } => app_serial(
-                capacity, tag_file, port, baudrate, latency, name, headless, keymap,
-            ),
+            Commands::Serial { port, baudrate } => match resolve_serial(port, baudrate)? {
+                Some((port, baudrate)) => app_serial(
+                    capacity, tag_file, port, baudrate, latency, name, headless, keymap,
+                ),
+                // User quit the picker before connecting.
+                None => Ok(()),
+            },
             Commands::Ble { .. } => {
                 Err("Sorry! We're developing BLE interface and it's not available yet".to_string())
             }
@@ -404,16 +454,19 @@ fn main() -> Result<(), String> {
             Commands::Rtt {
                 target,
                 channel_num,
-            } => app_rtt(
-                capacity,
-                tag_file,
-                target,
-                channel_num,
-                latency,
-                name,
-                headless,
-                keymap,
-            ),
+            } => match resolve_rtt(target, channel_num)? {
+                Some((target, channel_num)) => app_rtt(
+                    capacity,
+                    tag_file,
+                    target,
+                    channel_num,
+                    latency,
+                    name,
+                    headless,
+                    keymap,
+                ),
+                None => Ok(()),
+            },
         }
     })();
 
