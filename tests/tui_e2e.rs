@@ -756,3 +756,83 @@ fn plugin_install_rejects_reserved_name() {
         "a reserved name must not be installed.\n{recorded}"
     );
 }
+
+#[test]
+fn plugin_uninstall_removes_from_manifest_and_deletes_file() {
+    // Issue #37: `!plugin uninstall <name>` drops the plugin from the manifest
+    // (so it no longer auto-loads) and deletes its staged copy. Pre-install one,
+    // uninstall it, and assert both are gone.
+    let tui = {
+        let mut tui = Tui::start_with(StartOpts {
+            installed_plugins: &[("uninst_plugin", "local M = {}\nreturn M\n")],
+            ..Default::default()
+        });
+        tui.wait_until_ready();
+
+        tui.type_text("!plugin uninstall uninst_plugin");
+        tui.press_enter();
+        tui.wait_for("uninstalled", SETTLE);
+        tui
+    };
+
+    let manifest =
+        std::fs::read_to_string(tui.plugins_dir().join("installed.toml")).unwrap_or_default();
+    assert!(
+        !manifest.contains("uninst_plugin"),
+        "manifest must no longer list the uninstalled plugin.\n{manifest}"
+    );
+    assert!(
+        !tui.plugins_dir().join("uninst_plugin.lua").exists(),
+        "the staged plugin file must be deleted on uninstall"
+    );
+}
+
+#[test]
+fn plugin_uninstall_of_not_installed_reports_error() {
+    // Uninstalling something that was never installed is a clear error, not a
+    // silent no-op.
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    tui.type_text("!plugin uninstall ghost");
+    tui.press_enter();
+    tui.wait_for("is not installed", SETTLE);
+}
+
+#[test]
+fn uninstall_never_deletes_bundled_stdlib() {
+    // Defense-in-depth: a hand-corrupted manifest that lists a reserved stdlib
+    // name must never cause its file to be deleted. Seed a real plugin (so the
+    // stdlib is provisioned at start-up) alongside a bogus `scope` manifest
+    // entry, then uninstall `scope`: the manifest entry is cleaned but the
+    // bundled `scope.lua` survives.
+    let tui = {
+        let mut tui = Tui::start_with(StartOpts {
+            installed_plugins: &[("realplug", "local M = {}\nreturn M\n")],
+            raw_manifest: Some("plugins = [\"realplug\", \"scope\"]\n"),
+            ..Default::default()
+        });
+        tui.wait_until_ready();
+        tui.wait_for("realplug", SETTLE); // real plugin auto-loaded -> stdlib staged
+
+        tui.type_text("!plugin uninstall scope");
+        tui.press_enter();
+        tui.wait_for("uninstalled", SETTLE);
+        tui
+    };
+
+    assert!(
+        tui.plugins_dir().join("scope.lua").exists(),
+        "uninstall must never delete the bundled scope.lua"
+    );
+    let manifest =
+        std::fs::read_to_string(tui.plugins_dir().join("installed.toml")).unwrap_or_default();
+    assert!(
+        !manifest.contains("scope"),
+        "the bogus scope entry should be cleaned from the manifest.\n{manifest}"
+    );
+    assert!(
+        manifest.contains("realplug"),
+        "a legitimately-installed plugin must stay installed.\n{manifest}"
+    );
+}

@@ -77,6 +77,14 @@ impl Installed {
         true
     }
 
+    /// Remove `name` from the installed set. Returns `true` if it was present
+    /// (and thus removed), or `false` if it wasn't installed.
+    pub fn remove(&mut self, name: &str) -> bool {
+        let before = self.plugins.len();
+        self.plugins.retain(|p| p != name);
+        self.plugins.len() != before
+    }
+
     /// Persist the manifest to `dir`, creating the directory if needed.
     pub fn save(&self, dir: &Path) -> Result<(), String> {
         std::fs::create_dir_all(dir)
@@ -132,6 +140,17 @@ mod tests {
         assert!(!installed.add("analytics"));
         assert!(installed.add("auto_test"));
         assert_eq!(installed.names(), ["analytics", "auto_test"]);
+    }
+
+    #[test]
+    fn remove_reports_presence_and_deletes() {
+        let mut installed = Installed::default();
+        installed.add("analytics");
+        installed.add("auto_test");
+        assert!(installed.remove("analytics"));
+        assert!(!installed.remove("analytics")); // already gone
+        assert!(!installed.remove("never_there"));
+        assert_eq!(installed.names(), ["auto_test"]);
     }
 
     #[test]
