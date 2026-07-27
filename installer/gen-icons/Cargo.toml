@@ -1,0 +1,21 @@
+# Standalone helper (NOT part of the scope build) that renders the Windows
+# `.ico` files in `installer/icons/` from the project logo. It has its own
+# `[workspace]` table so it never joins the scope workspace, keeping the heavy
+# image dependencies out of `cargo build`/`cargo test` for the main crate.
+#
+# Regenerate the icons with:
+#   cargo run --manifest-path installer/gen-icons/Cargo.toml
+[package]
+name = "gen-icons"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+image = "0.25"
+ico = "0.3"
+# Rasterizes the Font Awesome glyph SVGs used in the per-command badges.
+# (resvg re-exports usvg and tiny-skia, so we depend on it alone.)
+resvg = "0.44"

@@ -2,3 +2,7 @@
 .idea/*
 .zed/*
 .vscode/*
+
+# Build output + lockfile of the standalone icon generator (a dev-only helper).
+/installer/gen-icons/target
+/installer/gen-icons/Cargo.lock

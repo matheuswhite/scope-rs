@@ -1,0 +1,39 @@
+name: Publish to crates.io
+
+# The dist-generated `release.yml` builds the binaries and installers on a
+# version tag but does not publish to crates.io. This companion workflow does
+# that, on the same tag, so a release still lands on crates.io as before.
+#
+# Release flow (maintainer): bump `version` in Cargo.toml, then push the
+# matching `vX.Y.Z` tag. That tag fires both `release.yml` (binaries +
+# installers) and this workflow (crates.io).
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: macos-latest
+    environment: crates
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Authenticate to crates.io (OIDC)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish
