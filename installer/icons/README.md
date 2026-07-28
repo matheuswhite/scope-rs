@@ -14,7 +14,7 @@ The generator (`installer/gen-icons/`) crops the oscilloscope glyph out of
 | File                         | Launch command            | Badge                 |
 | ---------------------------- | ------------------------- | --------------------- |
 | `scope.ico`                  | — (the executable's icon) | none                  |
-| `scope-serial.ico`           | `scope serial`            | green · plug          |
+| `scope-serial.ico`           | `scope serial`            | green · ethernet      |
 | `scope-serial-headless.ico`  | `scope --headless serial` | blue · terminal       |
 | `scope-rtt.ico`              | `scope rtt`               | purple · microchip    |
 | `scope-rtt-headless.ico`     | `scope --headless rtt`    | orange · terminal     |
@@ -22,5 +22,5 @@ The generator (`installer/gen-icons/`) crops the oscilloscope glyph out of
 ## Attribution
 
 The badge glyphs are from [Font Awesome Free 6](https://fontawesome.com)
-(`plug`, `terminal`, `microchip`), licensed **CC BY 4.0**. The glyph SVGs live in
+(`ethernet`, `terminal`, `microchip`), licensed **CC BY 4.0**. The glyph SVGs live in
 `installer/gen-icons/glyphs/`.

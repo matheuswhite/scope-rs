@@ -9,7 +9,7 @@
 //! differently at a glance:
 //!
 //!   scope.ico                 — plain glyph (the executable's own icon)
-//!   scope-serial.ico          — green  badge, plug glyph      (`scope serial`)
+//!   scope-serial.ico          — green  badge, ethernet glyph  (`scope serial`)
 //!   scope-serial-headless.ico — blue   badge, terminal glyph  (`scope --headless serial`)
 //!   scope-rtt.ico             — purple badge, microchip glyph (`scope rtt`)
 //!   scope-rtt-headless.ico    — orange badge, terminal glyph  (`scope --headless rtt`)
@@ -22,7 +22,7 @@ use resvg::{tiny_skia, usvg};
 use std::error::Error;
 use std::path::PathBuf;
 
-const PLUG_SVG: &str = include_str!("../glyphs/plug.svg");
+const ETHERNET_SVG: &str = include_str!("../glyphs/ethernet.svg");
 const TERMINAL_SVG: &str = include_str!("../glyphs/terminal.svg");
 const MICROCHIP_SVG: &str = include_str!("../glyphs/microchip.svg");
 
@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             "scope-serial.ico",
             Some(Badge {
                 color: [46, 204, 113],
-                glyph: PLUG_SVG,
+                glyph: ETHERNET_SVG,
             }), // green
         ),
         (
