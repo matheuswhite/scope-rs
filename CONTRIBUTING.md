@@ -216,8 +216,9 @@ Cutting a release is a **maintainer-only** action, enforced in depth so that no
 pull request (and no non-owner collaborator) can trigger one:
 
 - **A release only fires on a `vX.Y.Z` git tag.** A pull request never
-  publishes — the dist `release.yml` runs `dist plan` on PRs (gated by
-  `publishing: !github.event.pull_request`), and `publish-crates.yml` triggers
+  publishes — on PRs the dist `release.yml` builds the artifacts and uploads
+  them to the CI run (`pr-run-mode = "upload"`), but the publish steps are gated
+  by `publishing: !github.event.pull_request`, and `publish-crates.yml` triggers
   on tags only.
 - **Only admins can create tags.** The `release-tags` repository ruleset
   restricts creating/updating/deleting *any* tag to admins, so a collaborator
@@ -235,6 +236,23 @@ pull request (and no non-owner collaborator) can trigger one:
 
 Maintainer release flow: bump the version in `Cargo.toml`, then push the
 matching `vX.Y.Z` tag (approve the `crates` deployment when prompted).
+
+## Testing the installers before a release
+
+Because `dist-workspace.toml` sets `pr-run-mode = "upload"`, every pull request
+builds the same archives and installers a tag would, and attaches them to the
+Actions run. That is how the Windows `.msi` gets tested without cutting a
+release:
+
+```bash
+gh run list --branch <your-branch> --workflow release.yml --limit 1
+gh run download <run-id>              # or grab the artifacts from the PR's Actions tab
+```
+
+The Windows installer lands as `scope-monitor-x86_64-pc-windows-msvc.msi`
+(inside the `artifacts-build-local-*` artifact). Install it on a Windows
+machine and check the `PATH` entry, the four Start-Menu shortcuts and their
+icons, an upgrade over an existing install, and a clean uninstall.
 
 ## Contributing plugins
 
