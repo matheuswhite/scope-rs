@@ -66,6 +66,46 @@ cargo build --release
 # the binary is at target/release/scope
 ```
 
+### Shell completions
+
+`scope completions <SHELL>` prints a native completion script to stdout, so that `scope se` + <kbd>Tab</kbd> completes to `scope serial` using your shell's own completion engine. `bash`, `zsh`, `fish`, `powershell` and `elvish` are supported. No installer sets this up for you — install it once:
+
+- **bash (Linux)** — drop it in the user completion directory (needs the `bash-completion` package):
+  ```shell
+  mkdir -p ~/.local/share/bash-completion/completions
+  scope completions bash > ~/.local/share/bash-completion/completions/scope
+  ```
+- **bash (macOS)** — the system bash is 3.2 and Terminal starts it as a *login* shell, so that directory is never read. Write the script somewhere and source it from **`~/.bash_profile`** (not `~/.bashrc`):
+  ```shell
+  scope completions bash > ~/.scope-completion.bash
+  echo 'source ~/.scope-completion.bash' >> ~/.bash_profile
+  ```
+- **zsh** — the file must be named `_scope`, and `fpath` must be extended **before** `compinit` runs:
+  ```shell
+  mkdir -p ~/.zfunc
+  scope completions zsh > ~/.zfunc/_scope
+  ```
+  then, in `~/.zshrc`:
+  ```shell
+  fpath=(~/.zfunc $fpath)
+  autoload -Uz compinit && compinit
+  ```
+- **fish** — nothing else to configure, fish autoloads it:
+  ```shell
+  mkdir -p ~/.config/fish/completions
+  scope completions fish > ~/.config/fish/completions/scope.fish
+  ```
+- **PowerShell (Windows)** — write the script next to your profile and dot-source it:
+  ```powershell
+  if (!(Test-Path $PROFILE)) { New-Item -ItemType File -Path $PROFILE -Force | Out-Null }
+  $comp = Join-Path (Split-Path $PROFILE) '_scope.ps1'
+  scope completions powershell > $comp
+  Add-Content $PROFILE ('. "' + $comp + '"')
+  ```
+  `$PROFILE` is `Documents\PowerShell\Microsoft.PowerShell_profile.ps1` on PowerShell 7 and `Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1` on Windows PowerShell 5.1, which also defaults to a `Restricted` execution policy that blocks profile scripts entirely — allow them once with `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`. `cmd.exe` has no completion engine and is not supported.
+
+Restart your shell afterwards (zsh: or re-run `compinit`). `scope completions --help` prints the same commands, so you don't need this page on the machine you are installing on.
+
 ## Quickstart
 
 Open a serial port by passing it to the `serial` subcommand together with the baud rate:
@@ -316,6 +356,7 @@ Commands:
 | `rtt [<target>] [<channel>]` | Attach to an RTT target via `probe-rs` (e.g. `scope rtt STM32F303 0`). |
 | `list [-v\|--verbose]` | List the available serial ports. |
 | `ble <name> <mtu>` | *(Not yet implemented.)* |
+| `completions <SHELL>` | Print a shell completion script for `scope` (`bash`, `zsh`, `fish`, `powershell`, `elvish`) — see [Shell completions](#shell-completions). |
 
 Global options (given before the command):
 
@@ -412,6 +453,8 @@ Load a plugin with `!plugin load <file>` (and `!plugin reload <file>` / `!plugin
 **RTT won't connect.** The RTT interface needs a debug probe supported by [`probe-rs`](https://probe.rs/) and the correct target chip name and channel — for example `scope rtt STM32F303 0`. Make sure the probe is connected and not held by another debugger.
 
 **My `tag_file` / config path isn't found.** Path values are used verbatim: `~` and environment variables are **not** expanded. Use an absolute path (for example `/home/user/.config/scope/tags.yml`).
+
+**<kbd>Tab</kbd> completion doesn't work.** Completions are not installed automatically — run `scope completions <SHELL>` as described in [Shell completions](#shell-completions), then start a new shell. Two mistakes fail silently: on zsh, `fpath` must be extended *before* `compinit` runs (oh-my-zsh calls `compinit` for you, so the `fpath=(~/.zfunc $fpath)` line has to come above the `oh-my-zsh.sh` source); on macOS bash, the `source` line has to be in `~/.bash_profile`, since Terminal starts a login shell that never reads `~/.bashrc`.
 
 ## Project Goals
 

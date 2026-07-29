@@ -45,7 +45,8 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 toml = "0.8"
 rand = "0.8.6"
-clap = { version = "4.1.9", features = ["derive"] }
+# 4.5.20 is the floor `clap_complete` requires.
+clap = { version = "4.5.20", features = ["derive"] }
 mlua = { version = "0.9.6", features = ["lua54", "vendored", "async", "send"] }
 anyhow = "1.0.79"
 dirs = "5"
@@ -55,6 +56,10 @@ lipsum = "0.9.1"
 arboard = "3.6.1"
 probe-rs = "0.31.0"
 nucleo = "0.5.0"
+# Generates the native shell completion scripts `scope completions <SHELL>`
+# prints (issue #231). Static (ahead-of-time) generation only — the dynamic
+# completion API is behind a semver-exempt feature flag.
+clap_complete = "4.6.8"
 
 [target.'cfg(windows)'.dependencies]
 ctrlc = "3.4.3"
@@ -63,11 +68,14 @@ ctrlc = "3.4.3"
 [target.'cfg(windows)'.build-dependencies]
 winresource = "0.1"
 
+# Used by `tests/completions.rs`, which runs on every platform.
+[dev-dependencies]
+tempfile = "3"
+
 # Used only by the end-to-end TUI integration tests in `tests/tui_e2e.rs`.
 [target.'cfg(unix)'.dev-dependencies]
 portable-pty = "0.8"
 vt100 = "0.15"
-tempfile = "3"
 nix = { version = "0.29", features = ["term"] }
 
 # The profile that 'dist' will build with
