@@ -162,6 +162,27 @@ fn list_serial_ports_non_verbose(ports: Vec<SerialPortInfo>) {
     }
 }
 
+/// USB serial ports currently available, as `(port_name, description)` pairs,
+/// for interactive pickers (the icon-mode selector). The description prefers the
+/// USB product string and falls back to the manufacturer, mirroring the
+/// non-verbose `list` output. Enumeration failures surface as an empty list —
+/// the picker just shows "no ports" and lets the user refresh.
+pub fn usb_ports() -> Vec<(String, String)> {
+    serialport::available_ports()
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|port| match port.port_type {
+            SerialPortType::UsbPort(info) => Some((
+                port.port_name,
+                info.product
+                    .or(info.manufacturer)
+                    .unwrap_or_else(|| "???".to_string()),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
 pub fn list_serial_ports(is_verbose: bool) -> Result<(), String> {
     let Ok(ports) = serialport::available_ports() else {
         return Err("No serial ports found".to_string());

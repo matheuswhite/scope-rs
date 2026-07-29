@@ -42,9 +42,20 @@ You can install `Scope` with `cargo`, download a pre-built binary, or build it f
 cargo install scope-monitor
 ```
 
-### Pre-built binary
+### Pre-built binary and installers
 
-Download the binary for your platform from the [Releases](https://github.com/matheuswhite/scope-rs/releases) page and place it on your `PATH`.
+Every release ships pre-built binaries, a Windows installer, and one-line install scripts on the [Releases](https://github.com/matheuswhite/scope-rs/releases) page.
+
+- **Windows:** run the `scope-monitor-x86_64-pc-windows-msvc.msi` installer. It puts `scope` on your `PATH` and adds Start-Menu shortcuts — **scope Serial**, **scope Serial (headless)**, **scope RTT** and **scope RTT (headless)** — each opening an interactive picker so you can choose a port/baud (or RTT target) with no command line (see [Icon mode](#icon-mode)).
+- **Linux / macOS** (shell installer, places the binary on your `PATH`):
+  ```shell
+  curl --proto '=https' --tlsv1.2 -LsSf https://github.com/matheuswhite/scope-rs/releases/latest/download/scope-monitor-installer.sh | sh
+  ```
+- **Windows** (PowerShell installer):
+  ```powershell
+  powershell -c "irm https://github.com/matheuswhite/scope-rs/releases/latest/download/scope-monitor-installer.ps1 | iex"
+  ```
+- Or download the raw binary/archive for your platform and place it on your `PATH`.
 
 ### From source
 
@@ -66,6 +77,17 @@ scope list                      # not sure of the port? list the available ones
 ```
 
 When the command bar at the bottom turns **green**, `Scope` is connected: it starts capturing incoming messages and lets you type and send data. Type a message and press `Enter` to send it. That's it — everything below builds on this loop.
+
+### Icon mode
+
+If you run `serial` (or `rtt`) **without** the positional arguments, `Scope` opens an interactive picker to choose the serial port and baud rate (or the RTT target and channel) before it starts — handy when launching from a Windows shortcut, or when you don't remember the port name:
+
+```shell
+scope serial          # pick a port, then a baud rate, from a menu
+scope --headless rtt  # same idea for RTT, in headless mode
+```
+
+Use `↑`/`↓` to move and `Enter` to confirm; press `s` to start without connecting (as `serial`/`rtt` with no picker used to), and `q`/`Esc` to quit. When stdin/stdout isn't an interactive terminal (a pipe, or a script), the picker is skipped and `Scope` starts disconnected as before.
 
 ## Features
 

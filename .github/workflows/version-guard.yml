@@ -1,10 +1,10 @@
 name: version-guard
 
-# Bumping the crate version in Cargo.toml triggers the automated release
-# pipeline (release.yml runs on a push to `main` that touches Cargo.toml:
-# it tags the release, publishes to crates.io and uploads binaries). To keep
-# that a maintainer-only action, this check fails any pull request that changes
-# the `version` field.
+# Releasing is a maintainer-only action: the maintainer bumps the crate version
+# in Cargo.toml and pushes a matching `vX.Y.Z` tag, which triggers the release
+# pipeline (dist-generated release.yml builds binaries + installers, and
+# publish-crates.yml publishes to crates.io). To keep version bumps controlled,
+# this check fails any pull request that changes the `version` field.
 #
 # Maintainer escape hatch: add the `release` label to a PR to allow the version
 # bump (e.g. the release PR itself).

@@ -191,10 +191,12 @@ You can also drive and eyeball the running TUI without hardware using the
   Common types: `feat`, `fix`, `docs`, `refactor`, `test`, `chore`.
 - **Reference the issue** in the commit body or the PR (e.g. `(#45)` or
   `Closes #45`).
-- **Do not bump the version** in `Cargo.toml`. Releases are automated: when the
-  version on `main` changes, CI tags the release, publishes to crates.io, and
-  uploads binaries. Version bumps are a maintainer action, and a CI check
-  (`version-guard`) will fail your pull request if it changes the version field.
+- **Do not bump the version** in `Cargo.toml`. Releasing is a maintainer action:
+  the maintainer bumps the version and pushes a matching `vX.Y.Z` tag, which
+  triggers CI ([cargo-dist](https://opensource.axo.dev/cargo-dist/)) to build the
+  binaries and installers and a companion workflow to publish to crates.io. A CI
+  check (`version-guard`) will fail your pull request if it changes the version
+  field.
 
 ## Opening a pull request
 
@@ -207,6 +209,52 @@ You can also drive and eyeball the running TUI without hardware using the
 
 Keep pull requests focused: one logical change per PR is much easier to review
 than a large mixed one.
+
+## Release security
+
+Cutting a release is a **maintainer-only** action, enforced in depth so that no
+pull request (and no non-owner collaborator) can trigger one:
+
+- **A release only fires on a `vX.Y.Z` git tag.** A pull request never
+  publishes — the dist `release.yml` runs `dist plan` on PRs (gated by
+  `publishing: !github.event.pull_request`), and `publish-crates.yml` triggers
+  on tags only.
+- **Only admins can create tags.** The `release-tags` repository ruleset
+  restricts creating/updating/deleting *any* tag to admins, so a collaborator
+  with push access cannot push a `v*` tag to start a release.
+- **crates.io publishing is reviewer-gated.** `publish-crates.yml` deploys
+  through the `crates` environment (required reviewer: the owner) and is
+  additionally guarded by `if: github.actor == github.repository_owner`; it also
+  refuses to publish when the tag doesn't match `Cargo.toml`.
+- **The guardrails themselves are protected.** `main` requires a PR, a passing
+  build on all three OSes, and **code-owner review** for the release-critical
+  paths listed in [`.github/CODEOWNERS`](.github/CODEOWNERS) (workflows,
+  `dist-workspace.toml`, `wix/`, `build.rs`, `installer/`, `Cargo.toml`, and the
+  security tests). `tests/release_security.rs` parses the workflows and fails CI
+  if any of these invariants regress.
+
+Maintainer release flow: bump the version in `Cargo.toml`, then push the
+matching `vX.Y.Z` tag (approve the `crates` deployment when prompted).
+
+## Testing the installers before a release
+
+PRs only run `dist plan`, so no `.msi` is produced by default. To get one
+without cutting a release, temporarily add `pr-run-mode = "upload"` under
+`[dist]` in `dist-workspace.toml`, regenerate the workflow (`dist generate`) and
+push: the PR then builds the same archives and installers a tag would and
+attaches them to the Actions run.
+
+```bash
+gh run list --branch <your-branch> --workflow release.yml --limit 1
+gh run download <run-id>              # or grab the artifacts from the PR's Actions tab
+```
+
+The Windows installer lands as `scope-monitor-x86_64-pc-windows-msvc.msi`
+(inside the `artifacts-build-local-*` artifact). Install it on a Windows machine
+and check the `PATH` entry, the four Start-Menu shortcuts and their icons, an
+upgrade over an existing install, and a clean uninstall. Revert the
+`pr-run-mode` line once you are done, so ordinary PRs don't pay for a full
+three-platform release build.
 
 ## Contributing plugins
 

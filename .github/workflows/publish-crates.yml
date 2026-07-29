@@ -1,0 +1,62 @@
+name: Publish to crates.io
+
+# The dist-generated `release.yml` builds the binaries and installers on a
+# version tag but does not publish to crates.io. This companion workflow does
+# that, on the same tag, so a release still lands on crates.io as before.
+#
+# Release flow (maintainer): bump `version` in Cargo.toml, then push the
+# matching `vX.Y.Z` tag. That tag fires both `release.yml` (binaries +
+# installers) and this workflow (crates.io).
+#
+# Security: publishing is a maintainer-only action. It is gated by (1) tag
+# protection — only admins can create `v*` tags (repo ruleset); (2) the
+# `crates` environment's required reviewers — a maintainer must approve the
+# deployment; and (3) the `github.actor == github.repository_owner` guard
+# below. The tag-must-match-Cargo.toml check prevents publishing a version the
+# repo isn't actually on. See CONTRIBUTING.md ("Release security").
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+*"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    runs-on: macos-latest
+    # Defense-in-depth: only the repository owner's tag push publishes, even if
+    # someone else were somehow able to create a matching tag.
+    if: github.actor == github.repository_owner
+    environment: crates
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify tag matches Cargo.toml version
+        shell: bash
+        run: |
+          set -euo pipefail
+          CRATE_VERSION="$(cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[0].version')"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          echo "tag=$TAG_VERSION  Cargo.toml=$CRATE_VERSION"
+          if [ "$TAG_VERSION" != "$CRATE_VERSION" ]; then
+            echo "::error::Tag v$TAG_VERSION does not match Cargo.toml version $CRATE_VERSION; refusing to publish."
+            exit 1
+          fi
+
+      - name: Authenticate to crates.io (OIDC)
+        id: auth
+        uses: rust-lang/crates-io-auth-action@v1
+
+      - name: Publish crate
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo publish

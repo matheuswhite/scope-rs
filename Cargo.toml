@@ -22,6 +22,12 @@ exclude = [
   "/CONTRIBUTING.md",
 ]
 
+[package.metadata.wix]
+upgrade-guid = "FD43BE2D-DFB0-4ED7-9DFB-D52ABAEA75B2"
+path-guid = "0597BF5A-C64D-42FA-A699-364ED3C70C6F"
+license = false
+eula = false
+
 [badges]
 maintenance = { status = "actively-developed" }
 
@@ -53,9 +59,18 @@ nucleo = "0.5.0"
 [target.'cfg(windows)'.dependencies]
 ctrlc = "3.4.3"
 
+# Embeds the scope icon into scope.exe (see build.rs); Windows-only.
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
+
 # Used only by the end-to-end TUI integration tests in `tests/tui_e2e.rs`.
 [target.'cfg(unix)'.dev-dependencies]
 portable-pty = "0.8"
 vt100 = "0.15"
 tempfile = "3"
 nix = { version = "0.29", features = ["term"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
