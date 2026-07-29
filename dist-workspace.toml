@@ -18,11 +18,6 @@ cargo-dist-version = "0.32.0"
 # We hand-edit wix/main.wxs to add per-command Start-Menu shortcuts with their
 # own icons (issue #230), so tell dist to stop regenerating/validating it.
 allow-dirty = ["msi"]
-# Build the archives/installers on pull requests too and upload them as CI
-# artifacts (they are never published — `release.yml` gates publishing on
-# `!github.event.pull_request`). This is how the Windows `.msi` gets tested
-# before a tag is cut: download it from the PR's Actions run.
-pr-run-mode = "upload"
 
 # The `serialport` crate links against libudev on Linux; install it on the
 # Linux build runner (mirrors the old release workflow's apt step).
