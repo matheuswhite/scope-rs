@@ -45,10 +45,17 @@ completion for scope in your shell.")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
+    /// Number of scrollback lines kept in memory. Falls back to `capacity` in
+    /// config.toml, then to 2000.
     #[clap(short, long)]
     capacity: Option<usize>,
+    /// Path to the YAML file whose entries resolve `@name` tags typed in the
+    /// command bar. Falls back to `tag_file` in config.toml, then to `tags.yml`.
+    /// Used verbatim: `~` and environment variables are not expanded.
     #[clap(short, long)]
     tag_file: Option<PathBuf>,
+    /// Polling latency in microseconds, clamped to 0..=100000. Defaults to 100;
+    /// 0 yields the thread instead of sleeping.
     #[clap(short, long)]
     latency: Option<u64>,
     /// Base name for the session record file. Defaults to a timestamp.
@@ -66,20 +73,32 @@ struct Cli {
 pub enum Commands {
     /// Open a serial port. Without arguments, pick one interactively.
     Serial {
+        /// Serial port to open, e.g. /dev/ttyUSB0 or COM3. Run `scope list` to
+        /// see what is available.
         port: Option<String>,
+        /// Baud rate to open the port at, e.g. 115200.
         baudrate: Option<u32>,
     },
     /// List the available serial ports.
     List {
+        /// Show one table row per USB port with its serial number, PID, VID and
+        /// manufacturer. Non-USB ports are omitted from this view.
         #[clap(short, long)]
         verbose: bool,
     },
     /// Connect to a BLE device (not yet implemented).
-    Ble { name_device: String, mtu: u32 },
+    Ble {
+        /// Advertised name of the BLE device to connect to.
+        name_device: String,
+        /// ATT MTU to negotiate with the device.
+        mtu: u32,
+    },
     /// Attach to an RTT target via probe-rs. Without arguments, pick one
     /// interactively.
     Rtt {
+        /// Target chip name as probe-rs spells it, e.g. STM32F303.
         target: Option<String>,
+        /// RTT channel to attach to. Defaults to 0.
         channel_num: Option<usize>,
     },
     /// Print a shell completion script for `scope` to stdout.
