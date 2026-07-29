@@ -32,7 +32,7 @@ use crossterm::{
 };
 use ratatui::{
     Frame, Terminal,
-    backend::CrosstermBackend,
+    backend::{Backend, CrosstermBackend},
     layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
@@ -515,6 +515,42 @@ impl GraphicsTask {
         Ok(())
     }
 
+    /// Make the next [`Terminal::draw`] rewrite every cell on screen, without
+    /// asking the terminal to erase anything.
+    ///
+    /// The screen can be cleared from outside the app (e.g. Cmd+K in Zed's
+    /// terminal, issue #166) with no event reaching us, so ratatui's diff buffer
+    /// keeps describing a screen that is no longer there and the next draw
+    /// repaints almost nothing. The two obvious ways to force the healing
+    /// repaint are both wrong:
+    ///
+    /// * `Terminal::clear()` goes through `CrosstermBackend::clear_region`,
+    ///   which uses crossterm's `execute!` and therefore flushes `ESC[2J` on a
+    ///   write of its own. The screen is blank for the couple of milliseconds
+    ///   until the repaint bytes arrive, which emulators that present per read
+    ///   show as a frame — the 1Hz blink of issue #233.
+    /// * `Terminal::swap_buffers()` alone resets the diff base, and a reset cell
+    ///   *equals* a blank cell, so `Buffer::diff` skips every cell that is blank
+    ///   in the new frame: stale glyphs would be stranded on screen forever.
+    ///
+    /// So fill the back buffer with a sentinel no real frame can produce and
+    /// promote that to the diff base: every cell then compares as changed, and
+    /// the next draw rewrites the whole screen — blanks included — within its
+    /// normal flush, emitting no erase sequence at all.
+    fn force_full_repaint<B: Backend>(terminal: &mut Terminal<B>) {
+        let mut sentinel = ratatui::buffer::Cell::default();
+        sentinel
+            .set_symbol("\0")
+            .set_style(Style::default().add_modifier(Modifier::all()));
+
+        // Fill the buffer's own cells rather than indexing by the terminal size:
+        // after an outside resize the backend size and the buffer area disagree
+        // until the next draw reconciles them, and indexing would go out of
+        // bounds.
+        terminal.current_buffer_mut().content.fill(sentinel);
+        terminal.swap_buffers();
+    }
+
     pub fn task(
         _shared: Arc<RwLock<()>>,
         mut private: GraphicsConnections,
@@ -538,8 +574,12 @@ impl GraphicsTask {
         // The terminal can be cleared from outside the app (e.g. Cmd+K in Zed's
         // terminal), which leaves ratatui's diff buffer out of sync so only
         // changed cells get repainted, blanking the rest. Periodically force a
-        // full repaint so an externally-cleared screen heals on its own.
-        let full_redraw_period = Duration::from_secs(1);
+        // full repaint so an externally-cleared screen heals on its own. The
+        // repaint itself must never erase the terminal — see `force_full_repaint`.
+        // The period trades how long damage lingers against how much the idle app
+        // writes: a full frame is ~2.7kB at 160x40, so 3s holds idle output at
+        // ~2.4kB/s — slightly below what the old 1s clear+repaint cost.
+        let full_redraw_period = Duration::from_secs(3);
         let mut full_redraw_timer = Timer::new(full_redraw_period);
         full_redraw_timer.start();
         let mut save_stats = SaveStats::new(
@@ -963,10 +1003,11 @@ impl GraphicsTask {
 
             if need_redraw {
                 need_redraw = false;
-                // Reset ratatui's diff buffer so every cell is repainted, healing
-                // a screen that was cleared outside the app (e.g. Cmd+K in Zed).
+                // Repaint every cell, healing a screen that was cleared outside
+                // the app (e.g. Cmd+K in Zed) without erasing anything itself —
+                // see `force_full_repaint`.
                 if force_full_redraw {
-                    terminal.clear().expect("Cannot clear terminal");
+                    Self::force_full_repaint(&mut terminal);
                 }
                 terminal
                     .draw(|f| {
@@ -1121,5 +1162,79 @@ impl GraphicsConnections {
             latency: config.latency,
             clipboard: Clipboard::new().ok(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ratatui::backend::TestBackend;
+    use ratatui::buffer::Cell as TerminalCell;
+
+    /// Render `text` on the first row, leaving the rest of the screen blank.
+    fn draw_frame(terminal: &mut Terminal<TestBackend>, text: &str) {
+        terminal
+            .draw(|f| f.render_widget(Paragraph::new(text), f.size()))
+            .expect("draw test frame");
+    }
+
+    /// Write a cell straight into the backend, the way something outside the app
+    /// writes to the tty: the `Terminal`'s diff buffer never learns about it.
+    fn damage_screen(terminal: &mut Terminal<TestBackend>, x: u16, y: u16, symbol: &str) {
+        let mut garbage = TerminalCell::default();
+        garbage.set_symbol(symbol);
+        terminal
+            .backend_mut()
+            .draw([(x, y, &garbage)].into_iter())
+            .expect("damage the test screen");
+    }
+
+    #[test]
+    fn force_full_repaint_does_not_erase_the_screen_itself() {
+        // Issue #233: the blink came from erasing the terminal before the
+        // repaint. Invalidating the diff must leave the visible screen untouched,
+        // so the next draw paints over it instead of after a blank frame.
+        let mut terminal = Terminal::new(TestBackend::new(8, 2)).expect("test terminal");
+        draw_frame(&mut terminal, "hello");
+        let on_screen = terminal.backend().buffer().clone();
+
+        GraphicsTask::force_full_repaint(&mut terminal);
+
+        assert_eq!(
+            terminal.backend().buffer(),
+            &on_screen,
+            "the invalidation must not blank the screen; that was the #233 blink"
+        );
+    }
+
+    #[test]
+    fn force_full_repaint_rewrites_cells_the_frame_leaves_blank() {
+        // Issue #166: the repaint heals a screen damaged behind ratatui's back.
+        // The damage sits on cells the app draws as blank, so it is only healed
+        // if the invalidation makes the diff rewrite blank cells too — resetting
+        // the diff base alone (a plain `swap_buffers`) skips them.
+        let mut terminal = Terminal::new(TestBackend::new(8, 2)).expect("test terminal");
+        draw_frame(&mut terminal, "hello");
+
+        damage_screen(&mut terminal, 0, 1, "X");
+        assert_eq!(terminal.backend().buffer().get(0, 1).symbol(), "X");
+
+        // An identical frame changes nothing on its own, so the damage survives.
+        draw_frame(&mut terminal, "hello");
+        assert_eq!(terminal.backend().buffer().get(0, 1).symbol(), "X");
+
+        GraphicsTask::force_full_repaint(&mut terminal);
+        draw_frame(&mut terminal, "hello");
+
+        assert_eq!(
+            terminal.backend().buffer().get(0, 1).symbol(),
+            " ",
+            "the forced repaint must rewrite cells that are blank in the frame"
+        );
+        assert_eq!(
+            terminal.backend().buffer().get(0, 0).symbol(),
+            "h",
+            "the real frame must survive the repaint"
+        );
     }
 }

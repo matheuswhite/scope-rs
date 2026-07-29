@@ -63,6 +63,10 @@ struct Tui {
     _master: Box<dyn MasterPty + Send>,
     writer: Box<dyn Write + Send>,
     parser: Arc<Mutex<vt100::Parser>>,
+    /// Every byte the app wrote to the PTY, in order. `parser` reconstructs the
+    /// resulting *screen*; some assertions need the escape sequences themselves
+    /// (issue #233: the periodic repaint must never erase the display).
+    raw: Arc<Mutex<Vec<u8>>>,
     child: Box<dyn portable_pty::Child + Send + Sync>,
     serial: VirtualSerial,
     _tmp: tempfile::TempDir,
@@ -193,14 +197,19 @@ impl Tui {
         let mut reader = pair.master.try_clone_reader().expect("clone reader");
         let writer = pair.master.take_writer().expect("take writer");
         let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 0)));
+        let raw: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
         {
             let parser = parser.clone();
+            let raw = raw.clone();
             thread::spawn(move || {
                 let mut buf = [0u8; 8192];
                 while let Ok(n) = reader.read(&mut buf) {
                     if n == 0 {
                         break;
                     }
+                    // Record before parsing, so a mark taken after observing the
+                    // screen is always at or past the bytes that produced it.
+                    raw.lock().unwrap().extend_from_slice(&buf[..n]);
                     parser.lock().unwrap().process(&buf[..n]);
                 }
             });
@@ -210,6 +219,7 @@ impl Tui {
             _master: pair.master,
             writer,
             parser,
+            raw,
             child,
             serial,
             _tmp: tmp,
@@ -258,6 +268,36 @@ impl Tui {
         let mut parser = self.parser.lock().unwrap();
         parser.process(b"\x1b[3J\x1b[2J\x1b[H");
         parser.screen().contents()
+    }
+
+    /// Damage the grid with *non-blank* content the app knows nothing about (a
+    /// stray write to the tty, an emulator artifact). Unlike
+    /// [`Tui::simulate_external_clear`], this cannot be healed by merely
+    /// invalidating ratatui's diff buffer: the damaged cells are blank in the
+    /// app's next frame, so they are only repaired if the periodic repaint really
+    /// rewrites *every* cell. Returns the damaged screen, captured while holding
+    /// the lock so the reader thread can't repaint it first.
+    fn simulate_external_garbage(&self, marker: &str) -> String {
+        let mut parser = self.parser.lock().unwrap();
+        // Rows the app renders as blank interior (the empty scrollback area),
+        // away from the borders and the command bar.
+        for row in [10u16, 20, 30] {
+            parser.process(format!("\x1b[{row};5H{marker}").as_bytes());
+        }
+        parser.screen().contents()
+    }
+
+    /// How many bytes the app has written to the PTY so far. Use it as a mark to
+    /// scope a later [`Tui::raw_since`] read to one window in time.
+    fn raw_len(&self) -> usize {
+        self.raw.lock().unwrap().len()
+    }
+
+    /// The raw bytes the app wrote since `mark` (a previous [`Tui::raw_len`]).
+    /// Unlike [`Tui::screen`], escape sequences are preserved, so a test can
+    /// assert on what the app *told* the terminal to do, not just the result.
+    fn raw_since(&self, mark: usize) -> Vec<u8> {
+        self.raw.lock().unwrap()[mark..].to_vec()
     }
 
     /// Type text into the command bar (raw bytes to the PTY).
@@ -469,8 +509,113 @@ fn screen_recovers_after_external_clear() {
     );
 
     // The periodic full repaint should redraw the whole status bar within a few
-    // seconds (the period is 1s) without any input from the app's user.
-    tui.wait_for("115200bps", Duration::from_secs(5));
+    // seconds (the period is 3s) without any input from the app's user.
+    tui.wait_for("115200bps", Duration::from_secs(10));
+}
+
+#[test]
+fn periodic_repaint_never_erases_the_display() {
+    // Regression for issue #233 ("TUI is blinking"). The periodic full repaint
+    // added for #166 must NOT go through `Terminal::clear()`: that reaches
+    // `CrosstermBackend::clear_region`, which uses crossterm's `execute!` and so
+    // flushes ESC[2J on a write of its own, leaving the screen blank for a couple
+    // of milliseconds before the repaint bytes arrive — a 1Hz blink on emulators
+    // that present per read. The repaint must invalidate the diff buffer and
+    // rewrite every cell instead, emitting no erase at all.
+    //
+    // Only display erases are checked (not ESC[K): a genuine resize legitimately
+    // clears inside ratatui's `Terminal::resize`, so this test never resizes.
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    // Let the first frames and any start-up logs drain, so the measured window
+    // holds nothing but idle repaints.
+    thread::sleep(Duration::from_millis(500));
+    let mark = tui.raw_len();
+
+    // Idle across several repaint periods (the period is 3s), touching nothing:
+    // no keystrokes, no wire traffic, no resize.
+    thread::sleep(Duration::from_secs(7));
+    let idle = tui.raw_since(mark);
+
+    for (seq, name) in [
+        (&b"\x1b[2J"[..], "ESC[2J (erase whole display)"),
+        (&b"\x1b[3J"[..], "ESC[3J (erase scrollback)"),
+        (&b"\x1b[1J"[..], "ESC[1J (erase to cursor)"),
+        (&b"\x1b[0J"[..], "ESC[0J (erase from cursor)"),
+        (&b"\x1b[J"[..], "ESC[J (erase from cursor)"),
+    ] {
+        let hits = count_bytes(&idle, seq);
+        assert_eq!(
+            hits,
+            0,
+            "idle TUI emitted {name} {hits}x in a 7s quiet window: the #233 blink \
+             is back. The forced repaint must rewrite every cell instead of \
+             clearing the terminal.\n--- first 600 chars of {} captured bytes ---\n{}",
+            idle.len(),
+            String::from_utf8_lossy(&idle)
+                .replace('\x1b', "<ESC>")
+                .chars()
+                .take(600)
+                .collect::<String>(),
+        );
+    }
+
+    // Guard against a vacuous pass: a dead or wedged app emits no erases either.
+    tui.type_text("still alive");
+    tui.press_enter();
+    tui.wait_for("still alive", SETTLE);
+}
+
+#[test]
+fn periodic_repaint_overwrites_external_garbage() {
+    // Companion to `screen_recovers_after_external_clear` (#166), which passes
+    // even for a repaint that only rewrites non-blank cells. Damage the grid with
+    // content the app cannot see, on cells that are blank in its next frame:
+    // resetting ratatui's diff buffer is not enough there (a blank cell equals a
+    // reset one, so the diff skips it and the garbage would stay on screen
+    // forever) — the repaint must write every cell, blanks included.
+    const GARBAGE: &str = "ZZ_EXTERNAL_GARBAGE_ZZ";
+
+    let tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    let dirty = tui.simulate_external_garbage(GARBAGE);
+    assert!(
+        dirty.contains(GARBAGE),
+        "the injected garbage should be on screen to start with.\n{dirty}"
+    );
+
+    // A few repaint periods (the period is 3s) must scrub it, without any input.
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        let screen = tui.screen();
+        if !screen.contains(GARBAGE) {
+            assert!(
+                screen.contains("115200bps"),
+                "the repaint scrubbed the garbage but lost the real frame.\n{screen}"
+            );
+            break;
+        }
+        if Instant::now() > deadline {
+            panic!(
+                "external garbage survived the periodic full repaint: the repaint \
+                 is not rewriting blank cells.\n--- screen ---\n{screen}\n--------------"
+            );
+        }
+        thread::sleep(Duration::from_millis(80));
+    }
+}
+
+/// Count occurrences of the byte substring `needle` in `haystack`.
+fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return 0;
+    }
+    haystack
+        .windows(needle.len())
+        .filter(|w| *w == needle)
+        .count()
 }
 
 #[test]
