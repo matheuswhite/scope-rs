@@ -130,6 +130,6 @@ rm -f /tmp/scope_a /tmp/scope_b /tmp/scope_capture.bin \
 
 ## Notes
 
-- Subcommands: `scope serial [PORT] [BAUDRATE]`, also `ble`, `rtt`, `list`. Global opts: `-t/--tag-file`, `-c/--capacity`, `-l/--latency`.
+- Subcommands: `scope serial [PORT] [BAUDRATE]`, also `ble`, `rtt`, `list`, `completions`. Global opts: `-t/--tag-file`, `-c/--capacity`, `-l/--latency`.
 - Add small `sleep`s after each action so the TUI redraws before you capture.
 - The input bar does not colorize hex/tag sequences while typing (by design); parsing and highlighting happen on send and render in the output area.
