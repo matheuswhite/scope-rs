@@ -222,6 +222,15 @@ pull request (and no non-owner collaborator) can trigger one:
 - **Only admins can create tags.** The `release-tags` repository ruleset
   restricts creating/updating/deleting *any* tag to admins, so a collaborator
   with push access cannot push a `v*` tag to start a release.
+- **The tag comes from the release PR, not from a manual push.**
+  `release-tag.yml` tags `vX.Y.Z` when a version bump lands on `main`, so the
+  release is one maintainer-gated flow (review + merge) instead of a merge plus
+  a remembered `git tag && git push`. It refuses to tag unless the pusher is the
+  repository owner, the commit belongs to a merged PR labelled `release`, and the
+  version actually changed; it never moves an existing tag, and it publishes
+  nothing itself. It triggers on `push` rather than `pull_request` on purpose:
+  a `push` run always uses the workflow definition from `main`, so a pull
+  request branch cannot edit the file that holds the tagging token.
 - **crates.io publishing is reviewer-gated.** `publish-crates.yml` deploys
   through the `crates` environment (required reviewer: the owner) and is
   additionally guarded by `if: github.actor == github.repository_owner`; it also
@@ -233,8 +242,31 @@ pull request (and no non-owner collaborator) can trigger one:
   security tests). `tests/release_security.rs` parses the workflows and fails CI
   if any of these invariants regress.
 
-Maintainer release flow: bump the version in `Cargo.toml`, then push the
-matching `vX.Y.Z` tag (approve the `crates` deployment when prompted).
+Maintainer release flow: open a PR that bumps `version` in `Cargo.toml`, label it
+`release`, and merge it once CI is green. The merge tags `vX.Y.Z`, which builds
+the binaries and installers and publishes to crates.io (approve the `crates`
+deployment when prompted). No manual tagging step.
+
+### One-time setup for automatic tagging
+
+`release-tag.yml` pushes the tag with a maintainer PAT, exposed as the
+`RELEASE_TAG_TOKEN` secret of a `release-tag` environment. A PAT is required
+rather than the built-in `GITHUB_TOKEN` for two reasons: a `GITHUB_TOKEN` push
+**does not trigger further workflow runs**, so `release.yml` would never fire;
+and tag creation is admin-only per the `release-tags` ruleset. Using the owner's
+PAT also keeps `github.actor` on the tag push equal to the owner, so
+`publish-crates.yml`'s owner guard still applies.
+
+1. Create a **fine-grained** PAT owned by the repository owner, scoped to this
+   repository only, with `Contents: read and write` — nothing else — and the
+   shortest expiry you're willing to rotate.
+2. Create a `release-tag` environment (*Settings → Environments*) and add the PAT
+   as the secret `RELEASE_TAG_TOKEN`. Limit its deployment branches to `main`.
+   Adding a required reviewer there is optional; it gives you a second OK before
+   any release goes out, at the cost of one approval click.
+
+Rotate the PAT when it expires. Without it the tagging job fails loudly with a
+pointer to this section rather than silently skipping a release.
 
 ## Testing the installers before a release
 
