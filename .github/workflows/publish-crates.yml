@@ -4,9 +4,9 @@ name: Publish to crates.io
 # version tag but does not publish to crates.io. This companion workflow does
 # that, on the same tag, so a release still lands on crates.io as before.
 #
-# Release flow (maintainer): bump `version` in Cargo.toml, then push the
-# matching `vX.Y.Z` tag. That tag fires both `release.yml` (binaries +
-# installers) and this workflow (crates.io).
+# Release flow (maintainer): merge a version-bump PR labelled `release` into
+# main. `release-tag.yml` tags `vX.Y.Z` from that merge, and the tag fires both
+# `release.yml` (binaries + installers) and this workflow (crates.io).
 #
 # Security: publishing is a maintainer-only action. It is gated by (1) tag
 # protection — only admins can create `v*` tags (repo ruleset); (2) the

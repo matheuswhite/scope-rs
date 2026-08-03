@@ -1,0 +1,131 @@
+name: release-tag
+
+# The release PR *is* the release.
+#
+# Merging a version-bump PR into `main` tags `vX.Y.Z` from here, and that tag is
+# what drives the rest of the pipeline (`release.yml` builds the binaries and
+# installers, `publish-crates.yml` publishes to crates.io). This keeps tagging
+# inside the maintainer-gated PR flow instead of a separate, manual
+# `git tag && git push` step that has to be remembered — and kept correct —
+# after every release merge.
+#
+# Security notes, because this workflow holds the keys to a release:
+#
+#   * It triggers on `push`, never on `pull_request`. For a `push` event GitHub
+#     always takes the workflow definition from the pushed branch (`main`), so a
+#     pull request branch cannot edit this file to make it do something else
+#     with the token. A `pull_request`-triggered workflow runs the *PR's* copy of
+#     the definition, which would be exactly the wrong property here.
+#   * The push must be the repository owner's (`github.actor` guard), the commit
+#     must belong to a merged PR carrying the `release` label (the same label
+#     `version-guard.yml` requires before it will allow a version bump at all),
+#     and the version must actually have changed. Anything else is a no-op.
+#   * Tag creation only ever adds a new tag; an existing tag is never moved.
+#   * The tag is pushed with a maintainer PAT (`secrets.RELEASE_TAG_TOKEN`),
+#     not `GITHUB_TOKEN`, for two reasons: a `GITHUB_TOKEN` push does not
+#     trigger further workflow runs (so `release.yml` would never fire), and the
+#     `release-tags` ruleset restricts tag creation to admins. Using the owner's
+#     PAT also keeps `github.actor` on the tag push equal to the owner, so
+#     `publish-crates.yml`'s owner guard still holds.
+#
+# This workflow never publishes anything itself — it only creates the tag.
+# See CONTRIBUTING.md ("Release security") for the setup and the full model.
+
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - "Cargo.toml"
+
+# The tag push uses the PAT below, so GITHUB_TOKEN stays read-only here.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  tag:
+    name: Tag the merged release PR
+    # Defense-in-depth: only the owner's merge can cut a release.
+    if: github.actor == github.repository_owner
+    runs-on: ubuntu-latest
+    # Scopes RELEASE_TAG_TOKEN to this workflow (and lets the owner add a
+    # required reviewer if they want a second OK before a release goes out).
+    environment: release-tag
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide whether this push cuts a release
+        id: decide
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BEFORE: ${{ github.event.before }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          extract() { grep -E -m1 '^version[[:space:]]*=' | sed -E 's/.*"([^"]+)".*/\1/'; }
+
+          VERSION="$(extract < Cargo.toml)"
+          TAG="v$VERSION"
+          {
+            echo "version=$VERSION"
+            echo "tag=$TAG"
+          } >> "$GITHUB_OUTPUT"
+
+          skip() { echo "cut=false" >> "$GITHUB_OUTPUT"; echo "::notice::$1"; exit 0; }
+
+          # `paths: Cargo.toml` also fires for dependency edits, so compare the
+          # version against the previous state of main. `github.event.before` is
+          # unusable after a force-push or on a branch's first push; fall back to
+          # this commit's first parent, which for a PR merge is main-before.
+          PREV_REF="$BEFORE"
+          if [ -z "$PREV_REF" ] || ! git cat-file -e "${PREV_REF}^{commit}" 2>/dev/null; then
+            PREV_REF="${GITHUB_SHA}^"
+          fi
+          PREV_VERSION="$(git show "$PREV_REF:Cargo.toml" | extract)"
+          echo "previous=$PREV_VERSION  current=$VERSION"
+          if [ "$PREV_VERSION" = "$VERSION" ]; then
+            skip "Cargo.toml changed but the version is still $VERSION — nothing to tag."
+          fi
+
+          # Tie the tag to a release PR: the `release` label is what allowed the
+          # bump past version-guard in the first place, and applying it needs
+          # write access.
+          if ! gh api "repos/$REPO/commits/$GITHUB_SHA/pulls" --jq '.[].labels[].name' \
+               | grep -qx 'release'; then
+            skip "No merged PR labelled 'release' for $GITHUB_SHA — refusing to tag $TAG."
+          fi
+
+          # Idempotent: only ever add a tag, never move one.
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            skip "Tag $TAG already exists — nothing to do."
+          fi
+
+          echo "cut=true" >> "$GITHUB_OUTPUT"
+
+      - name: Push the release tag
+        if: steps.decide.outputs.cut == 'true'
+        env:
+          TAG: ${{ steps.decide.outputs.tag }}
+          VERSION: ${{ steps.decide.outputs.version }}
+          TOKEN: ${{ secrets.RELEASE_TAG_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${TOKEN:-}" ]; then
+            echo "::error::RELEASE_TAG_TOKEN is not configured, so $TAG cannot be pushed in a way that triggers release.yml. See CONTRIBUTING.md ('Release security')."
+            exit 1
+          fi
+
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git tag -a "$TAG" -m "Release $VERSION"
+          # Actions masks the secret in logs; the URL form keeps the PAT out of
+          # .git/config (checkout ran with persist-credentials: false).
+          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "refs/tags/$TAG"
+
+          echo "::notice::Pushed $TAG — release.yml and publish-crates.yml take it from here."

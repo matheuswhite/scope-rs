@@ -14,6 +14,11 @@
 //!   * The dist-generated `release.yml` never publishes on a pull request and
 //!     isn't triggered by a branch push.
 //!   * `version-guard.yml` still runs on pull requests.
+//!   * `release-tag.yml` — which turns a merged release PR into the `vX.Y.Z`
+//!     tag — is triggered by `push` and never by `pull_request` (so its own
+//!     definition always comes from `main`, out of reach of a PR branch), is
+//!     guarded to the repository owner, requires the merged PR's `release`
+//!     label, and holds a read-only `GITHUB_TOKEN`.
 //!
 //! These are defense-in-depth: the root protections (tag protection ruleset,
 //! branch protection on `main`, the `crates` environment reviewers) live in the
@@ -176,6 +181,79 @@ fn release_never_publishes_on_pull_request() {
         text.contains("publishing: ${{ !github.event.pull_request }}"),
         "release.yml lost its `publishing: !github.event.pull_request` gate — \
          a pull request could publish. Re-check the dist-generated workflow."
+    );
+}
+
+#[test]
+fn release_tag_is_never_driven_by_a_pull_request() {
+    let (_text, wf) = read_workflow("release-tag.yml");
+    let on = on_block(&wf);
+
+    // The whole point of the `push` trigger: for a push, GitHub takes the
+    // workflow definition from the pushed branch (`main`), so a PR branch can't
+    // rewrite this file and still get the tag-pushing token. A
+    // `pull_request`-triggered run would use the PR's copy of the definition.
+    assert!(
+        !has_key(on, "pull_request") && !has_key(on, "pull_request_target"),
+        "release-tag must not be triggered by a pull request — its definition \
+         would then come from the PR branch, which can edit it"
+    );
+
+    let push = get(on, "push").expect("release-tag triggers on push");
+    let branches = get(push, "branches")
+        .and_then(Value::as_sequence)
+        .expect("release-tag push.branches is a list");
+    assert!(
+        branches.iter().filter_map(Value::as_str).eq(["main"]),
+        "release-tag must only tag pushes to main, got {branches:?}"
+    );
+}
+
+#[test]
+fn release_tag_is_owner_guarded_and_label_gated() {
+    let (_text, wf) = read_workflow("release-tag.yml");
+
+    // The workflow's own token must not be able to write anything; the tag is
+    // pushed with the maintainer PAT instead.
+    assert_eq!(
+        get(&wf, "permissions")
+            .and_then(|p| get(p, "contents"))
+            .and_then(Value::as_str),
+        Some("read"),
+        "release-tag's GITHUB_TOKEN must stay read-only for contents"
+    );
+
+    let tag = get(&wf, "jobs")
+        .and_then(|jobs| get(jobs, "tag"))
+        .expect("release-tag has a `tag` job");
+
+    let guard = get(tag, "if")
+        .and_then(Value::as_str)
+        .expect("tag job has an `if:` guard");
+    assert!(
+        guard.contains("github.actor") && guard.contains("github.repository_owner"),
+        "tag job must be guarded to the repo owner; got if: {guard:?}"
+    );
+
+    assert_eq!(
+        get(tag, "environment").and_then(Value::as_str),
+        Some("release-tag"),
+        "tag job must draw its PAT from the `release-tag` environment"
+    );
+
+    // The tag is only cut for a merged PR that carries the `release` label —
+    // the same label version-guard demands before allowing the bump.
+    let steps = get(tag, "steps")
+        .and_then(Value::as_sequence)
+        .expect("tag job has steps");
+    let checks_label = steps.iter().any(|step| {
+        get(step, "run")
+            .and_then(Value::as_str)
+            .is_some_and(|run| run.contains("/pulls") && run.contains("'release'"))
+    });
+    assert!(
+        checks_label,
+        "tag job must require the merged PR to carry the `release` label"
     );
 }
 
