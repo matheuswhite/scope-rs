@@ -7,6 +7,8 @@
 //!
 //!   * No workflow uses `pull_request_target` (the classic secret-exfiltration
 //!     trigger: it runs with the base repo's secrets on PR-controlled code).
+//!   * Every workflow pins the scope of its `GITHUB_TOKEN` instead of
+//!     inheriting the repository default, which may well be read-write.
 //!   * `publish-crates.yml` fires **only** on version tags — never on a branch
 //!     push or a pull request — is guarded to the repository owner, deploys
 //!     through the reviewer-gated `crates` environment, and refuses to publish
@@ -88,6 +90,31 @@ fn no_workflow_uses_pull_request_target() {
             "{} must not use `pull_request_target` (runs with base-repo secrets on PR-controlled code)",
             path.display()
         );
+    }
+}
+
+#[test]
+fn every_workflow_restricts_the_default_token() {
+    for path in workflow_files() {
+        let text = std::fs::read_to_string(&path).unwrap();
+        let wf: Value = serde_yaml::from_str(&text).unwrap();
+        if has_key(&wf, "permissions") {
+            continue;
+        }
+        // A root block covers every job; otherwise each job must declare its own.
+        let jobs = get(&wf, "jobs")
+            .and_then(Value::as_mapping)
+            .unwrap_or_else(|| panic!("{} has a `jobs:` block", path.display()));
+        for (name, job) in jobs {
+            assert!(
+                has_key(job, "permissions"),
+                "{}: job `{}` inherits the repository default GITHUB_TOKEN scope — \
+                 declare `permissions:` on the job or at the workflow root \
+                 (`contents: read` is the usual minimum)",
+                path.display(),
+                name.as_str().unwrap_or("<non-string>")
+            );
+        }
     }
 }
 
