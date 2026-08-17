@@ -369,7 +369,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 /// Draw the centered picker box (amber border + `title`) with `hint` on its
 /// bottom line, and return the inner rect the caller renders content into.
 fn box_with_hint(f: &mut Frame, title: &str, hint: &str, height: u16) -> Rect {
-    let area = centered_rect(66, height.clamp(7, 22), f.size());
+    let area = centered_rect(66, height.clamp(7, 22), f.area());
     f.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)

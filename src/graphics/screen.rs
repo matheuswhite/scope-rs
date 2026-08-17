@@ -12,12 +12,11 @@ use crate::{
 use chrono::{DateTime, Local};
 use ratatui::{
     Frame,
-    layout::{Alignment, Margin, Rect},
+    layout::{Margin, Rect},
     style::{Color, Style, Stylize},
     text::{Line, Span},
     widgets::{
         Block, BorderType, Borders, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState,
-        block::Title,
     },
 };
 use regex::{Regex, RegexBuilder};
@@ -246,7 +245,7 @@ impl Screen {
                 record_indicator,
                 save_stats.filename()
             ))
-            .title(Title::from(format!("[{}]", file_size.0)).alignment(Alignment::Right))
+            .title(Line::from(format!("[{}]", file_size.0)).right_aligned())
             .borders(Borders::ALL)
             .border_type(border_type)
             .border_style(border_style)
@@ -334,7 +333,7 @@ impl Screen {
             .track_style(Style::default().fg(Color::DarkGray));
 
         /* inset vertically so the arrows fall inside the block's borders */
-        let area = self.size.inner(&Margin {
+        let area = self.size.inner(Margin {
             vertical: 1,
             horizontal: 0,
         });

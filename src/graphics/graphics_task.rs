@@ -33,10 +33,10 @@ use crossterm::{
 use ratatui::{
     Frame, Terminal,
     backend::{Backend, CrosstermBackend},
-    layout::{Alignment, Constraint, Direction, Layout, Rect},
+    layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph, block::Title},
+    widgets::{Block, BorderType, Borders, Clear, Paragraph},
 };
 use std::ops::Deref;
 use std::thread::{sleep, yield_now};
@@ -262,7 +262,7 @@ impl GraphicsTask {
 
         let block = Block::default()
             .title(format!("[{:03}][{}] {}", history_len, latency, title))
-            .title(Title::from(filter_label.to_string()).alignment(Alignment::Right))
+            .title(Line::from(filter_label.to_string()).right_aligned())
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
             .border_style(Style::default().fg(bar_color));
@@ -287,7 +287,7 @@ impl GraphicsTask {
 
         let paragraph = Paragraph::new(if hint_is_some { hint } else { text }).block(block);
         frame.render_widget(paragraph, rect);
-        frame.set_cursor(cursor.0, cursor.1);
+        frame.set_cursor_position((cursor.0, cursor.1));
     }
 
     fn draw_command_bar_search_mode(
@@ -342,7 +342,7 @@ impl GraphicsTask {
             .block(block);
 
         frame.render_widget(paragraph, rect);
-        frame.set_cursor(cursor.0, cursor.1);
+        frame.set_cursor_position((cursor.0, cursor.1));
     }
 
     pub fn draw_command_bar(
@@ -412,7 +412,7 @@ impl GraphicsTask {
         // Window the list so the highlighted entry is always on screen, keeping
         // as many earlier entries visible as fit; a trailing `...` marks that
         // more entries exist below the window.
-        let cap = min(frame.size().height as usize / 2, autocomplete_list.len()).max(1);
+        let cap = min(frame.area().height as usize / 2, autocomplete_list.len()).max(1);
         let start = selected
             .saturating_sub(cap - 1)
             .min(autocomplete_list.len() - cap);
@@ -424,9 +424,9 @@ impl GraphicsTask {
             .fold(0u16, |len, x| max(len, x.chars().count() as u16));
         let row_count = window.len() as u16 + if has_more_below { 1 } else { 0 };
         let area_size = (longest_entry_len + 5, row_count + 2);
-        let max_x = frame.size().x
+        let max_x = frame.area().x
             + frame
-                .size()
+                .area()
                 .width
                 .saturating_sub(area_size.0)
                 .saturating_sub(2);
@@ -538,10 +538,15 @@ impl GraphicsTask {
     /// the next draw rewrites the whole screen — blanks included — within its
     /// normal flush, emitting no erase sequence at all.
     fn force_full_repaint<B: Backend>(terminal: &mut Terminal<B>) {
+        // What makes the sentinel unproducible is the style, not the symbol:
+        // `Cell`'s equality covers the modifier set, and no real frame ever sets
+        // all of them at once. The symbol is deliberately left at the default
+        // blank — it only has to be a legal single-width grapheme. It used to be
+        // `\0`, which `Buffer::diff` now debug-asserts against (`cell_width`
+        // rejects control characters), and a wider symbol would drag the diff
+        // into its trailing-cell clearing path, which does emit erases.
         let mut sentinel = ratatui::buffer::Cell::default();
-        sentinel
-            .set_symbol("\0")
-            .set_style(Style::default().add_modifier(Modifier::all()));
+        sentinel.set_style(Style::default().add_modifier(Modifier::all()));
 
         // Fill the buffer's own cells rather than indexing by the terminal size:
         // after an outside resize the backend size and the buffer area disagree
@@ -1011,7 +1016,7 @@ impl GraphicsTask {
                 }
                 terminal
                     .draw(|f| {
-                        let size = f.size();
+                        let size = f.area();
                         let screen_size = Rect {
                             height: size.height.saturating_sub(Self::COMMAND_BAR_HEIGHT),
                             ..size
@@ -1024,7 +1029,7 @@ impl GraphicsTask {
                                 Constraint::Length(screen_size.height),
                                 Constraint::Length(Self::COMMAND_BAR_HEIGHT),
                             ])
-                            .split(f.size());
+                            .split(f.area());
 
                         private.screen.draw(
                             &private.buffer,
@@ -1174,7 +1179,7 @@ mod tests {
     /// Render `text` on the first row, leaving the rest of the screen blank.
     fn draw_frame(terminal: &mut Terminal<TestBackend>, text: &str) {
         terminal
-            .draw(|f| f.render_widget(Paragraph::new(text), f.size()))
+            .draw(|f| f.render_widget(Paragraph::new(text), f.area()))
             .expect("draw test frame");
     }
 
@@ -1217,22 +1222,22 @@ mod tests {
         draw_frame(&mut terminal, "hello");
 
         damage_screen(&mut terminal, 0, 1, "X");
-        assert_eq!(terminal.backend().buffer().get(0, 1).symbol(), "X");
+        assert_eq!(terminal.backend().buffer()[(0, 1)].symbol(), "X");
 
         // An identical frame changes nothing on its own, so the damage survives.
         draw_frame(&mut terminal, "hello");
-        assert_eq!(terminal.backend().buffer().get(0, 1).symbol(), "X");
+        assert_eq!(terminal.backend().buffer()[(0, 1)].symbol(), "X");
 
         GraphicsTask::force_full_repaint(&mut terminal);
         draw_frame(&mut terminal, "hello");
 
         assert_eq!(
-            terminal.backend().buffer().get(0, 1).symbol(),
+            terminal.backend().buffer()[(0, 1)].symbol(),
             " ",
             "the forced repaint must rewrite cells that are blank in the frame"
         );
         assert_eq!(
-            terminal.backend().buffer().get(0, 0).symbol(),
+            terminal.backend().buffer()[(0, 0)].symbol(),
             "h",
             "the real frame must survive the repaint"
         );
