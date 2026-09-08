@@ -372,6 +372,19 @@ fn hex_mixed_with_plain_text_renders_correctly() {
 }
 
 #[test]
+fn double_dollar_sends_a_literal_dollar() {
+    // Regression for issue #215: `$$` is the only way to send a raw `$`, since a
+    // lone `$` is eaten as a hex marker (`$5` would be the byte 0x05).
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    tui.type_text("cost: $$5");
+    tui.press_enter();
+
+    tui.wait_for("cost: $5\\r\\n", SETTLE);
+}
+
+#[test]
 fn adjacent_tags_both_resolve() {
     // Regression for the tag half of issue #178: `@tag1@tag2` must resolve both.
     let mut tui = Tui::start(&[("tag1", "hello"), ("tag2", "world")]);

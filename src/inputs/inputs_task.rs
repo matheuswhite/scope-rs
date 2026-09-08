@@ -1752,10 +1752,19 @@ impl InputsTask {
         let valid = "0123456789abcdefABCDEF,_-. ";
         let mut hex_shift = 0;
         let mut hex_val = None;
+        let mut chars = command_line.chars().peekable();
 
-        for c in command_line.chars() {
+        while let Some(c) = chars.next() {
             if !in_hex_seq {
                 if c == '$' {
+                    // `$$` is the escape for a literal `$`: without it there is
+                    // no way to send a dollar sign, since a lone `$` is always
+                    // eaten as a hex marker.
+                    if chars.next_if_eq(&'$').is_some() {
+                        output.push(b'$');
+                        continue;
+                    }
+
                     in_hex_seq = true;
                     hex_shift = 0;
                     hex_val = Some(0);
@@ -1765,8 +1774,8 @@ impl InputsTask {
                 output.push(c as u8);
             } else {
                 if c == '$' {
-                    // A new hex marker while already inside a hex sequence:
-                    // flush a pending single nibble (if any) and keep parsing hex.
+                    // A `$` while already inside a hex sequence: flush a pending
+                    // single nibble (if any) first, so the bytes stay ordered.
                     // `hex_shift == 4` means exactly one nibble is buffered; a bare
                     // `$` (hex_val still the Some(0) start sentinel) must not emit a byte.
                     if hex_shift == 4
@@ -1775,6 +1784,15 @@ impl InputsTask {
                         output.push(hex);
                     }
                     hex_shift = 0;
+
+                    // `$$` still escapes a literal `$` here, and ends the hex
+                    // sequence: the user typed a text character, so what follows
+                    // is text again. A lone `$` just starts another sequence.
+                    if chars.next_if_eq(&'$').is_some() {
+                        output.push(b'$');
+                        in_hex_seq = false;
+                    }
+
                     continue;
                 }
 
@@ -2025,11 +2043,55 @@ mod tests {
     }
 
     #[test]
-    fn test_rhs_double_dollar_no_zero_byte() {
-        // A `$` right after `$` must not flush the Some(0) start sentinel.
+    fn test_rhs_double_dollar_is_a_literal_dollar() {
+        let res = InputsTask::replace_hex_sequence("$$".to_string());
+
+        assert_eq!(&res, b"$");
+    }
+
+    #[test]
+    fn test_rhs_double_dollar_ends_the_hex_mode() {
+        // `$$` is a text character, so `01` after it is text too.
         let res = InputsTask::replace_hex_sequence("$$01".to_string());
 
-        assert_eq!(&res, &[0x01]);
+        assert_eq!(&res, b"$01");
+    }
+
+    #[test]
+    fn test_rhs_double_dollar_inside_text() {
+        let res = InputsTask::replace_hex_sequence("cost: $$5.00".to_string());
+
+        assert_eq!(&res, b"cost: $5.00");
+    }
+
+    #[test]
+    fn test_rhs_double_dollar_pairs_are_independent() {
+        let res = InputsTask::replace_hex_sequence("$$$$".to_string());
+
+        assert_eq!(&res, b"$$");
+    }
+
+    #[test]
+    fn test_rhs_escaped_dollar_then_hex_sequence() {
+        // The third `$` opens a fresh hex sequence.
+        let res = InputsTask::replace_hex_sequence("$$$41".to_string());
+
+        assert_eq!(&res, &[b'$', 0x41]);
+    }
+
+    #[test]
+    fn test_rhs_double_dollar_after_hex_byte() {
+        // Inside a sequence, `$$` still escapes and drops back to text mode.
+        let res = InputsTask::replace_hex_sequence("$41$$41".to_string());
+
+        assert_eq!(&res, b"A$41");
+    }
+
+    #[test]
+    fn test_rhs_double_dollar_flushes_pending_nibble_first() {
+        let res = InputsTask::replace_hex_sequence("$1$$".to_string());
+
+        assert_eq!(&res, &[0x01, b'$']);
     }
 
     #[test]

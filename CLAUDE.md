@@ -66,7 +66,7 @@ Consumer/producer counts are fixed in `main.rs` (`tx_channel` has 3 consumers, `
 
 What the user types is transformed before being sent:
 
-- **`$..` hex sequences** — `replace_hex_sequence` turns `$01 02`, `$0102`, `$01$02` into raw bytes. `,`, `_`, `-`, `.`, space and `$` act as separators between bytes within a sequence.
+- **`$..` hex sequences** — `replace_hex_sequence` turns `$01 02`, `$0102`, `$01$02` into raw bytes. `,`, `_`, `-`, `.`, space and `$` act as separators between bytes within a sequence. **`$$` is the escape for a literal `$`** (issue #215): a lone `$` is always consumed as a hex marker, so `$$` emits one `$` byte and drops back to text mode (`$$01` -> `"$01"`, `$41$$41` -> `A$41`); a pending single nibble is flushed before the escaped `$` so bytes stay ordered. The parser peeks one char ahead (`chars.next_if_eq(&'$')`) for this, which is why the loop is a `while let` over a `Peekable` rather than a `for`.
 - **`@tag` tags** — `replace_tag_sequence` + `infra/tags.rs` resolve `@name` to a value from the tag file (default `tags.yml`, a YAML `name: value` map). `@` and whitespace delimit a tag name.
 - **`!plugin args`** — invokes a Lua plugin command.
 
