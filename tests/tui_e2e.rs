@@ -34,6 +34,9 @@ use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 const ROWS: u16 = 40;
 const COLS: u16 = 160;
+/// Rendered scrollback rows: the screen minus the 3-row command bar and the
+/// output block's own top and bottom borders.
+const CONTENT_ROWS: usize = ROWS as usize - 5;
 const READY: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(10);
 
@@ -313,6 +316,55 @@ impl Tui {
         self.type_text("\r");
     }
 
+    /// Type `text` on the command bar and send it, which appends one TX line to
+    /// the scrollback.
+    fn send_line(&mut self, text: &str) {
+        self.type_text(text);
+        self.press_enter();
+    }
+
+    /// The rendered scrollback rows — what a frozen viewport has to keep
+    /// showing verbatim. The left border and the right-most column are trimmed
+    /// off: the scrollbar thumb is drawn over the right border and legitimately
+    /// moves when the offset slides, so it is not part of the content.
+    fn scrollback_rows(&self) -> Vec<String> {
+        self.screen()
+            .lines()
+            .skip(1)
+            .take(CONTENT_ROWS)
+            .map(|row| {
+                row.chars()
+                    .skip(1)
+                    .take(COLS as usize - 2)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// The output block's title row, which carries the session's byte counter.
+    /// It is the only on-screen proof that lines landed while the viewport is
+    /// scrolled away from them.
+    fn title_row(&self) -> String {
+        self.screen().lines().next().unwrap_or_default().to_string()
+    }
+
+    /// Block until the title row differs from `before` — i.e. the app has taken
+    /// in data that is not visible in the frozen viewport.
+    fn wait_for_ingest(&self, before: &str, timeout: Duration) {
+        let start = Instant::now();
+        while self.title_row() == before {
+            if start.elapsed() > timeout {
+                panic!(
+                    "timed out waiting for the new lines to be ingested.\n--- screen ---\n{}\n--------------",
+                    self.screen()
+                );
+            }
+            thread::sleep(Duration::from_millis(80));
+        }
+    }
+
     /// Block until the TUI has finished its first render — the precondition for
     /// injecting keystrokes — by waiting for the configured baud in the status bar.
     ///
@@ -382,6 +434,47 @@ fn double_dollar_sends_a_literal_dollar() {
     tui.press_enter();
 
     tui.wait_for("cost: $5\\r\\n", SETTLE);
+}
+
+#[test]
+fn a_frozen_viewport_keeps_its_lines_while_the_buffer_rotates() {
+    // Regression for issue #218: scrolling up freezes the view, but the scroll
+    // offset is a buffer index, so once the scrollback is full (every new line
+    // evicting the oldest and re-indexing the rest) the content used to slide
+    // upwards under the frozen viewport — "scrolling doesn't stop the printing".
+    let mut tui = Tui::start_with(StartOpts {
+        config_toml: Some("capacity = 100\n"),
+        ..Default::default()
+    });
+    tui.wait_until_ready();
+
+    // Fill the scrollback exactly to capacity, so the next line evicts.
+    for i in 1..=100 {
+        tui.send_line(&format!("L{i:03}"));
+    }
+    tui.wait_for("L100", SETTLE);
+
+    // Freeze the viewport one page up, well clear of both ends of the history.
+    tui.type_text("\x1b[5~"); // PageUp
+    tui.wait_for("L034", SETTLE);
+    let frozen = tui.scrollback_rows();
+    let title = tui.title_row();
+
+    for i in 1..=3 {
+        tui.send_line(&format!("NEW{i}"));
+    }
+    tui.wait_for_ingest(&title, SETTLE);
+
+    assert_eq!(
+        tui.scrollback_rows(),
+        frozen,
+        "the frozen viewport moved while the buffer rotated"
+    );
+
+    // And the new lines really are in the history: jumping back to the end
+    // (Alt+PageDown) resumes following the newest line.
+    tui.type_text("\x1b[6;3~"); // Alt+PageDown = jump_end
+    tui.wait_for("NEW3", SETTLE);
 }
 
 #[test]

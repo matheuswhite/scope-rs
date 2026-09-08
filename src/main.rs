@@ -32,7 +32,12 @@ use std::process::exit;
 use std::sync::Arc;
 use std::sync::mpsc::channel;
 
-const DEFAULT_CAPACITY: usize = 2000;
+// Deep enough that a session rarely reaches the point where the lines being
+// read are themselves the ones being evicted, which is the one thing a frozen
+// viewport cannot hold on to (issue #218). The depth costs memory, not
+// throughput: evicting a line is a `VecDeque::pop_front` plus a re-index of the
+// lines left, and a 30k-line flood measured the same at 2000 and at 20000.
+const DEFAULT_CAPACITY: usize = 20_000;
 const DEFAULT_TAG_FILE: &str = "tags.yml";
 
 #[derive(Parser)]
@@ -46,7 +51,7 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
     /// Number of scrollback lines kept in memory. Falls back to `capacity` in
-    /// config.toml, then to 2000.
+    /// config.toml, then to 20000.
     #[clap(short, long)]
     capacity: Option<usize>,
     /// Path to the YAML file whose entries resolve `@name` tags typed in the

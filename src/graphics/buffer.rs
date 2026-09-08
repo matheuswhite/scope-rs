@@ -8,6 +8,7 @@ use crate::{
     infra::LogLevel,
 };
 use chrono::{DateTime, Local};
+use std::collections::VecDeque;
 use std::ops::AddAssign;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -31,15 +32,26 @@ fn next_line_id() -> u64 {
 pub type LineBytes = Arc<[u8]>;
 
 pub struct Buffer {
-    lines: Vec<BufferLine<LineBytes>>,
+    /// A deque, not a `Vec`: dropping the oldest line happens on every single
+    /// line once the buffer is at capacity, and `Vec::remove(0)` would memmove
+    /// the whole history each time (~1.3MB per line at 20k lines).
+    lines: VecDeque<BufferLine<LineBytes>>,
     capacity: usize,
+    /// How many lines have been evicted from the front over this buffer's
+    /// lifetime. Anything that points at a line *by index* — the scroll offset
+    /// of a frozen viewport, an active selection — has to slide by the growth
+    /// of this counter to keep pointing at the same content once the capacity
+    /// starts rotating (issue #218). Bookmarks pin to the stable
+    /// [`BufferLine::id`] instead and need no such fixup.
+    evicted: u64,
 }
 
 impl Buffer {
     pub fn new(capacity: usize) -> Self {
         Self {
-            lines: Vec::new(),
+            lines: VecDeque::new(),
             capacity: if capacity == 0 { 1 } else { capacity },
+            evicted: 0,
         }
     }
 
@@ -86,11 +98,15 @@ impl Buffer {
         result.join("").replace("\\r", "\r").replace("\\n", "\n")
     }
 
-    pub fn get_range(&self, start: usize, end: usize) -> &[BufferLine<LineBytes>] {
+    pub fn get_range(
+        &self,
+        start: usize,
+        end: usize,
+    ) -> impl Iterator<Item = &BufferLine<LineBytes>> {
         let end = end.min(self.lines.len());
         let start = start.min(end);
 
-        &self.lines[start..end]
+        self.lines.range(start..end)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &BufferLine<LineBytes>> {
@@ -99,11 +115,20 @@ impl Buffer {
 
     pub fn clear(&mut self) {
         self.lines.clear();
+        // Reset in lockstep with `Screen::clear`, which zeroes the viewport's
+        // copy of this counter; the two are always cleared together.
+        self.evicted = 0;
+    }
+
+    /// Lifetime count of lines dropped from the front — see [`Buffer::evicted`].
+    pub fn evicted(&self) -> u64 {
+        self.evicted
     }
 
     fn drop_oldest_if_needed(&mut self) {
         if self.lines.len() == self.capacity {
-            self.lines.remove(0);
+            self.lines.pop_front();
+            self.evicted += 1;
 
             for (index, line) in self.lines.iter_mut().enumerate() {
                 line.line = index;
@@ -121,7 +146,7 @@ impl AddAssign<BufferLine<LineBytes>> for Buffer {
         self.drop_oldest_if_needed();
 
         rhs.line = self.lines.len();
-        self.lines.push(rhs);
+        self.lines.push_back(rhs);
     }
 }
 
@@ -304,6 +329,70 @@ mod tests {
         let content = buffer.get_selection_content(&selection, ScreenDecoder::Ascii);
 
         assert_eq!(content, "green");
+    }
+
+    // Issue #218: the eviction count is what lets a frozen viewport (and an
+    // active selection) slide with the content when the capacity rotates.
+    #[test]
+    fn nothing_is_evicted_below_capacity() {
+        let mut buffer = Buffer::new(4);
+        for _ in 0..4 {
+            buffer += BufferLine::new_rx(Local::now(), b"x".to_vec());
+        }
+
+        assert_eq!(buffer.len(), 4);
+        assert_eq!(buffer.evicted(), 0);
+    }
+
+    #[test]
+    fn one_line_is_evicted_per_line_past_capacity() {
+        let mut buffer = Buffer::new(4);
+        for _ in 0..7 {
+            buffer += BufferLine::new_rx(Local::now(), b"x".to_vec());
+        }
+
+        assert_eq!(buffer.len(), 4);
+        assert_eq!(buffer.evicted(), 3);
+    }
+
+    #[test]
+    fn the_oldest_line_is_the_one_dropped_and_the_rest_are_reindexed() {
+        let mut buffer = Buffer::new(3);
+        for i in 0..4 {
+            buffer += BufferLine::new_rx(Local::now(), format!("L{i}").into_bytes());
+        }
+
+        let lines = buffer
+            .iter()
+            .map(|line| {
+                (
+                    line.line,
+                    String::from_utf8_lossy(&line.message).to_string(),
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            lines,
+            vec![
+                (0, "L1".to_string()),
+                (1, "L2".to_string()),
+                (2, "L3".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn clear_resets_the_eviction_count() {
+        let mut buffer = Buffer::new(2);
+        for _ in 0..5 {
+            buffer += BufferLine::new_rx(Local::now(), b"x".to_vec());
+        }
+        assert_eq!(buffer.evicted(), 3);
+
+        buffer.clear();
+
+        assert_eq!(buffer.evicted(), 0);
     }
 
     #[test]

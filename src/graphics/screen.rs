@@ -38,6 +38,12 @@ pub struct Screen {
     /// from the (possibly clamped) scroll offset. Cleared when that bookmark is
     /// removed or the screen is cleared.
     current_bookmark: Option<u64>,
+    /// Value of [`Buffer::evicted`](crate::graphics::buffer::Buffer::evicted)
+    /// the last time the viewport was reconciled with the buffer. Its growth is
+    /// how many lines have dropped off the front since, which is exactly how
+    /// far a frozen viewport (and any selection) has to slide to stay on the
+    /// same content — see [`Screen::update_after_new_lines`].
+    evicted_seen: u64,
 }
 
 pub struct ScreenPosition {
@@ -61,6 +67,7 @@ impl Default for Screen {
             selection: None,
             bookmarks: BTreeSet::new(),
             current_bookmark: None,
+            evicted_seen: 0,
         }
     }
 }
@@ -156,6 +163,9 @@ impl Screen {
         self.selection = None;
         self.bookmarks.clear();
         self.current_bookmark = None;
+        // The buffer is cleared together with the screen, resetting its own
+        // counter, so the two stay in step.
+        self.evicted_seen = 0;
     }
 
     pub fn disable_auto_scroll(&mut self) {
@@ -179,11 +189,42 @@ impl Screen {
         self.auto_scroll = false;
     }
 
+    /// Reconciles the viewport with the buffer after new lines have landed.
+    ///
+    /// With auto-scroll on the viewport simply follows the bottom. With it off —
+    /// the user scrolled up to read — the viewport has to stay on the *lines* it
+    /// is showing, not on their indices: once the buffer is at capacity every
+    /// new line evicts the oldest one and re-indexes the rest, so a fixed offset
+    /// would let the content slide upwards under a frozen viewport, which is
+    /// issue #218 (and why it only showed up after the first `--capacity` lines).
+    /// Sliding the offset by the number of evictions keeps the same lines on
+    /// screen.
+    ///
+    /// Offset 0 is the floor: from there the lines being read are themselves the
+    /// ones being dropped, and no offset can hold content the buffer no longer
+    /// has. That is the limit `--capacity` buys.
     pub fn update_after_new_lines(&mut self, buffer: &Buffer) {
+        let evicted = buffer.evicted();
+        // Saturating, so a buffer cleared without the screen (which resets the
+        // counter) re-syncs instead of underflowing.
+        let dropped = evicted.saturating_sub(self.evicted_seen) as usize;
+        self.evicted_seen = evicted;
+
+        // A selection is positional too, so it follows the same slide whether or
+        // not the viewport is frozen; one whose every line is gone is dropped.
+        if dropped > 0
+            && let Some(selection) = &mut self.selection
+            && !selection.shift_up(dropped)
+        {
+            self.selection = None;
+        }
+
         if self.auto_scroll {
             let visible_height = self.size.height.saturating_sub(2) as usize;
             let max_main_axis = buffer.len().saturating_sub(visible_height);
             self.position.line = max_main_axis;
+        } else {
+            self.position.line = self.position.line.saturating_sub(dropped);
         }
     }
 
@@ -269,7 +310,6 @@ impl Screen {
 
         let decoded_lines = buffer
             .get_range(start, end)
-            .iter()
             .map(|buffer_line| buffer_line.decode(self.decoder))
             .filter(|line| {
                 let Some(level) = line.level else {
@@ -482,7 +522,7 @@ impl Screen {
         }
 
         let line = (row + self.position.line) - Self::CONTENT_OFFSET_Y;
-        let Some(buffer_line) = buffer.get_range(line, line + 1).first() else {
+        let Some(buffer_line) = buffer.get_range(line, line + 1).next() else {
             return;
         };
         let id = buffer_line.id;
@@ -1258,6 +1298,171 @@ mod tests {
     fn empty_query_matches_nothing() {
         assert!(SearchMatcher::build("", false, false).is_empty());
         assert!(SearchMatcher::build("", false, true).is_empty());
+    }
+
+    // A viewport frozen by scrolling up must stay on its lines while the buffer
+    // rotates underneath it (issue #218).
+    mod frozen_viewport {
+        use super::super::Screen;
+        use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
+        use crate::graphics::selection::Selection;
+        use chrono::Local;
+        use ratatui::layout::Rect;
+
+        /// A buffer filled to `capacity`, each line labelled with its ordinal so
+        /// a test can tell which lines the viewport is showing.
+        fn full_buffer(capacity: usize) -> Buffer {
+            let mut buffer = Buffer::new(capacity);
+            for i in 0..capacity {
+                buffer += BufferLine::new_rx(Local::now(), format!("L{i:03}").into_bytes());
+            }
+            buffer
+        }
+
+        fn push(buffer: &mut Buffer, text: &str) {
+            *buffer += BufferLine::new_rx(Local::now(), text.as_bytes().to_vec());
+        }
+
+        /// A screen `height` rows tall (so `height - 2` content rows), already
+        /// reconciled with `buffer` and therefore sitting at the bottom.
+        fn screen_on(buffer: &Buffer, height: u16) -> Screen {
+            let mut screen = Screen::default();
+            screen.set_size(
+                Rect {
+                    x: 0,
+                    y: 0,
+                    width: 80,
+                    height,
+                },
+                buffer.len(),
+            );
+            screen.update_after_new_lines(buffer);
+            screen
+        }
+
+        /// The messages the viewport currently shows, top to bottom.
+        fn visible(screen: &Screen, buffer: &Buffer) -> Vec<String> {
+            let start = screen.position.line;
+            let rows = screen.size.height.saturating_sub(2) as usize;
+
+            buffer
+                .get_range(start, start + rows)
+                .map(|line| String::from_utf8_lossy(&line.message).to_string())
+                .collect()
+        }
+
+        #[test]
+        fn a_frozen_viewport_keeps_showing_the_same_lines() {
+            // 20 lines over 7 content rows: the bottom offset is 13.
+            let mut buffer = full_buffer(20);
+            let mut screen = screen_on(&buffer, 9);
+            assert!(screen.auto_scroll);
+
+            // Scroll up into the middle of the history.
+            screen.scroll_vertical(-8, 13);
+            assert!(!screen.auto_scroll);
+            let frozen = visible(&screen, &buffer);
+            assert_eq!(frozen.first().unwrap(), "L005");
+
+            // Three new lines evict L000..L002 and re-index the rest, so the
+            // offset has to come down by three to stay on the same content.
+            for text in ["N1", "N2", "N3"] {
+                push(&mut buffer, text);
+            }
+            screen.update_after_new_lines(&buffer);
+
+            assert_eq!(visible(&screen, &buffer), frozen);
+            assert_eq!(screen.position.line, 2);
+        }
+
+        #[test]
+        fn auto_scroll_still_follows_the_bottom_through_evictions() {
+            let mut buffer = full_buffer(20);
+            let mut screen = screen_on(&buffer, 9);
+
+            push(&mut buffer, "N1");
+            screen.update_after_new_lines(&buffer);
+
+            assert!(screen.auto_scroll);
+            assert_eq!(visible(&screen, &buffer).last().unwrap(), "N1");
+        }
+
+        #[test]
+        fn the_top_of_the_history_is_the_floor() {
+            // At offset 0 the lines on screen are the ones being evicted: there
+            // is nothing above to slide to, so here the content does move.
+            let mut buffer = full_buffer(20);
+            let mut screen = screen_on(&buffer, 9);
+            screen.disable_auto_scroll();
+            screen.jump_to_start();
+
+            push(&mut buffer, "N1");
+            screen.update_after_new_lines(&buffer);
+
+            assert_eq!(screen.position.line, 0);
+            assert_eq!(visible(&screen, &buffer).first().unwrap(), "L001");
+        }
+
+        #[test]
+        fn a_selection_slides_with_the_content() {
+            let mut buffer = full_buffer(20);
+            let mut screen = screen_on(&buffer, 9);
+            screen.selection = Some(Selection::new(
+                BufferPosition {
+                    line: 10,
+                    column: 1,
+                },
+                BufferPosition {
+                    line: 12,
+                    column: 4,
+                },
+            ));
+
+            push(&mut buffer, "N1");
+            screen.update_after_new_lines(&buffer);
+
+            let selection = screen.selection.expect("the selection is still valid");
+            assert_eq!(selection.start, BufferPosition { line: 9, column: 1 });
+            assert_eq!(
+                selection.end,
+                BufferPosition {
+                    line: 11,
+                    column: 4
+                }
+            );
+        }
+
+        #[test]
+        fn a_selection_whose_lines_are_all_evicted_is_dropped() {
+            let mut buffer = full_buffer(20);
+            let mut screen = screen_on(&buffer, 9);
+            screen.selection = Some(Selection::new(
+                BufferPosition { line: 0, column: 0 },
+                BufferPosition { line: 1, column: 2 },
+            ));
+
+            for text in ["N1", "N2", "N3"] {
+                push(&mut buffer, text);
+            }
+            screen.update_after_new_lines(&buffer);
+
+            assert!(screen.selection.is_none());
+        }
+
+        #[test]
+        fn clearing_resets_the_eviction_bookkeeping() {
+            let mut buffer = full_buffer(20);
+            let mut screen = screen_on(&buffer, 9);
+            push(&mut buffer, "N1");
+            screen.update_after_new_lines(&buffer);
+            assert_eq!(screen.evicted_seen, 1);
+
+            buffer.clear();
+            screen.clear();
+
+            assert_eq!(screen.evicted_seen, 0);
+            assert_eq!(buffer.evicted(), 0);
+        }
     }
 
     // Bookmarks (issue #208).

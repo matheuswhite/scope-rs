@@ -187,6 +187,14 @@ Data sent to the serial port always has a background to distinguish it from rece
 
 ![Special character gif](videos/007_invisible/video.gif)
 
+#### Freezing the output
+
+While data is streaming in, the view follows the newest line. **Scroll up and the output freezes**: `PageUp`, the mouse wheel, or `Alt`+`PageUp` (`Ctrl` on Windows) to jump to the start of the history — the border switches from a **thick** to a **double** line to show the view is no longer live. New data keeps being received and recorded, it just doesn't move the screen, so you can read, select and copy in peace.
+
+To go **back to live**, press `Alt`+`PageDown` (`Ctrl`+`PageDown` on Windows) or simply scroll back down to the bottom; the border turns thick again and the view resumes following the newest line.
+
+The one thing a frozen view cannot hold on to is history that no longer exists: the scrollback keeps the last `-c/--capacity` lines (20000 by default), and once it is full each new line drops the oldest one. While there is history above the view, the view stays on the lines you are reading; if you have scrolled all the way to the top, the lines on screen are the ones being dropped and the content has to move. Raise `--capacity` if you need a deeper freeze.
+
 #### Message Timestamp
 
 All data written or read carries a gray timestamp on the left, in the format `HH:MM:SS.ms`.
@@ -364,7 +372,7 @@ Global options (given before the command):
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `-c, --capacity <N>` | `2000` | Number of scrollback lines kept in memory. |
+| `-c, --capacity <N>` | `20000` | Number of scrollback lines kept in memory. Once full, each new line drops the oldest one. |
 | `-t, --tag-file <PATH>` | `tags.yml` | Path to the tag file (see [Tags](#tags)). |
 | `-l, --latency <US>` | `100` | Polling latency in microseconds (clamped to `0..=100000`). |
 | `-n, --name <NAME>` | timestamp | Base name for the session record file. |
