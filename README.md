@@ -143,6 +143,8 @@ Type a message on the command bar (at the bottom) and press `Enter` to send it t
 
 You can also send raw bytes in hexadecimal. Type `$` and write your bytes in a hexadecimal format. Inside a `$` sequence you may use `,`, `_`, `-`, `.` and spaces as separators between bytes (they are ignored when the bytes are sent), and a new `$` starts another sequence. For example, `$48 65 6c 6c 6f`, `$48,65,6c,6c,6f` and `$48$65$6c$6c$6f` all send `Hello`.
 
+Because a lone `$` always opens a hex sequence, a **literal dollar sign is written `$$`**: `$$` sends a single `$` and leaves hex mode, so `cost: $$5.00` sends the text `cost: $5.00` (without the escape, `$5.00` would be read as the bytes `0x05 0x00`). This works inside a sequence too — `$41$$41` sends `A` followed by the text `$41`.
+
 ![Send hex gif](videos/002_hexa/video.gif)
 
 #### Tags
