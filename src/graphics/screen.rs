@@ -105,6 +105,12 @@ impl Screen {
         };
     }
 
+    /// True while a non-empty search query is active — see
+    /// [`ScreenMode::is_searching`].
+    pub fn is_searching(&self) -> bool {
+        self.mode.is_searching()
+    }
+
     pub fn search_indexes(&self) -> Option<(usize, usize)> {
         let ScreenMode::Search {
             entries, current, ..
@@ -456,11 +462,11 @@ impl Screen {
             return;
         };
 
-        let Some(position) = entries.get(*current) else {
+        let Some(hit) = entries.get(*current) else {
             return;
         };
 
-        self.jump_to_centered_position(*position, max_main_axis);
+        self.jump_to_centered_position(hit.position, max_main_axis);
         self.auto_scroll = false;
     }
 
@@ -478,7 +484,7 @@ impl Screen {
             }
 
             *current = (*current + 1) % entries.len();
-            entries[*current]
+            entries[*current].position
         };
 
         self.jump_to_centered_position(pos, max_main_axis);
@@ -503,7 +509,7 @@ impl Screen {
                 *current -= 1;
             }
 
-            entries[*current]
+            entries[*current].position
         };
 
         self.jump_to_centered_position(pos, max_main_axis);
@@ -707,11 +713,24 @@ impl SearchMatcher {
     }
 }
 
+/// One hit of the active search: where it sits in the buffer right now
+/// (`position`) and the stable id of the line it is on (`line_id`).
+///
+/// The hit list is re-scanned from the buffer whenever new lines land, and the
+/// buffer re-indexes its lines as it rotates, so `position` alone cannot
+/// identify the hit the user navigated to across a re-scan. The id can, because
+/// it never changes for a given line (issue #218).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct SearchHit {
+    pub position: BufferPosition,
+    pub line_id: u64,
+}
+
 pub enum ScreenMode {
     Normal,
     Search {
         current: usize,
-        entries: Vec<BufferPosition>,
+        entries: Vec<SearchHit>,
         matcher: SearchMatcher,
     },
 }
@@ -731,10 +750,62 @@ impl ScreenMode {
         }
     }
 
-    pub fn add_entry(&mut self, entry: BufferPosition) {
+    pub fn add_entry(&mut self, entry: SearchHit) {
         if let Self::Search { entries, .. } = self {
             entries.push(entry);
         }
+    }
+
+    /// True while a non-empty query is active, i.e. the hit list means
+    /// something and is worth re-scanning for.
+    pub fn is_searching(&self) -> bool {
+        matches!(self, Self::Search { matcher, .. } if !matcher.is_empty())
+    }
+
+    /// The hit the user is currently on.
+    fn current_hit(&self) -> Option<SearchHit> {
+        let Self::Search {
+            entries, current, ..
+        } = self
+        else {
+            return None;
+        };
+
+        entries.get(*current).copied()
+    }
+
+    /// Empties the hit list ahead of a re-scan, handing back the hit the user
+    /// was on so [`ScreenMode::restore_current`] can find it again.
+    pub fn take_hits_for_rescan(&mut self) -> Option<SearchHit> {
+        let previous = self.current_hit();
+
+        if let Self::Search { entries, .. } = self {
+            entries.clear();
+        }
+
+        previous
+    }
+
+    /// Puts the navigation position back where the user left it after a
+    /// re-scan: on the very same hit when it is still there, otherwise on the
+    /// first hit at or after its line (ids grow monotonically, so that is the
+    /// next hit in time), and on the first hit when neither applies.
+    pub fn restore_current(&mut self, previous: Option<SearchHit>) {
+        let Self::Search {
+            entries, current, ..
+        } = self
+        else {
+            return;
+        };
+
+        *current = previous
+            .and_then(|prev| {
+                entries
+                    .iter()
+                    .position(|hit| *hit == prev)
+                    .or_else(|| entries.iter().position(|hit| hit.line_id >= prev.line_id))
+            })
+            .unwrap_or(0);
     }
 
     /// Match positions of the active search query within `line`, as
@@ -743,19 +814,6 @@ impl ScreenMode {
         match self {
             Self::Search { matcher, .. } => matcher.matches(line),
             Self::Normal => vec![],
-        }
-    }
-
-    pub fn update_current(&mut self) {
-        if let Self::Search {
-            entries, current, ..
-        } = self
-        {
-            if entries.is_empty() {
-                *current = 0;
-            } else if *current > entries.len() - 1 {
-                *current = entries.len() - 1;
-            }
         }
     }
 
@@ -1027,12 +1085,13 @@ impl ScreenMode {
             }
 
             let matched = chars[start..start + len].iter().collect::<String>();
-            let query_pos = BufferPosition {
-                line: line.line,
-                column: start,
-            };
+            // By line id, not index: the hit list is re-scanned as lines land
+            // and the buffer re-indexes as it rotates.
+            let is_chosen = entries
+                .get(*current)
+                .is_some_and(|hit| hit.line_id == line.id && hit.position.column == start);
 
-            if entries.get(*current) == Some(&query_pos) {
+            if is_chosen {
                 let chosen = Span::styled(matched, chosen_style);
                 output.extend(Self::highlight_special_characters(chosen));
             } else {
@@ -1462,6 +1521,112 @@ mod tests {
 
             assert_eq!(screen.evicted_seen, 0);
             assert_eq!(buffer.evicted(), 0);
+        }
+    }
+
+    // The hit list is re-scanned whenever new lines land, and must come back
+    // pointing at the hit the user navigated to even though the buffer
+    // re-indexed its lines underneath it (issue #218).
+    mod frozen_search {
+        use super::super::{Screen, ScreenMode, SearchHit};
+        use crate::graphics::buffer::BufferPosition;
+
+        fn hit(line: usize, line_id: u64) -> SearchHit {
+            SearchHit {
+                position: BufferPosition { line, column: 0 },
+                line_id,
+            }
+        }
+
+        /// A search over three hits, sitting on the one given by `current`.
+        fn searching_on(current: usize, hits: &[SearchHit]) -> Screen {
+            let mut screen = Screen::default();
+            screen.change_mode_to_search("x".to_string(), true, false);
+            for hit in hits {
+                screen.mode_mut().add_entry(*hit);
+            }
+            if let ScreenMode::Search { current: c, .. } = screen.mode_mut() {
+                *c = current;
+            }
+            screen
+        }
+
+        #[test]
+        fn a_rescan_stays_on_the_same_hit_after_the_lines_slid_up() {
+            let mut screen = searching_on(1, &[hit(4, 104), hit(9, 109), hit(15, 115)]);
+
+            let previous = screen.mode_mut().take_hits_for_rescan();
+            assert_eq!(screen.search_indexes(), Some((1, 0)));
+
+            // Three lines were evicted, so every hit is three indices lower.
+            for h in [hit(1, 104), hit(6, 109), hit(12, 115)] {
+                screen.mode_mut().add_entry(h);
+            }
+            screen.mode_mut().restore_current(previous);
+
+            assert_eq!(screen.search_indexes(), Some((1, 3)));
+        }
+
+        #[test]
+        fn new_hits_appended_below_do_not_move_the_position() {
+            let mut screen = searching_on(1, &[hit(4, 104), hit(9, 109)]);
+
+            let previous = screen.mode_mut().take_hits_for_rescan();
+            for h in [hit(4, 104), hit(9, 109), hit(20, 130)] {
+                screen.mode_mut().add_entry(h);
+            }
+            screen.mode_mut().restore_current(previous);
+
+            assert_eq!(screen.search_indexes(), Some((1, 3)));
+        }
+
+        #[test]
+        fn a_hit_scrolled_out_of_the_history_falls_to_the_next_one_in_time() {
+            let mut screen = searching_on(0, &[hit(0, 104), hit(5, 109)]);
+
+            let previous = screen.mode_mut().take_hits_for_rescan();
+            // L104 is gone; ids grow monotonically, so 109 is the next hit in
+            // time and the closest thing to where the user was.
+            for h in [hit(2, 109), hit(8, 115)] {
+                screen.mode_mut().add_entry(h);
+            }
+            screen.mode_mut().restore_current(previous);
+
+            assert_eq!(screen.search_indexes(), Some((0, 2)));
+        }
+
+        #[test]
+        fn a_hit_past_the_end_of_the_new_list_falls_back_to_the_first() {
+            let mut screen = searching_on(1, &[hit(0, 104), hit(5, 109)]);
+
+            let previous = screen.mode_mut().take_hits_for_rescan();
+            // The filter changed and only an older line still matches.
+            screen.mode_mut().add_entry(hit(0, 100));
+            screen.mode_mut().restore_current(previous);
+
+            assert_eq!(screen.search_indexes(), Some((0, 1)));
+        }
+
+        #[test]
+        fn a_rescan_that_finds_nothing_leaves_a_valid_position() {
+            let mut screen = searching_on(1, &[hit(0, 104), hit(5, 109)]);
+
+            let previous = screen.mode_mut().take_hits_for_rescan();
+            screen.mode_mut().restore_current(previous);
+
+            assert_eq!(screen.search_indexes(), Some((0, 0)));
+        }
+
+        #[test]
+        fn an_empty_query_is_not_worth_rescanning() {
+            let mut screen = Screen::default();
+            assert!(!screen.is_searching());
+
+            screen.change_mode_to_search(String::new(), true, false);
+            assert!(!screen.is_searching());
+
+            screen.change_mode_to_search("x".to_string(), true, false);
+            assert!(screen.is_searching());
         }
     }
 

@@ -350,6 +350,48 @@ impl Tui {
         self.screen().lines().next().unwrap_or_default().to_string()
     }
 
+    /// The search bar's `[n/m]` field as `(current, total)`, 1-based like the
+    /// display. `None` while it reads `[--/--]`, i.e. nothing matches.
+    fn search_counter(&self) -> Option<(usize, usize)> {
+        let row = self
+            .screen()
+            .lines()
+            .find(|row| row.contains("Search Mode"))?
+            .to_string();
+        let (current, total) = row
+            .split(['[', ']'])
+            .find(|field| field.contains('/'))?
+            .split_once('/')?;
+
+        Some((current.parse().ok()?, total.parse().ok()?))
+    }
+
+    /// Block until the search counter satisfies `predicate`, returning it.
+    /// Panics (with the last screen) on timeout.
+    fn wait_for_counter(
+        &self,
+        what: &str,
+        predicate: impl Fn((usize, usize)) -> bool,
+        timeout: Duration,
+    ) -> (usize, usize) {
+        let start = Instant::now();
+        loop {
+            if let Some(counter) = self.search_counter()
+                && predicate(counter)
+            {
+                return counter;
+            }
+            if start.elapsed() > timeout {
+                panic!(
+                    "timed out waiting for the search counter to {what}, it reads {:?}.\n--- screen ---\n{}\n--------------",
+                    self.search_counter(),
+                    self.screen()
+                );
+            }
+            thread::sleep(Duration::from_millis(80));
+        }
+    }
+
     /// Block until the title row differs from `before` — i.e. the app has taken
     /// in data that is not visible in the frozen viewport.
     fn wait_for_ingest(&self, before: &str, timeout: Duration) {
@@ -475,6 +517,78 @@ fn a_frozen_viewport_keeps_its_lines_while_the_buffer_rotates() {
     // (Alt+PageDown) resumes following the newest line.
     tui.type_text("\x1b[6;3~"); // Alt+PageDown = jump_end
     tui.wait_for("NEW3", SETTLE);
+}
+
+/// Injects three lines that do not match the test's search query, but only
+/// after a delay — long enough for the test to arm the search and navigate
+/// first, so the lines land while the view is frozen on a match.
+const LATECOMER: &str = r#"local scope = require("scope")
+local M = {}
+
+function M.send()
+    scope.sys.sleep_ms(6000)
+    for i = 1, 3 do
+        scope.serial.send(scope.fmt.to_bytes(string.format("NEW%d", i)))
+    end
+end
+
+return M
+"#;
+
+#[test]
+fn a_search_hit_stays_put_while_the_buffer_rotates_under_it() {
+    // The search half of issue #218: jumping to a match freezes the view on it,
+    // and the hit list is re-scanned whenever new lines land. Re-scanning used
+    // to re-arm the query, which reset the position to the first hit and
+    // re-centred the viewport on it — so under a live stream the freeze was
+    // undone on every batch and the match keys could not advance at all.
+    let mut tui = Tui::start_with(StartOpts {
+        config_toml: Some("capacity = 100\n"),
+        installed_plugins: &[("latecomer", LATECOMER)],
+        ..Default::default()
+    });
+    tui.wait_until_ready();
+    tui.wait_for("latecomer", SETTLE);
+
+    // Fill the scrollback to capacity: the start-up logs are pushed out, so the
+    // history is exactly L001..L100 and the next line evicts L001.
+    for i in 1..=100 {
+        tui.send_line(&format!("L{i:03}"));
+    }
+    tui.wait_for("L100", SETTLE);
+
+    // Arm the delayed injection, then search while it sleeps.
+    tui.send_line("!latecomer send");
+
+    tui.type_text("\x06"); // Ctrl+F
+    tui.type_text("L0"); // matches L001..L099, so every line that gets evicted
+    tui.wait_for_counter("find the matches", |(_, total)| total == 99, SETTLE);
+
+    // Walk down to the 50th match, freezing the view centred on it — halfway
+    // down the history, clear of the offset-0 floor where the lines on screen
+    // are the ones being evicted and the content has to move.
+    tui.type_text(&"\x1b[B".repeat(49)); // Down
+    tui.wait_for_counter("reach the 50th match", |(current, _)| current == 50, SETTLE);
+    let frozen = tui.scrollback_rows();
+
+    // The three injected lines evict L001..L003, dropping three matches from
+    // above the one the user is on. The hit itself must not move: it is simply
+    // three places closer to the top of the history now.
+    let (current, _) = tui.wait_for_counter(
+        "shed the evicted matches",
+        |(_, total)| total == 96,
+        Duration::from_secs(30),
+    );
+
+    assert_eq!(
+        current, 47,
+        "the search jumped to another match while the buffer rotated"
+    );
+    assert_eq!(
+        tui.scrollback_rows(),
+        frozen,
+        "the view frozen on a match moved while the buffer rotated"
+    );
 }
 
 #[test]

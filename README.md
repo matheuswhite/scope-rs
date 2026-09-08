@@ -203,6 +203,8 @@ All data written or read carries a gray timestamp on the left, in the format `HH
 
 Press `Ctrl+F` to enter **search mode** and type a query to find it in the captured history. Press `Enter` or `Down Arrow` to jump to the next match and `Up Arrow` for the previous one. `Ctrl+W` toggles case sensitivity, and `Esc` leaves search mode.
 
+Jumping to a match freezes the view on it, and it stays there while data keeps arriving: the match list is refreshed as new lines land, so incoming matches are added to the count, but the match you are on stays the match you are on — the `n/total` counter simply counts down as older matches drop out of the scrollback above you. Only when the line you are on is itself dropped does the view move on, to the next match after it.
+
 ![Search gif](videos/015_search/video.gif)
 
 #### Bookmarks
