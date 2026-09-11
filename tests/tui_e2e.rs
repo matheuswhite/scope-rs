@@ -34,6 +34,9 @@ use portable_pty::{CommandBuilder, MasterPty, PtySize, native_pty_system};
 
 const ROWS: u16 = 40;
 const COLS: u16 = 160;
+/// Rendered scrollback rows: the screen minus the 3-row command bar and the
+/// output block's own top and bottom borders.
+const CONTENT_ROWS: usize = ROWS as usize - 5;
 const READY: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(10);
 
@@ -313,6 +316,107 @@ impl Tui {
         self.type_text("\r");
     }
 
+    /// Type `text` on the command bar and send it, which appends one TX line to
+    /// the scrollback.
+    fn send_line(&mut self, text: &str) {
+        self.type_text(text);
+        self.press_enter();
+    }
+
+    /// Right-click a rendered scrollback row (0-based: row 0 is the first line
+    /// of history on screen), which toggles a bookmark on that line. Mouse
+    /// reports are SGR (`ESC[<button;col;rowM`), 1-based, and the first history
+    /// row sits one line below the block's top border — hence the `+ 2`.
+    fn right_click_row(&mut self, row: usize) {
+        let y = row + 2;
+        self.type_text(&format!("\x1b[<2;3;{y}M"));
+        self.type_text(&format!("\x1b[<2;3;{y}m"));
+    }
+
+    /// The rendered scrollback rows — what a frozen viewport has to keep
+    /// showing verbatim. The left border and the right-most column are trimmed
+    /// off: the scrollbar thumb is drawn over the right border and legitimately
+    /// moves when the offset slides, so it is not part of the content.
+    fn scrollback_rows(&self) -> Vec<String> {
+        self.screen()
+            .lines()
+            .skip(1)
+            .take(CONTENT_ROWS)
+            .map(|row| {
+                row.chars()
+                    .skip(1)
+                    .take(COLS as usize - 2)
+                    .collect::<String>()
+                    .trim_end()
+                    .to_string()
+            })
+            .collect()
+    }
+
+    /// The output block's title row, which carries the session's byte counter.
+    /// It is the only on-screen proof that lines landed while the viewport is
+    /// scrolled away from them.
+    fn title_row(&self) -> String {
+        self.screen().lines().next().unwrap_or_default().to_string()
+    }
+
+    /// The search bar's `[n/m]` field as `(current, total)`, 1-based like the
+    /// display. `None` while it reads `[--/--]`, i.e. nothing matches.
+    fn search_counter(&self) -> Option<(usize, usize)> {
+        let row = self
+            .screen()
+            .lines()
+            .find(|row| row.contains("Search Mode"))?
+            .to_string();
+        let (current, total) = row
+            .split(['[', ']'])
+            .find(|field| field.contains('/'))?
+            .split_once('/')?;
+
+        Some((current.parse().ok()?, total.parse().ok()?))
+    }
+
+    /// Block until the search counter satisfies `predicate`, returning it.
+    /// Panics (with the last screen) on timeout.
+    fn wait_for_counter(
+        &self,
+        what: &str,
+        predicate: impl Fn((usize, usize)) -> bool,
+        timeout: Duration,
+    ) -> (usize, usize) {
+        let start = Instant::now();
+        loop {
+            if let Some(counter) = self.search_counter()
+                && predicate(counter)
+            {
+                return counter;
+            }
+            if start.elapsed() > timeout {
+                panic!(
+                    "timed out waiting for the search counter to {what}, it reads {:?}.\n--- screen ---\n{}\n--------------",
+                    self.search_counter(),
+                    self.screen()
+                );
+            }
+            thread::sleep(Duration::from_millis(80));
+        }
+    }
+
+    /// Block until the title row differs from `before` — i.e. the app has taken
+    /// in data that is not visible in the frozen viewport.
+    fn wait_for_ingest(&self, before: &str, timeout: Duration) {
+        let start = Instant::now();
+        while self.title_row() == before {
+            if start.elapsed() > timeout {
+                panic!(
+                    "timed out waiting for the new lines to be ingested.\n--- screen ---\n{}\n--------------",
+                    self.screen()
+                );
+            }
+            thread::sleep(Duration::from_millis(80));
+        }
+    }
+
     /// Block until the TUI has finished its first render — the precondition for
     /// injecting keystrokes — by waiting for the configured baud in the status bar.
     ///
@@ -382,6 +486,153 @@ fn double_dollar_sends_a_literal_dollar() {
     tui.press_enter();
 
     tui.wait_for("cost: $5\\r\\n", SETTLE);
+}
+
+#[test]
+fn a_frozen_viewport_keeps_its_lines_while_the_buffer_rotates() {
+    // Regression for issue #218: scrolling up freezes the view, but the scroll
+    // offset is a buffer index, so once the scrollback is full (every new line
+    // evicting the oldest and re-indexing the rest) the content used to slide
+    // upwards under the frozen viewport — "scrolling doesn't stop the printing".
+    let mut tui = Tui::start_with(StartOpts {
+        config_toml: Some("capacity = 100\n"),
+        ..Default::default()
+    });
+    tui.wait_until_ready();
+
+    // Fill the scrollback exactly to capacity, so the next line evicts.
+    for i in 1..=100 {
+        tui.send_line(&format!("L{i:03}"));
+    }
+    tui.wait_for("L100", SETTLE);
+
+    // Freeze the viewport one page up, well clear of both ends of the history.
+    tui.type_text("\x1b[5~"); // PageUp
+    tui.wait_for("L034", SETTLE);
+    let frozen = tui.scrollback_rows();
+    let title = tui.title_row();
+
+    for i in 1..=3 {
+        tui.send_line(&format!("NEW{i}"));
+    }
+    tui.wait_for_ingest(&title, SETTLE);
+
+    assert_eq!(
+        tui.scrollback_rows(),
+        frozen,
+        "the frozen viewport moved while the buffer rotated"
+    );
+
+    // And the new lines really are in the history: jumping back to the end
+    // (Alt+PageDown) resumes following the newest line.
+    tui.type_text("\x1b[6;3~"); // Alt+PageDown = jump_end
+    tui.wait_for("NEW3", SETTLE);
+}
+
+/// Injects three lines that do not match the test's search query, but only
+/// after a delay — long enough for the test to arm the search and navigate
+/// first, so the lines land while the view is frozen on a match.
+const LATECOMER: &str = r#"local scope = require("scope")
+local M = {}
+
+function M.send()
+    scope.sys.sleep_ms(6000)
+    for i = 1, 3 do
+        scope.serial.send(scope.fmt.to_bytes(string.format("NEW%d", i)))
+    end
+end
+
+return M
+"#;
+
+#[test]
+fn a_search_hit_stays_put_while_the_buffer_rotates_under_it() {
+    // The search half of issue #218: jumping to a match freezes the view on it,
+    // and the hit list is re-scanned whenever new lines land. Re-scanning used
+    // to re-arm the query, which reset the position to the first hit and
+    // re-centred the viewport on it — so under a live stream the freeze was
+    // undone on every batch and the match keys could not advance at all.
+    let mut tui = Tui::start_with(StartOpts {
+        config_toml: Some("capacity = 100\n"),
+        installed_plugins: &[("latecomer", LATECOMER)],
+        ..Default::default()
+    });
+    tui.wait_until_ready();
+    tui.wait_for("latecomer", SETTLE);
+
+    // Fill the scrollback to capacity: the start-up logs are pushed out, so the
+    // history is exactly L001..L100 and the next line evicts L001.
+    for i in 1..=100 {
+        tui.send_line(&format!("L{i:03}"));
+    }
+    tui.wait_for("L100", SETTLE);
+
+    // Arm the delayed injection, then search while it sleeps.
+    tui.send_line("!latecomer send");
+
+    tui.type_text("\x06"); // Ctrl+F
+    tui.type_text("L0"); // matches L001..L099, so every line that gets evicted
+    tui.wait_for_counter("find the matches", |(_, total)| total == 99, SETTLE);
+
+    // Walk down to the 50th match, freezing the view centred on it — halfway
+    // down the history, clear of the offset-0 floor where the lines on screen
+    // are the ones being evicted and the content has to move.
+    tui.type_text(&"\x1b[B".repeat(49)); // Down
+    tui.wait_for_counter("reach the 50th match", |(current, _)| current == 50, SETTLE);
+    let frozen = tui.scrollback_rows();
+
+    // The three injected lines evict L001..L003, dropping three matches from
+    // above the one the user is on. The hit itself must not move: it is simply
+    // three places closer to the top of the history now.
+    let (current, _) = tui.wait_for_counter(
+        "shed the evicted matches",
+        |(_, total)| total == 96,
+        Duration::from_secs(30),
+    );
+
+    assert_eq!(
+        current, 47,
+        "the search jumped to another match while the buffer rotated"
+    );
+    assert_eq!(
+        tui.scrollback_rows(),
+        frozen,
+        "the view frozen on a match moved while the buffer rotated"
+    );
+}
+
+#[test]
+fn a_filter_change_keeps_the_bookmarks() {
+    // Changing the filter re-derives the displayed buffer from the full history,
+    // re-indexing every line. That went through `Screen::clear`, which took the
+    // bookmarks with it — but a bookmark pins to a stable line id, so
+    // re-indexing cannot invalidate it and it is documented to survive a filter
+    // change (one hidden by a filter comes back with its line).
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    // More history than fits on screen, so a bookmark at the top is out of
+    // sight once the rebuild re-anchors the viewport to the bottom.
+    for i in 1..=60 {
+        tui.send_line(&format!("L{i:03}"));
+    }
+    tui.wait_for("L060", SETTLE);
+
+    tui.type_text("\x1b[5;3~"); // Alt+PageUp: jump to the start of the history
+    tui.wait_for("L001", SETTLE);
+    tui.right_click_row(0); // bookmark the oldest line
+
+    tui.send_line("!filter .");
+    tui.wait_for("Showing only received messages", SETTLE);
+    assert!(
+        !tui.screen().contains("L001"),
+        "the rebuild should have re-anchored the viewport to the bottom"
+    );
+
+    // `Tab` jumps to the next bookmark, which can only bring the line back if
+    // the bookmark outlived the rebuild.
+    tui.type_text("\t");
+    tui.wait_for("L001", SETTLE);
 }
 
 #[test]

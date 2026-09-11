@@ -38,6 +38,12 @@ pub struct Screen {
     /// from the (possibly clamped) scroll offset. Cleared when that bookmark is
     /// removed or the screen is cleared.
     current_bookmark: Option<u64>,
+    /// Value of [`Buffer::evicted`](crate::graphics::buffer::Buffer::evicted)
+    /// the last time the viewport was reconciled with the buffer. Its growth is
+    /// how many lines have dropped off the front since, which is exactly how
+    /// far a frozen viewport (and any selection) has to slide to stay on the
+    /// same content — see [`Screen::update_after_new_lines`].
+    evicted_seen: u64,
 }
 
 pub struct ScreenPosition {
@@ -61,6 +67,7 @@ impl Default for Screen {
             selection: None,
             bookmarks: BTreeSet::new(),
             current_bookmark: None,
+            evicted_seen: 0,
         }
     }
 }
@@ -96,6 +103,12 @@ impl Screen {
             entries: vec![],
             matcher: SearchMatcher::build(&query, is_case_sensitive, is_regex),
         };
+    }
+
+    /// True while a non-empty search query is active — see
+    /// [`ScreenMode::is_searching`].
+    pub fn is_searching(&self) -> bool {
+        self.mode.is_searching()
     }
 
     pub fn search_indexes(&self) -> Option<(usize, usize)> {
@@ -151,11 +164,30 @@ impl Screen {
     }
 
     pub fn clear(&mut self) {
+        self.rebase_on_rebuilt_buffer();
+        self.bookmarks.clear();
+        self.current_bookmark = None;
+    }
+
+    /// Re-anchors the viewport after the displayed buffer was re-derived from
+    /// the full history — what a filter change does. Every line index changes,
+    /// so the scroll offset goes back to the bottom, the positional selection is
+    /// dropped, and the eviction bookkeeping restarts alongside the buffer's
+    /// own counter.
+    ///
+    /// Bookmarks are deliberately *not* dropped here, which is the difference
+    /// from [`Screen::clear`]: they pin to the stable
+    /// [`BufferLine::id`](crate::graphics::buffer::BufferLine), so re-indexing
+    /// cannot invalidate them and a bookmark hidden by a filter has to come back
+    /// with its line. Only `Ctrl+L` clears them, together with the history they
+    /// point into.
+    pub fn rebase_on_rebuilt_buffer(&mut self) {
         self.auto_scroll = true;
         self.position = Default::default();
         self.selection = None;
-        self.bookmarks.clear();
-        self.current_bookmark = None;
+        // The buffer is rebuilt or cleared together with the screen, resetting
+        // its own counter, so the two stay in step.
+        self.evicted_seen = 0;
     }
 
     pub fn disable_auto_scroll(&mut self) {
@@ -179,11 +211,42 @@ impl Screen {
         self.auto_scroll = false;
     }
 
+    /// Reconciles the viewport with the buffer after new lines have landed.
+    ///
+    /// With auto-scroll on the viewport simply follows the bottom. With it off —
+    /// the user scrolled up to read — the viewport has to stay on the *lines* it
+    /// is showing, not on their indices: once the buffer is at capacity every
+    /// new line evicts the oldest one and re-indexes the rest, so a fixed offset
+    /// would let the content slide upwards under a frozen viewport, which is
+    /// issue #218 (and why it only showed up after the first `--capacity` lines).
+    /// Sliding the offset by the number of evictions keeps the same lines on
+    /// screen.
+    ///
+    /// Offset 0 is the floor: from there the lines being read are themselves the
+    /// ones being dropped, and no offset can hold content the buffer no longer
+    /// has. That is the limit `--capacity` buys.
     pub fn update_after_new_lines(&mut self, buffer: &Buffer) {
+        let evicted = buffer.evicted();
+        // Saturating, so a buffer cleared without the screen (which resets the
+        // counter) re-syncs instead of underflowing.
+        let dropped = evicted.saturating_sub(self.evicted_seen) as usize;
+        self.evicted_seen = evicted;
+
+        // A selection is positional too, so it follows the same slide whether or
+        // not the viewport is frozen; one whose every line is gone is dropped.
+        if dropped > 0
+            && let Some(selection) = &mut self.selection
+            && !selection.shift_up(dropped)
+        {
+            self.selection = None;
+        }
+
         if self.auto_scroll {
             let visible_height = self.size.height.saturating_sub(2) as usize;
             let max_main_axis = buffer.len().saturating_sub(visible_height);
             self.position.line = max_main_axis;
+        } else {
+            self.position.line = self.position.line.saturating_sub(dropped);
         }
     }
 
@@ -269,7 +332,6 @@ impl Screen {
 
         let decoded_lines = buffer
             .get_range(start, end)
-            .iter()
             .map(|buffer_line| buffer_line.decode(self.decoder))
             .filter(|line| {
                 let Some(level) = line.level else {
@@ -416,11 +478,11 @@ impl Screen {
             return;
         };
 
-        let Some(position) = entries.get(*current) else {
+        let Some(hit) = entries.get(*current) else {
             return;
         };
 
-        self.jump_to_centered_position(*position, max_main_axis);
+        self.jump_to_centered_position(hit.position, max_main_axis);
         self.auto_scroll = false;
     }
 
@@ -438,7 +500,7 @@ impl Screen {
             }
 
             *current = (*current + 1) % entries.len();
-            entries[*current]
+            entries[*current].position
         };
 
         self.jump_to_centered_position(pos, max_main_axis);
@@ -463,7 +525,7 @@ impl Screen {
                 *current -= 1;
             }
 
-            entries[*current]
+            entries[*current].position
         };
 
         self.jump_to_centered_position(pos, max_main_axis);
@@ -482,7 +544,7 @@ impl Screen {
         }
 
         let line = (row + self.position.line) - Self::CONTENT_OFFSET_Y;
-        let Some(buffer_line) = buffer.get_range(line, line + 1).first() else {
+        let Some(buffer_line) = buffer.get_range(line, line + 1).next() else {
             return;
         };
         let id = buffer_line.id;
@@ -667,11 +729,24 @@ impl SearchMatcher {
     }
 }
 
+/// One hit of the active search: where it sits in the buffer right now
+/// (`position`) and the stable id of the line it is on (`line_id`).
+///
+/// The hit list is re-scanned from the buffer whenever new lines land, and the
+/// buffer re-indexes its lines as it rotates, so `position` alone cannot
+/// identify the hit the user navigated to across a re-scan. The id can, because
+/// it never changes for a given line (issue #218).
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct SearchHit {
+    pub position: BufferPosition,
+    pub line_id: u64,
+}
+
 pub enum ScreenMode {
     Normal,
     Search {
         current: usize,
-        entries: Vec<BufferPosition>,
+        entries: Vec<SearchHit>,
         matcher: SearchMatcher,
     },
 }
@@ -691,10 +766,62 @@ impl ScreenMode {
         }
     }
 
-    pub fn add_entry(&mut self, entry: BufferPosition) {
+    pub fn add_entry(&mut self, entry: SearchHit) {
         if let Self::Search { entries, .. } = self {
             entries.push(entry);
         }
+    }
+
+    /// True while a non-empty query is active, i.e. the hit list means
+    /// something and is worth re-scanning for.
+    pub fn is_searching(&self) -> bool {
+        matches!(self, Self::Search { matcher, .. } if !matcher.is_empty())
+    }
+
+    /// The hit the user is currently on.
+    fn current_hit(&self) -> Option<SearchHit> {
+        let Self::Search {
+            entries, current, ..
+        } = self
+        else {
+            return None;
+        };
+
+        entries.get(*current).copied()
+    }
+
+    /// Empties the hit list ahead of a re-scan, handing back the hit the user
+    /// was on so [`ScreenMode::restore_current`] can find it again.
+    pub fn take_hits_for_rescan(&mut self) -> Option<SearchHit> {
+        let previous = self.current_hit();
+
+        if let Self::Search { entries, .. } = self {
+            entries.clear();
+        }
+
+        previous
+    }
+
+    /// Puts the navigation position back where the user left it after a
+    /// re-scan: on the very same hit when it is still there, otherwise on the
+    /// first hit at or after its line (ids grow monotonically, so that is the
+    /// next hit in time), and on the first hit when neither applies.
+    pub fn restore_current(&mut self, previous: Option<SearchHit>) {
+        let Self::Search {
+            entries, current, ..
+        } = self
+        else {
+            return;
+        };
+
+        *current = previous
+            .and_then(|prev| {
+                entries
+                    .iter()
+                    .position(|hit| *hit == prev)
+                    .or_else(|| entries.iter().position(|hit| hit.line_id >= prev.line_id))
+            })
+            .unwrap_or(0);
     }
 
     /// Match positions of the active search query within `line`, as
@@ -703,19 +830,6 @@ impl ScreenMode {
         match self {
             Self::Search { matcher, .. } => matcher.matches(line),
             Self::Normal => vec![],
-        }
-    }
-
-    pub fn update_current(&mut self) {
-        if let Self::Search {
-            entries, current, ..
-        } = self
-        {
-            if entries.is_empty() {
-                *current = 0;
-            } else if *current > entries.len() - 1 {
-                *current = entries.len() - 1;
-            }
         }
     }
 
@@ -987,12 +1101,13 @@ impl ScreenMode {
             }
 
             let matched = chars[start..start + len].iter().collect::<String>();
-            let query_pos = BufferPosition {
-                line: line.line,
-                column: start,
-            };
+            // By line id, not index: the hit list is re-scanned as lines land
+            // and the buffer re-indexes as it rotates.
+            let is_chosen = entries
+                .get(*current)
+                .is_some_and(|hit| hit.line_id == line.id && hit.position.column == start);
 
-            if entries.get(*current) == Some(&query_pos) {
+            if is_chosen {
                 let chosen = Span::styled(matched, chosen_style);
                 output.extend(Self::highlight_special_characters(chosen));
             } else {
@@ -1192,288 +1307,4 @@ impl ScreenDecoder {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::SearchMatcher;
-
-    // Regex search on each line (issue #209).
-
-    #[test]
-    fn plain_case_sensitive_finds_all_occurrences() {
-        let matcher = SearchMatcher::build("ab", true, false);
-        assert_eq!(matcher.matches("ab_ab_AB"), vec![(0, 2), (3, 2)]);
-    }
-
-    #[test]
-    fn plain_case_insensitive_matches_regardless_of_case() {
-        let matcher = SearchMatcher::build("ab", false, false);
-        assert_eq!(matcher.matches("ab_ab_AB"), vec![(0, 2), (3, 2), (6, 2)]);
-    }
-
-    #[test]
-    fn columns_are_character_offsets_not_bytes() {
-        // "á" is two bytes but one column; the two "X" matches must land on
-        // char columns 1 and 3, not byte offsets 2 and 5.
-        let matcher = SearchMatcher::build("X", true, false);
-        assert_eq!(matcher.matches("áXbX"), vec![(1, 1), (3, 1)]);
-    }
-
-    #[test]
-    fn regex_matches_pattern_with_char_columns_and_lengths() {
-        let matcher = SearchMatcher::build(r"\d+", true, true);
-        assert_eq!(matcher.matches("ab12cde345"), vec![(2, 2), (7, 3)]);
-    }
-
-    #[test]
-    fn regex_case_insensitive_flag_is_honored() {
-        let sensitive = SearchMatcher::build("ERR", true, true);
-        assert!(sensitive.matches("an err happened").is_empty());
-
-        let insensitive = SearchMatcher::build("ERR", false, true);
-        assert_eq!(insensitive.matches("an err happened"), vec![(3, 3)]);
-    }
-
-    #[test]
-    fn regex_anchor_matches_only_at_line_start() {
-        let matcher = SearchMatcher::build("^ab", true, true);
-        assert_eq!(matcher.matches("abcab"), vec![(0, 2)]);
-        assert!(matcher.matches("xabcab").is_empty());
-    }
-
-    #[test]
-    fn regex_zero_width_matches_are_skipped() {
-        // A trailing `.*` and empty `a*` runs would otherwise inflate the match
-        // count with nothing to highlight.
-        let matcher = SearchMatcher::build("a*", true, true);
-        assert_eq!(matcher.matches("baa"), vec![(1, 2)]);
-    }
-
-    #[test]
-    fn invalid_regex_matches_nothing() {
-        let matcher = SearchMatcher::build("(unclosed", true, true);
-        assert!(matcher.is_empty());
-        assert!(matcher.matches("(unclosed group here").is_empty());
-    }
-
-    #[test]
-    fn empty_query_matches_nothing() {
-        assert!(SearchMatcher::build("", false, false).is_empty());
-        assert!(SearchMatcher::build("", false, true).is_empty());
-    }
-
-    // Bookmarks (issue #208).
-    mod bookmarks {
-        use super::super::{Screen, ScreenPosition};
-        use crate::graphics::buffer::{Buffer, BufferLine};
-        use chrono::Local;
-        use ratatui::layout::Rect;
-
-        fn buffer_with(n: usize) -> Buffer {
-            let mut buffer = Buffer::new(n.max(1));
-            for _ in 0..n {
-                buffer += BufferLine::new_rx(Local::now(), b"x".to_vec());
-            }
-            buffer
-        }
-
-        fn ids(buffer: &Buffer) -> Vec<u64> {
-            buffer.iter().map(|line| line.id).collect()
-        }
-
-        fn sized_screen(height: u16, buffer_len: usize) -> Screen {
-            let mut screen = Screen::default();
-            screen.set_size(
-                Rect {
-                    x: 0,
-                    y: 0,
-                    width: 80,
-                    height,
-                },
-                buffer_len,
-            );
-            screen
-        }
-
-        #[test]
-        fn right_click_toggles_the_line_under_the_cursor() {
-            let buffer = buffer_with(5);
-            let ids = ids(&buffer);
-            let mut screen = sized_screen(10, buffer.len());
-
-            // Content starts one row below the top border, so line 2 is at y=3.
-            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 3 });
-            assert!(screen.bookmarks.contains(&ids[2]));
-
-            // A second right-click on the same line removes it.
-            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 3 });
-            assert!(!screen.bookmarks.contains(&ids[2]));
-        }
-
-        #[test]
-        fn clicks_off_the_content_are_ignored() {
-            let buffer = buffer_with(5);
-            let mut screen = sized_screen(10, buffer.len());
-
-            // Top border row.
-            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 0 });
-            // Well past the last line.
-            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 50 });
-
-            assert!(screen.bookmarks.is_empty());
-        }
-
-        #[test]
-        fn removing_the_current_bookmark_forgets_it() {
-            let buffer = buffer_with(5);
-            let ids = ids(&buffer);
-            let mut screen = sized_screen(10, buffer.len());
-
-            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 3 });
-            screen.current_bookmark = Some(ids[2]);
-
-            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 3 });
-            assert_eq!(screen.current_bookmark, None);
-        }
-
-        #[test]
-        fn clear_drops_all_bookmarks() {
-            let buffer = buffer_with(5);
-            let mut screen = sized_screen(10, buffer.len());
-            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 3 });
-            screen.current_bookmark = Some(0);
-
-            screen.clear();
-
-            assert!(screen.bookmarks.is_empty());
-            assert_eq!(screen.current_bookmark, None);
-        }
-
-        #[test]
-        fn next_index_without_current_anchors_to_the_viewport() {
-            let positions = [(2, 100), (10, 101), (18, 102)];
-
-            // Forward: first bookmark below the anchor line.
-            assert_eq!(
-                Screen::next_bookmark_index(&positions, None, 4, true),
-                Some(1)
-            );
-            // Backward: last bookmark above the anchor line.
-            assert_eq!(
-                Screen::next_bookmark_index(&positions, None, 4, false),
-                Some(0)
-            );
-            // Forward with nothing below wraps to the first.
-            assert_eq!(
-                Screen::next_bookmark_index(&positions, None, 100, true),
-                Some(0)
-            );
-            // Backward with nothing above wraps to the last.
-            assert_eq!(
-                Screen::next_bookmark_index(&positions, None, 0, false),
-                Some(2)
-            );
-        }
-
-        #[test]
-        fn next_index_steps_and_wraps_from_the_current_bookmark() {
-            let positions = [(2, 100), (10, 101), (18, 102)];
-
-            assert_eq!(
-                Screen::next_bookmark_index(&positions, Some(101), 999, true),
-                Some(2)
-            );
-            // Forward off the end wraps to the first.
-            assert_eq!(
-                Screen::next_bookmark_index(&positions, Some(102), 999, true),
-                Some(0)
-            );
-            // Backward off the front wraps to the last.
-            assert_eq!(
-                Screen::next_bookmark_index(&positions, Some(100), 999, false),
-                Some(2)
-            );
-        }
-
-        #[test]
-        fn next_index_falls_back_to_anchor_when_current_is_gone() {
-            let positions = [(2, 100), (10, 101), (18, 102)];
-            // Id 999 is not among the positions (its line was filtered out or
-            // scrolled off), so navigation restarts from the viewport anchor.
-            assert_eq!(
-                Screen::next_bookmark_index(&positions, Some(999), 4, true),
-                Some(1)
-            );
-        }
-
-        #[test]
-        fn next_index_is_none_when_there_are_no_bookmarks() {
-            assert_eq!(Screen::next_bookmark_index(&[], None, 4, true), None);
-            assert_eq!(Screen::next_bookmark_index(&[], Some(1), 4, false), None);
-        }
-
-        #[test]
-        fn navigation_cycles_through_bookmarks_by_id() {
-            let buffer = buffer_with(20);
-            let ids = ids(&buffer);
-            let mut screen = sized_screen(10, buffer.len());
-            for line in [2usize, 10, 18] {
-                screen.bookmarks.insert(ids[line]);
-            }
-            let max_main_axis = buffer.len().saturating_sub(8);
-
-            // Fresh (no current): anchor is the screen centre (line 4), so the
-            // first Tab lands on the first bookmark below it.
-            screen.jump_to_next_bookmark(&buffer, max_main_axis);
-            assert_eq!(screen.current_bookmark, Some(ids[10]));
-
-            screen.jump_to_next_bookmark(&buffer, max_main_axis);
-            assert_eq!(screen.current_bookmark, Some(ids[18]));
-
-            // Wrap around to the top.
-            screen.jump_to_next_bookmark(&buffer, max_main_axis);
-            assert_eq!(screen.current_bookmark, Some(ids[2]));
-
-            // Shift+Tab steps back, wrapping to the bottom.
-            screen.jump_to_previous_bookmark(&buffer, max_main_axis);
-            assert_eq!(screen.current_bookmark, Some(ids[18]));
-        }
-
-        #[test]
-        fn navigation_is_a_no_op_without_bookmarks() {
-            let buffer = buffer_with(20);
-            let mut screen = sized_screen(10, buffer.len());
-            let max_main_axis = buffer.len().saturating_sub(8);
-
-            screen.jump_to_next_bookmark(&buffer, max_main_axis);
-            assert_eq!(screen.current_bookmark, None);
-        }
-
-        // The `Tab`-focused bookmark must stand out from the others: it keeps the
-        // full yellow-background highlight, while every other bookmark drops to a
-        // subtler yellow foreground on the normal background.
-        #[test]
-        fn current_bookmark_is_highlighted_apart_from_other_bookmarks() {
-            use super::super::ScreenMode;
-            use ratatui::style::Color;
-
-            let ts = Local::now();
-            let style_of = |is_bookmarked, is_current| {
-                ScreenMode::timestamp_line(ts, false, is_bookmarked, is_current)[0].style
-            };
-
-            // A plain (non-bookmarked) line: dim gray text, no background.
-            let plain = style_of(false, false);
-            assert_eq!(plain.bg, None);
-            assert_eq!(plain.fg, Some(Color::DarkGray));
-
-            // A bookmark that isn't the current one: yellow text, normal background.
-            let other = style_of(true, false);
-            assert_eq!(other.bg, None);
-            assert_eq!(other.fg, Some(Color::Yellow));
-
-            // The current bookmark: full yellow-background highlight.
-            let current = style_of(true, true);
-            assert_eq!(current.bg, Some(Color::Yellow));
-            assert_eq!(current.fg, Some(Color::Black));
-        }
-    }
-}
+mod tests;

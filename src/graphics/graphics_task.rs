@@ -2,7 +2,7 @@ use super::Serialize;
 use crate::graphics::ansi::ANSI;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
 use crate::graphics::message_filter::MessageFilter;
-use crate::graphics::screen::{Screen, ScreenPosition};
+use crate::graphics::screen::{Screen, ScreenPosition, SearchHit};
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::inputs::inputs_task::InputMode;
 use crate::interfaces::InterfaceShared;
@@ -991,19 +991,7 @@ impl GraphicsTask {
                 save_stats.file_size = private.typewriter.get_size();
                 new_messages = vec![];
 
-                let (search_buffer, is_case_sensitive, is_regex) = {
-                    let input_sr = private
-                        .inputs_shared
-                        .read()
-                        .expect("Cannot get input lock for read");
-                    (
-                        input_sr.search_buffer.clone(),
-                        input_sr.is_case_sensitive,
-                        input_sr.is_regex,
-                    )
-                };
-
-                Self::update_search_state(&mut private, search_buffer, is_case_sensitive, is_regex);
+                Self::refresh_search_hits(&mut private);
             }
 
             if need_redraw {
@@ -1074,7 +1062,9 @@ impl GraphicsTask {
     /// filter. Called when the filter changes so hidden lines can reappear and
     /// newly-rejected lines drop out. Because every line is re-indexed, the
     /// scroll position is re-anchored to the bottom and any active selection is
-    /// dropped (its old line/column no longer point at the same content).
+    /// dropped (its old line/column no longer point at the same content) —
+    /// but not the bookmarks, which pin to a line id and have to survive a
+    /// filter change, so this is `rebase_on_rebuilt_buffer` and not `clear`.
     fn rebuild_displayed_buffer(private: &mut GraphicsConnections) {
         let decoder = private.screen.decoder();
         let displayed = private
@@ -1086,44 +1076,80 @@ impl GraphicsTask {
 
         private.buffer.clear();
         private.buffer += displayed;
-        private.screen.clear();
+        private.screen.rebase_on_rebuilt_buffer();
         private.screen.update_after_new_lines(&private.buffer);
     }
 
+    /// Re-arms the search for a query the user just changed (or a filter that
+    /// just changed which lines exist), and re-centres the viewport on the
+    /// first hit — a jump is the expected answer to that action.
     fn update_search_state(
         private: &mut GraphicsConnections,
         pattern: String,
         is_case_sensitive: bool,
         is_regex: bool,
     ) {
-        let decoder = private.screen.decoder();
-        let mode = private.screen.mode_mut();
-
         let is_empty = pattern.is_empty();
-        mode.set_query(pattern, is_case_sensitive, is_regex);
+        private
+            .screen
+            .mode_mut()
+            .set_query(pattern, is_case_sensitive, is_regex);
 
         if is_empty {
             return;
         }
 
+        Self::collect_search_hits(private);
+
+        let max_main_axis = Self::max_main_axis(private);
+        private
+            .screen
+            .jump_to_current_search(max_main_axis as usize);
+    }
+
+    /// Re-scans the buffer after new lines landed, leaving both the viewport and
+    /// the navigation position where the user left them.
+    ///
+    /// Neither may move here. Re-centring on a hit would yank a viewport the
+    /// user froze by scrolling up back onto that hit on every batch of incoming
+    /// data, undoing the freeze this whole path is about (issue #218); and
+    /// restarting the hit list at its first entry — what re-arming the query
+    /// does — left `Enter`/`Up`/`Down` unable to advance at all under a live
+    /// stream, because every batch reset the position before the user's next
+    /// keypress. The matcher is untouched: every query edit and every
+    /// case/regex toggle already arrives as its own `SearchChange`.
+    fn refresh_search_hits(private: &mut GraphicsConnections) {
+        if !private.screen.is_searching() {
+            return;
+        }
+
+        let previous = private.screen.mode_mut().take_hits_for_rescan();
+
+        Self::collect_search_hits(private);
+
+        private.screen.mode_mut().restore_current(previous);
+    }
+
+    /// Fills the hit list from the displayed buffer under the active matcher.
+    fn collect_search_hits(private: &mut GraphicsConnections) {
+        let decoder = private.screen.decoder();
+        let mode = private.screen.mode_mut();
+
         for message in private.buffer.iter() {
             let line = message.line;
+            let line_id = message.id;
             let message = message.decode(decoder).message;
             let message = ANSI::remove_encoding(message);
 
             // Same matcher and same `message` as `search_line`, so the columns
             // recorded here match the highlighted spans exactly (regex or not).
             for (column, _len) in mode.search_matches(&message) {
-                mode.add_entry(BufferPosition { line, column });
+                mode.add_entry(SearchHit {
+                    position: BufferPosition { line, column },
+                    line_id,
+                });
             }
         }
-
-        private.screen.mode_mut().update_current();
-
-        let max_main_axis = Self::max_main_axis(private);
-        private
-            .screen
-            .jump_to_current_search(max_main_axis as usize);
     }
 
     fn max_main_axis(private: &GraphicsConnections) -> u16 {
