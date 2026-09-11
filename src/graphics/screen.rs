@@ -164,13 +164,29 @@ impl Screen {
     }
 
     pub fn clear(&mut self) {
+        self.rebase_on_rebuilt_buffer();
+        self.bookmarks.clear();
+        self.current_bookmark = None;
+    }
+
+    /// Re-anchors the viewport after the displayed buffer was re-derived from
+    /// the full history — what a filter change does. Every line index changes,
+    /// so the scroll offset goes back to the bottom, the positional selection is
+    /// dropped, and the eviction bookkeeping restarts alongside the buffer's
+    /// own counter.
+    ///
+    /// Bookmarks are deliberately *not* dropped here, which is the difference
+    /// from [`Screen::clear`]: they pin to the stable
+    /// [`BufferLine::id`](crate::graphics::buffer::BufferLine), so re-indexing
+    /// cannot invalidate them and a bookmark hidden by a filter has to come back
+    /// with its line. Only `Ctrl+L` clears them, together with the history they
+    /// point into.
+    pub fn rebase_on_rebuilt_buffer(&mut self) {
         self.auto_scroll = true;
         self.position = Default::default();
         self.selection = None;
-        self.bookmarks.clear();
-        self.current_bookmark = None;
-        // The buffer is cleared together with the screen, resetting its own
-        // counter, so the two stay in step.
+        // The buffer is rebuilt or cleared together with the screen, resetting
+        // its own counter, so the two stay in step.
         self.evicted_seen = 0;
     }
 
@@ -1715,6 +1731,38 @@ mod tests {
 
             assert!(screen.bookmarks.is_empty());
             assert_eq!(screen.current_bookmark, None);
+        }
+
+        // A filter change re-derives the displayed buffer, which re-indexes every
+        // line. The viewport and the selection are positional and have to be
+        // re-anchored, but bookmarks pin to a line id and must survive — a
+        // bookmark hidden by a filter is supposed to come back with its line.
+        #[test]
+        fn a_rebuilt_buffer_keeps_bookmarks_but_re_anchors_the_viewport() {
+            use crate::graphics::buffer::BufferPosition;
+            use crate::graphics::selection::Selection;
+
+            let buffer = buffer_with(5);
+            let ids = ids(&buffer);
+            let mut screen = sized_screen(10, buffer.len());
+            screen.toggle_bookmark(&buffer, ScreenPosition { x: 0, y: 3 });
+            screen.current_bookmark = Some(ids[2]);
+            screen.disable_auto_scroll();
+            screen.selection = Some(Selection::new(
+                BufferPosition { line: 1, column: 0 },
+                BufferPosition { line: 2, column: 1 },
+            ));
+            screen.evicted_seen = 7;
+
+            screen.rebase_on_rebuilt_buffer();
+
+            assert!(screen.bookmarks.contains(&ids[2]));
+            assert_eq!(screen.current_bookmark, Some(ids[2]));
+            // Positional state is reset: back to following the bottom, no
+            // selection, and the eviction count restarts with the buffer's.
+            assert!(screen.auto_scroll);
+            assert!(screen.selection.is_none());
+            assert_eq!(screen.evicted_seen, 0);
         }
 
         #[test]

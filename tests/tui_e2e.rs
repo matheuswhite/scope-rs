@@ -323,6 +323,16 @@ impl Tui {
         self.press_enter();
     }
 
+    /// Right-click a rendered scrollback row (0-based: row 0 is the first line
+    /// of history on screen), which toggles a bookmark on that line. Mouse
+    /// reports are SGR (`ESC[<button;col;rowM`), 1-based, and the first history
+    /// row sits one line below the block's top border — hence the `+ 2`.
+    fn right_click_row(&mut self, row: usize) {
+        let y = row + 2;
+        self.type_text(&format!("\x1b[<2;3;{y}M"));
+        self.type_text(&format!("\x1b[<2;3;{y}m"));
+    }
+
     /// The rendered scrollback rows — what a frozen viewport has to keep
     /// showing verbatim. The left border and the right-most column are trimmed
     /// off: the scrollbar thumb is drawn over the right border and legitimately
@@ -589,6 +599,40 @@ fn a_search_hit_stays_put_while_the_buffer_rotates_under_it() {
         frozen,
         "the view frozen on a match moved while the buffer rotated"
     );
+}
+
+#[test]
+fn a_filter_change_keeps_the_bookmarks() {
+    // Changing the filter re-derives the displayed buffer from the full history,
+    // re-indexing every line. That went through `Screen::clear`, which took the
+    // bookmarks with it — but a bookmark pins to a stable line id, so
+    // re-indexing cannot invalidate it and it is documented to survive a filter
+    // change (one hidden by a filter comes back with its line).
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    // More history than fits on screen, so a bookmark at the top is out of
+    // sight once the rebuild re-anchors the viewport to the bottom.
+    for i in 1..=60 {
+        tui.send_line(&format!("L{i:03}"));
+    }
+    tui.wait_for("L060", SETTLE);
+
+    tui.type_text("\x1b[5;3~"); // Alt+PageUp: jump to the start of the history
+    tui.wait_for("L001", SETTLE);
+    tui.right_click_row(0); // bookmark the oldest line
+
+    tui.send_line("!filter .");
+    tui.wait_for("Showing only received messages", SETTLE);
+    assert!(
+        !tui.screen().contains("L001"),
+        "the rebuild should have re-anchored the viewport to the bottom"
+    );
+
+    // `Tab` jumps to the next bookmark, which can only bring the line back if
+    // the bookmark outlived the rebuild.
+    tui.type_text("\t");
+    tui.wait_for("L001", SETTLE);
 }
 
 #[test]

@@ -1062,7 +1062,9 @@ impl GraphicsTask {
     /// filter. Called when the filter changes so hidden lines can reappear and
     /// newly-rejected lines drop out. Because every line is re-indexed, the
     /// scroll position is re-anchored to the bottom and any active selection is
-    /// dropped (its old line/column no longer point at the same content).
+    /// dropped (its old line/column no longer point at the same content) —
+    /// but not the bookmarks, which pin to a line id and have to survive a
+    /// filter change, so this is `rebase_on_rebuilt_buffer` and not `clear`.
     fn rebuild_displayed_buffer(private: &mut GraphicsConnections) {
         let decoder = private.screen.decoder();
         let displayed = private
@@ -1074,7 +1076,7 @@ impl GraphicsTask {
 
         private.buffer.clear();
         private.buffer += displayed;
-        private.screen.clear();
+        private.screen.rebase_on_rebuilt_buffer();
         private.screen.update_after_new_lines(&private.buffer);
     }
 
