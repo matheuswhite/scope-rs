@@ -60,6 +60,14 @@ nucleo = "0.5.0"
 # prints (issue #231). Static (ahead-of-time) generation only — the dynamic
 # completion API is behind a semver-exempt feature flag.
 clap_complete = "4.6.8"
+# Reads the `_SEGGER_RTT` symbol out of an ELF for `scope rtt --elf` (issue
+# #248), so the control block is found without scanning. Read-only ELF support
+# is all we need, and it is already in the tree as a probe-rs dependency.
+object = { version = "0.38", default-features = false, features = [
+    "read_core",
+    "elf",
+    "std",
+] }
 
 [target.'cfg(windows)'.dependencies]
 ctrlc = "3.4.3"
@@ -71,6 +79,9 @@ winresource = "0.1"
 # Used by `tests/completions.rs`, which runs on every platform.
 [dev-dependencies]
 tempfile = "3"
+# `write` is dev-only: the `rtt_elf` tests build the ELF fixtures they parse,
+# so no binary blob has to be checked in.
+object = { version = "0.38", features = ["write"] }
 
 # Used only by the end-to-end TUI integration tests in `tests/tui_e2e.rs`.
 [target.'cfg(unix)'.dev-dependencies]
