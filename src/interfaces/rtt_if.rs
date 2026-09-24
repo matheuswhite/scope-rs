@@ -645,13 +645,38 @@ impl RttInterface {
                 // Deduplicated like the session-attach error: the reconnect loop
                 // would otherwise repeat it forever, and a wrong `--addr` is
                 // exactly the case that needs to be readable.
-                let message = format!("Failed to attach to RTT: {}", err);
+                let (transient, message) = Self::rtt_attach_failure(&err);
                 if rtt_attach_message.as_ref() != Some(&message) {
-                    error!(logger, "{}", message);
+                    if transient {
+                        debug!(logger, "{}", message);
+                    } else {
+                        error!(logger, "{}", message);
+                    }
                     *rtt_attach_message = Some(message);
                 }
                 None
             }
+        }
+    }
+
+    /// How a failed RTT attach is reported: whether it is expected to clear up
+    /// on its own, and the message to log.
+    ///
+    /// A missing control block is what a target that is still booting looks
+    /// like — attaching to the probe can reset it, and the block only exists
+    /// once the firmware has initialised RTT — so the reconnect loop's next
+    /// pass usually succeeds. Logging it as an error then reads as a failure
+    /// the user has to act on, right before the "Connected" line, and dumps
+    /// probe-rs' multi-line advice (with literal `\r\n`s) into the log. Every
+    /// other error is a real one and keeps probe-rs' own wording.
+    fn rtt_attach_failure(err: &probe_rs::rtt::Error) -> (bool, String) {
+        match err {
+            probe_rs::rtt::Error::ControlBlockNotFound => (
+                true,
+                "RTT control block not found yet (is RTT initialised on the target?), retrying..."
+                    .to_string(),
+            ),
+            err => (false, format!("Failed to attach to RTT: {}", err)),
         }
     }
 
@@ -966,6 +991,25 @@ mod tests {
             0x0000_0000..0x0004_0000,
             0x2000_0000..0x2004_0000,
         ]
+    }
+
+    #[test]
+    fn missing_control_block_is_reported_as_transient() {
+        let (transient, message) =
+            RttInterface::rtt_attach_failure(&probe_rs::rtt::Error::ControlBlockNotFound);
+        assert!(transient);
+        assert!(!message.contains('\n'), "{message:?}");
+    }
+
+    #[test]
+    fn other_attach_failures_stay_errors() {
+        let (transient, message) =
+            RttInterface::rtt_attach_failure(&probe_rs::rtt::Error::NoControlBlockLocation);
+        assert!(!transient);
+        assert!(
+            message.starts_with("Failed to attach to RTT: "),
+            "{message:?}"
+        );
     }
 
     #[test]
