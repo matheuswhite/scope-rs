@@ -616,7 +616,7 @@ impl RttInterface {
             {
                 debug!(
                     logger,
-                    "No control block at the start of a RAM region, scanning all of it..."
+                    "No control block at the start of a RAM region, scanning for all regions..."
                 );
                 Rtt::attach(core)
             } else {
