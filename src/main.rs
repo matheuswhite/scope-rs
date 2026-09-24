@@ -11,7 +11,7 @@ mod plugin;
 mod selector;
 
 use crate::infra::tags::TagList;
-use crate::interfaces::rtt_if::{RttCommand, RttConnections, RttSetup};
+use crate::interfaces::rtt_if::{ControlBlock, RttCommand, RttConnections, RttSetup};
 use crate::interfaces::serial_if::SerialCommand;
 use crate::interfaces::{InterfaceCommand, InterfaceTask, InterfaceType};
 use clap::{CommandFactory, Parser, Subcommand};
@@ -105,6 +105,20 @@ pub enum Commands {
         target: Option<String>,
         /// RTT channel to attach to. Defaults to 0.
         channel_num: Option<usize>,
+        /// Firmware ELF to read the `_SEGGER_RTT` symbol from, so the control
+        /// block is found without scanning the target. Re-read on every
+        /// attach, so re-flashing a build that moved the block just works.
+        #[clap(long, value_name = "PATH")]
+        elf: Option<PathBuf>,
+        /// Address of the RTT control block, e.g. 0x20200410. Skips scanning
+        /// (and the ELF) entirely; use it when the placement is unusual and no
+        /// ELF is at hand.
+        #[clap(long, value_name = "ADDR", value_parser = selector::parse_address,
+               conflicts_with = "elf")]
+        addr: Option<u64>,
+        /// Probe clock in kHz. Defaults to 4000.
+        #[clap(long, value_name = "KHZ")]
+        speed: Option<u32>,
     },
     /// Print a shell completion script for `scope` to stdout.
     ///
@@ -274,8 +288,7 @@ fn app_serial(
 fn app_rtt(
     capacity: usize,
     tag_file: PathBuf,
-    target: Option<String>,
-    channel_num: Option<usize>,
+    setup: RttSetup,
     latency: u64,
     name: Option<String>,
     headless: bool,
@@ -308,11 +321,7 @@ fn app_rtt(
     let (graphics_cmd_sender, graphics_cmd_receiver) = channel();
     let (plugin_engine_cmd_sender, plugin_engine_cmd_receiver) = channel();
 
-    let _ = rtt_if_cmd_sender.send(InterfaceCommand::Rtt(RttCommand::Setup(RttSetup {
-        target,
-        channel: channel_num,
-        ..RttSetup::default()
-    })));
+    let _ = rtt_if_cmd_sender.send(InterfaceCommand::Rtt(RttCommand::Setup(setup)));
 
     let rtt_connections = RttConnections::new(
         logger.clone().with_source("rtt".to_string()),
@@ -441,17 +450,23 @@ fn resolve_serial(
 /// Resolve the RTT target/channel, prompting via the icon-mode picker when the
 /// target is missing and we have an interactive terminal. `Ok(None)` means the
 /// user quit the picker before starting the app.
-fn resolve_rtt(
-    target: Option<String>,
-    channel_num: Option<usize>,
-) -> Result<Option<(Option<String>, Option<usize>)>, String> {
-    if target.is_some() || !is_interactive() {
-        return Ok(Some((target, channel_num)));
+fn resolve_rtt(setup: RttSetup) -> Result<Option<RttSetup>, String> {
+    if setup.target.is_some() || !is_interactive() {
+        return Ok(Some(setup));
     }
 
-    match selector::select_rtt(target, channel_num)? {
-        selector::Outcome::Selected((target, channel)) => Ok(Some((Some(target), Some(channel)))),
-        selector::Outcome::Skip => Ok(Some((None, channel_num))),
+    // The picker fills in what the command line left out; `Skip` keeps the
+    // CLI's own settings and starts disconnected.
+    let fallback = RttSetup {
+        target: None,
+        channel: setup.channel,
+        control_block: setup.control_block.clone(),
+        probe_speed: setup.probe_speed,
+    };
+
+    match selector::select_rtt(setup)? {
+        selector::Outcome::Selected(setup) => Ok(Some(setup)),
+        selector::Outcome::Skip => Ok(Some(fallback)),
         selector::Outcome::Quit => Ok(None),
     }
 }
@@ -520,17 +535,21 @@ fn main() -> Result<(), String> {
             Commands::Rtt {
                 target,
                 channel_num,
-            } => match resolve_rtt(target, channel_num)? {
-                Some((target, channel_num)) => app_rtt(
-                    capacity,
-                    tag_file,
-                    target,
-                    channel_num,
-                    latency,
-                    name,
-                    headless,
-                    keymap,
-                ),
+                elf,
+                addr,
+                speed,
+            } => match resolve_rtt(RttSetup {
+                target,
+                channel: channel_num,
+                // `--addr` and `--elf` conflict in the parser, so at most one
+                // of these is set; either one pins the block down, and without
+                // them the interface derives the scan windows itself.
+                control_block: addr
+                    .map(ControlBlock::Exact)
+                    .or_else(|| elf.map(ControlBlock::Elf)),
+                probe_speed: speed,
+            })? {
+                Some(setup) => app_rtt(capacity, tag_file, setup, latency, name, headless, keymap),
                 None => Ok(()),
             },
             // Handled right after `Cli::parse()`, before this closure, so a

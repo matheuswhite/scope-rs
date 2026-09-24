@@ -8,6 +8,7 @@ use crate::{
     interfaces::{
         InterfaceCommand, InterfaceShared,
         file_transfer::{CHUNK_SIZE, FileTransfer},
+        rtt_elf,
     },
     plugin::engine::PluginEngineCommand,
     success, warning,
@@ -15,11 +16,13 @@ use crate::{
 use chrono::Local;
 use probe_rs::{
     Core, MemoryInterface, Permissions, Session,
+    config::MemoryRegion,
     probe::list::Lister,
     rtt::{Rtt, ScanRegion},
 };
 use std::{
-    ops::{Deref, DerefMut},
+    ops::{Deref, DerefMut, Range},
+    path::PathBuf,
     sync::{
         Arc, RwLock,
         mpsc::{Receiver, Sender},
@@ -28,10 +31,30 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// Where to look for the RTT control block, as chosen by the user
+/// (issue #248).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum ControlBlock {
+    /// Derive the scan windows from the target itself. The default, and the
+    /// only option that needs nothing from the user.
+    #[default]
+    Scan,
+    /// Read the `_SEGGER_RTT` symbol from this ELF and attach at that address
+    /// (`--elf`). Re-read on every attach, so re-flashing a build that moved
+    /// the block does not need a restart.
+    Elf(PathBuf),
+    /// Attach at exactly this address (`--addr`).
+    Exact(u64),
+}
+
 pub struct RttShared {
     pub target: String,
     pub mode: RttMode,
     pub channel: usize,
+    /// See [`ControlBlock`].
+    pub control_block: ControlBlock,
+    /// Probe clock in kHz, as passed to `set_speed` on every attach.
+    pub probe_speed: u32,
 }
 
 pub struct RttConnections {
@@ -42,14 +65,24 @@ pub struct RttConnections {
     latency: u64,
     headless: bool,
     last_address: Option<u64>,
-    probe_speed_message: Option<String>,
-    fail_to_attach_message: Option<String>,
+    last_logged: LastLogged,
+}
+
+/// The last message logged for each failure the reconnect loop can hit, so a
+/// problem is reported once instead of on every pass through the loop.
+#[derive(Default)]
+struct LastLogged {
+    probe_speed: Option<String>,
+    session_attach: Option<String>,
+    rtt_attach: Option<String>,
 }
 
 #[derive(Default)]
 pub struct RttSetup {
     pub target: Option<String>,
     pub channel: Option<usize>,
+    pub control_block: Option<ControlBlock>,
+    pub probe_speed: Option<u32>,
 }
 
 pub enum RttCommand {
@@ -94,12 +127,23 @@ impl RttShared {
             target,
             channel: setup.channel.unwrap_or(0),
             mode,
+            control_block: setup.control_block.unwrap_or_default(),
+            probe_speed: setup
+                .probe_speed
+                .unwrap_or(RttInterface::DEFAULT_PROBE_SPEED_KHZ),
         }
     }
 }
 
 impl RttInterface {
     const NEW_LINE_TIMEOUT_MS: u128 = 1_000;
+    /// Probe clock used when `--speed` is not given — what the code hard-coded
+    /// before it was configurable (issue #248).
+    pub const DEFAULT_PROBE_SPEED_KHZ: u32 = 4_000;
+    /// How much of a RAM region is probed when looking for the control block.
+    /// The block is conventionally at the very start of a region, so a small
+    /// leading window finds it while costing almost nothing to read.
+    const SCAN_WINDOW: u64 = 32 * 1024;
 
     pub fn task(
         shared: Arc<RwLock<InterfaceShared>>,
@@ -114,8 +158,7 @@ impl RttInterface {
             latency,
             headless,
             mut last_address,
-            mut probe_speed_message,
-            mut fail_to_attach_message,
+            mut last_logged,
         } = connections;
         let mut line = vec![];
         let mut buffer = [0u8; 1024];
@@ -134,8 +177,7 @@ impl RttInterface {
                         &logger,
                         &plugin_engine_cmd_sender,
                         &mut last_address,
-                        &mut probe_speed_message,
-                        &mut fail_to_attach_message,
+                        &mut last_logged,
                     ),
                     RttCommand::Disconnect => Self::disconnect(
                         shared.clone(),
@@ -143,8 +185,7 @@ impl RttInterface {
                         &mut rtt,
                         &logger,
                         &plugin_engine_cmd_sender,
-                        &mut probe_speed_message,
-                        &mut fail_to_attach_message,
+                        &mut last_logged,
                     ),
                     RttCommand::Setup(setup) => Self::setup(
                         shared.clone(),
@@ -153,8 +194,7 @@ impl RttInterface {
                         &mut rtt,
                         &logger,
                         &plugin_engine_cmd_sender,
-                        &mut probe_speed_message,
-                        &mut fail_to_attach_message,
+                        &mut last_logged,
                     ),
                     RttCommand::Read { address, size } => {
                         match Self::read_memory(session.as_mut(), address, size) {
@@ -240,8 +280,7 @@ impl RttInterface {
                             &logger,
                             &plugin_engine_cmd_sender,
                             &mut last_address,
-                            &mut probe_speed_message,
-                            &mut fail_to_attach_message,
+                            &mut last_logged,
                         );
                         drop(sr);
                         Self::set_mode(shared.clone(), new_mode);
@@ -287,8 +326,7 @@ impl RttInterface {
                             &mut Some(rtt_if),
                             &logger,
                             &plugin_engine_cmd_sender,
-                            &mut probe_speed_message,
-                            &mut fail_to_attach_message,
+                            &mut last_logged,
                         );
                         Self::set_mode(shared.clone(), Some(RttMode::Reconnecting));
                         Self::wait(latency);
@@ -336,8 +374,7 @@ impl RttInterface {
                         &mut Some(rtt_if),
                         &logger,
                         &plugin_engine_cmd_sender,
-                        &mut probe_speed_message,
-                        &mut fail_to_attach_message,
+                        &mut last_logged,
                     );
                     Self::set_mode(shared.clone(), Some(RttMode::Reconnecting));
                     Self::wait(latency);
@@ -471,18 +508,115 @@ impl RttInterface {
         *transfer = FileTransfer::load(path, logger);
     }
 
-    fn rtt_attach(core: &mut Core, last_address: &mut Option<u64>, logger: &Logger) -> Option<Rtt> {
+    /// The leading window of each of `ranges`, clamped so a region smaller than
+    /// [`Self::SCAN_WINDOW`] is never read past its end.
+    fn scan_windows(ranges: &[Range<u64>]) -> Vec<Range<u64>> {
+        ranges
+            .iter()
+            .filter(|range| range.start < range.end)
+            .map(|range| range.start..range.end.min(range.start + Self::SCAN_WINDOW))
+            .collect()
+    }
+
+    /// Where to look for the control block on a fresh attach.
+    ///
+    /// This used to be a hard-coded `0x20000000..0x20008000` — the conventional
+    /// Cortex-M SRAM base, which is simply not where every part keeps its RAM.
+    /// On a target whose RAM sits elsewhere the cheap probe could never hit, so
+    /// *every* attach fell through to sweeping the whole RAM: issue #248
+    /// reported 3.2s per attach on an i.MX RT1021, whose application RAM is
+    /// OCRAM at `0x20200000`.
+    ///
+    /// The windows now come from the target, in this order:
+    ///
+    /// 1. `--addr`, or `_SEGGER_RTT` read from `--elf`: exact, no scan at all.
+    /// 2. The `rtt_scan_regions` of the probe-rs target description, when it
+    ///    names them — the chip's own definition beats any convention.
+    /// 3. The first [`Self::SCAN_WINDOW`] bytes of every RAM region in the
+    ///    target's memory map. "The control block lives at the start of a RAM
+    ///    region" is near-universal — Zephyr forces it with linker sort key
+    ///    `aaa`, and SEGGER's own examples do the same — so a handful of small
+    ///    reads hit on essentially any target, and they stay cheap because the
+    ///    count of RAM regions is what grows, not the bytes per region.
+    fn scan_region(
+        core: &mut Core,
+        control_block: &ControlBlock,
+        target_regions: &ScanRegion,
+        logger: &Logger,
+    ) -> ScanRegion {
+        let ram = core
+            .memory_regions()
+            .filter_map(MemoryRegion::as_ram_region)
+            .map(|region| region.range.clone())
+            .collect::<Vec<_>>();
+
+        Self::scan_region_in(control_block, target_regions, &ram, logger)
+    }
+
+    /// The half of [`Self::scan_region`] that needs no live core: `ram` is the
+    /// target's RAM ranges, already read off the memory map.
+    fn scan_region_in(
+        control_block: &ControlBlock,
+        target_regions: &ScanRegion,
+        ram: &[Range<u64>],
+        logger: &Logger,
+    ) -> ScanRegion {
+        match control_block {
+            ControlBlock::Exact(address) => return ScanRegion::Exact(*address),
+            ControlBlock::Elf(path) => match rtt_elf::control_block_address(path) {
+                Ok(address) => {
+                    debug!(
+                        logger,
+                        "RTT control block at {:#010X}, from {}",
+                        address,
+                        path.display()
+                    );
+                    return ScanRegion::Exact(address);
+                }
+                // Losing the ELF costs speed, not the connection.
+                Err(err) => warning!(
+                    logger,
+                    "Cannot read the RTT address from the ELF ({}); scanning the target instead",
+                    err
+                ),
+            },
+            ControlBlock::Scan => {}
+        }
+
+        if let ScanRegion::Ranges(ranges) = target_regions
+            && !ranges.is_empty()
+        {
+            return ScanRegion::Ranges(ranges.clone());
+        }
+
+        ScanRegion::Ranges(Self::scan_windows(ram))
+    }
+
+    fn rtt_attach(
+        core: &mut Core,
+        last_address: &mut Option<u64>,
+        control_block: &ControlBlock,
+        target_regions: &ScanRegion,
+        logger: &Logger,
+        rtt_attach_message: &mut Option<String>,
+    ) -> Option<Rtt> {
         let rtt = if let Some(addr) = last_address {
             Rtt::attach_at(core, *addr)
         } else {
-            let first_32kb_in_ram = ScanRegion::range(0x2000_0000..0x2000_8000);
-            let res = Rtt::attach_region(core, &first_32kb_in_ram);
+            let region = Self::scan_region(core, control_block, target_regions, logger);
+            // An address the user pinned down is taken at face value: falling
+            // back to a full sweep would spend exactly the time they asked to
+            // save, and hide the fact that the address is wrong.
+            let is_exact = matches!(region, ScanRegion::Exact(_));
+            let res = Rtt::attach_region(core, &region);
+
             if let Err(err) = &res
+                && !is_exact
                 && !matches!(err, probe_rs::rtt::Error::MultipleControlBlocksFound(_))
             {
                 debug!(
                     logger,
-                    "Failed to search at first 32KB of RAM, trying to scan entire RAM..."
+                    "No control block at the start of a RAM region, scanning for all regions..."
                 );
                 Rtt::attach(core)
             } else {
@@ -493,6 +627,7 @@ impl RttInterface {
         match rtt {
             Ok(rtt) => {
                 *last_address = Some(rtt.ptr());
+                *rtt_attach_message = None;
                 Some(rtt)
             }
             Err(probe_rs::rtt::Error::MultipleControlBlocksFound(instances)) => {
@@ -506,28 +641,63 @@ impl RttInterface {
                 *last_address = Some(instances[0]);
                 res
             }
-            Err(_) => None,
+            Err(err) => {
+                // Deduplicated like the session-attach error: the reconnect loop
+                // would otherwise repeat it forever, and a wrong `--addr` is
+                // exactly the case that needs to be readable.
+                let (transient, message) = Self::rtt_attach_failure(&err);
+                if rtt_attach_message.as_ref() != Some(&message) {
+                    if transient {
+                        debug!(logger, "{}", message);
+                    } else {
+                        error!(logger, "{}", message);
+                    }
+                    *rtt_attach_message = Some(message);
+                }
+                None
+            }
         }
     }
 
-    fn log_probe_speed(logger: &Logger, probe_speed_message: &mut Option<String>, speed: u32) {
+    /// How a failed RTT attach is reported: whether it is expected to clear up
+    /// on its own, and the message to log.
+    ///
+    /// A missing control block is what a target that is still booting looks
+    /// like — attaching to the probe can reset it, and the block only exists
+    /// once the firmware has initialised RTT — so the reconnect loop's next
+    /// pass usually succeeds. Logging it as an error then reads as a failure
+    /// the user has to act on, right before the "Connected" line, and dumps
+    /// probe-rs' multi-line advice (with literal `\r\n`s) into the log. Every
+    /// other error is a real one and keeps probe-rs' own wording.
+    fn rtt_attach_failure(err: &probe_rs::rtt::Error) -> (bool, String) {
+        match err {
+            probe_rs::rtt::Error::ControlBlockNotFound => (
+                true,
+                "RTT control block not found yet (is RTT initialised on the target?), retrying..."
+                    .to_string(),
+            ),
+            err => (false, format!("Failed to attach to RTT: {}", err)),
+        }
+    }
+
+    fn log_probe_speed(logger: &Logger, last_logged: &mut LastLogged, speed: u32) {
         let message = format!("Probe speed: {} kHz", speed);
-        if probe_speed_message.as_ref() != Some(&message) {
+        if last_logged.probe_speed.as_ref() != Some(&message) {
             debug!(logger, "{}", message);
-            *probe_speed_message = Some(message);
+            last_logged.probe_speed = Some(message);
         }
     }
 
     fn log_fail_to_attach(
         logger: &Logger,
-        fail_to_attach_message: &mut Option<String>,
+        last_logged: &mut LastLogged,
         res: &Result<Session, probe_rs::Error>,
     ) {
         if let Err(err) = res {
             let message = format!("Failed to attach to target: {}", err);
-            if fail_to_attach_message.as_ref() != Some(&message) {
+            if last_logged.session_attach.as_ref() != Some(&message) {
                 error!(logger, "{}", message);
-                *fail_to_attach_message = Some(message);
+                last_logged.session_attach = Some(message);
             }
         }
     }
@@ -539,8 +709,7 @@ impl RttInterface {
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
         last_address: &mut Option<u64>,
-        probe_speed_message: &mut Option<String>,
-        fail_to_attach_message: &mut Option<String>,
+        last_logged: &mut LastLogged,
     ) -> Option<RttMode> {
         let sr = shared
             .read()
@@ -557,6 +726,8 @@ impl RttInterface {
         }
 
         let target = sr.target.clone();
+        let control_block = sr.control_block.clone();
+        let probe_speed = sr.probe_speed;
 
         let lister = Lister::new();
         let probes = lister.list_all();
@@ -565,13 +736,13 @@ impl RttInterface {
                 .get(0)
                 .and_then(|probe| probe.open().ok())
                 .and_then(|mut probe| {
-                    let Ok(speed) = probe.set_speed(4_000) else {
+                    let Ok(speed) = probe.set_speed(probe_speed) else {
                         error!(logger, "Failed to set probe speed");
                         return None;
                     };
-                    Self::log_probe_speed(logger, probe_speed_message, speed);
+                    Self::log_probe_speed(logger, last_logged, speed);
                     let res = probe.attach(&target, Permissions::default());
-                    Self::log_fail_to_attach(logger, fail_to_attach_message, &res);
+                    Self::log_fail_to_attach(logger, last_logged, &res);
                     res.ok()
                 })
         else {
@@ -584,13 +755,26 @@ impl RttInterface {
         };
         *session = Some(new_session);
 
+        // The target description can name the RTT scan windows itself; read it
+        // off the session before the core borrow takes it.
+        let target_regions = session
+            .as_ref()
+            .map(|s| s.target().rtt_scan_regions.clone())
+            .unwrap_or_default();
+
         let Some(new_rtt) = session
             .as_mut()
             .and_then(|s| s.core(0).ok())
             .and_then(|mut core| {
                 debug!(logger, "Attaching to RTT...");
-                let res = Self::rtt_attach(&mut core, last_address, logger);
-                res
+                Self::rtt_attach(
+                    &mut core,
+                    last_address,
+                    &control_block,
+                    &target_regions,
+                    logger,
+                    &mut last_logged.rtt_attach,
+                )
             })
         else {
             let _ = rtt.take();
@@ -621,11 +805,9 @@ impl RttInterface {
         rtt: &mut Option<Rtt>,
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
-        probe_speed_message: &mut Option<String>,
-        fail_to_attach_message: &mut Option<String>,
+        last_logged: &mut LastLogged,
     ) -> Option<RttMode> {
-        let _ = fail_to_attach_message.take();
-        let _ = probe_speed_message.take();
+        *last_logged = LastLogged::default();
         let _ = session.take();
         let _ = rtt.take();
         let sr = shared
@@ -664,8 +846,7 @@ impl RttInterface {
         rtt: &mut Option<Rtt>,
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
-        probe_speed_message: &mut Option<String>,
-        fail_to_attach_message: &mut Option<String>,
+        last_logged: &mut LastLogged,
     ) -> Option<RttMode> {
         let mut has_changes = false;
         let mut sw = shared
@@ -688,6 +869,16 @@ impl RttInterface {
             has_changes = true;
         }
 
+        if let Some(control_block) = setup.control_block {
+            sw_ref.control_block = control_block;
+            has_changes = true;
+        }
+
+        if let Some(probe_speed) = setup.probe_speed {
+            sw_ref.probe_speed = probe_speed;
+            has_changes = true;
+        }
+
         let last_mode = sw_ref.mode;
         if has_changes {
             drop(sw);
@@ -697,8 +888,7 @@ impl RttInterface {
                 rtt,
                 logger,
                 plugin_engine_cmd_sender,
-                probe_speed_message,
-                fail_to_attach_message,
+                last_logged,
             );
 
             match last_mode {
@@ -759,8 +949,175 @@ impl RttConnections {
             latency,
             headless,
             last_address: None,
-            probe_speed_message: None,
-            fail_to_attach_message: None,
+            last_logged: LastLogged::default(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn logger() -> Logger {
+        Logger::new("test".to_string()).0
+    }
+
+    /// `ScanRegion` is not `PartialEq`, so assertions compare this instead.
+    #[derive(Debug, PartialEq)]
+    enum Shape {
+        Ram,
+        Exact(u64),
+        Ranges(Vec<Range<u64>>),
+    }
+
+    fn shape(region: &ScanRegion) -> Shape {
+        match region {
+            ScanRegion::Ram => Shape::Ram,
+            ScanRegion::Exact(address) => Shape::Exact(*address),
+            ScanRegion::Ranges(ranges) => Shape::Ranges(ranges.clone()),
+        }
+    }
+
+    /// The windows the memory-map fallback is expected to produce.
+    fn imxrt1020_windows() -> Shape {
+        Shape::Ranges(RttInterface::scan_windows(&imxrt1020_ram()))
+    }
+
+    /// The memory map probe-rs reports for the MIMXRT1020 of issue #248: OCRAM
+    /// first (the one holding the block, 0x410 in), then ITCM and DTCM.
+    fn imxrt1020_ram() -> Vec<Range<u64>> {
+        vec![
+            0x2020_0000..0x2024_0000,
+            0x0000_0000..0x0004_0000,
+            0x2000_0000..0x2004_0000,
+        ]
+    }
+
+    #[test]
+    fn missing_control_block_is_reported_as_transient() {
+        let (transient, message) =
+            RttInterface::rtt_attach_failure(&probe_rs::rtt::Error::ControlBlockNotFound);
+        assert!(transient);
+        assert!(!message.contains('\n'), "{message:?}");
+    }
+
+    #[test]
+    fn other_attach_failures_stay_errors() {
+        let (transient, message) =
+            RttInterface::rtt_attach_failure(&probe_rs::rtt::Error::NoControlBlockLocation);
+        assert!(!transient);
+        assert!(
+            message.starts_with("Failed to attach to RTT: "),
+            "{message:?}"
+        );
+    }
+
+    #[test]
+    fn every_ram_region_gets_a_leading_window() {
+        assert_eq!(
+            RttInterface::scan_windows(&imxrt1020_ram()),
+            vec![
+                0x2020_0000..0x2020_8000,
+                0x0000_0000..0x0000_8000,
+                0x2000_0000..0x2000_8000,
+            ],
+            "768KiB of RAM is probed as three 32KiB windows"
+        );
+    }
+
+    #[test]
+    fn a_region_smaller_than_the_window_is_not_read_past_its_end() {
+        // A 2KiB scratch region: reading 32KiB there would run off the end.
+        let windows = RttInterface::scan_windows(&[0x2000_0000..0x2000_0800]);
+
+        assert_eq!(windows, vec![0x2000_0000..0x2000_0800]);
+    }
+
+    #[test]
+    fn empty_and_degenerate_regions_are_dropped() {
+        assert!(RttInterface::scan_windows(&[]).is_empty());
+        // start == end, and a reversed range: neither names any memory.
+        assert!(
+            RttInterface::scan_windows(&[0x2000_0000..0x2000_0000, 0x2000_8000..0x2000_0000])
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn an_exact_address_wins_over_every_scan() {
+        let region = RttInterface::scan_region_in(
+            &ControlBlock::Exact(0x2020_0410),
+            &ScanRegion::Ranges(vec![0x2000_0000..0x2000_8000]),
+            &imxrt1020_ram(),
+            &logger(),
+        );
+
+        assert_eq!(shape(&region), Shape::Exact(0x2020_0410));
+    }
+
+    #[test]
+    fn the_target_description_wins_over_the_memory_map() {
+        // A chip that names its own RTT windows: that beats our convention.
+        let named = vec![0x2020_0000..0x2020_1000];
+        let region = RttInterface::scan_region_in(
+            &ControlBlock::Scan,
+            &ScanRegion::Ranges(named.clone()),
+            &imxrt1020_ram(),
+            &logger(),
+        );
+
+        assert_eq!(shape(&region), Shape::Ranges(named));
+    }
+
+    #[test]
+    fn the_memory_map_is_used_when_the_target_names_nothing() {
+        // `ScanRegion::Ram` is probe-rs's default for a chip with no
+        // `rtt_scan_ranges` of its own, and means "sweep all of it".
+        for target_regions in [ScanRegion::Ram, ScanRegion::Ranges(vec![])] {
+            let region = RttInterface::scan_region_in(
+                &ControlBlock::Scan,
+                &target_regions,
+                &imxrt1020_ram(),
+                &logger(),
+            );
+
+            assert_eq!(shape(&region), imxrt1020_windows());
+        }
+    }
+
+    #[test]
+    fn an_unreadable_elf_falls_back_to_scanning() {
+        // Losing the ELF must cost speed, not the connection.
+        let region = RttInterface::scan_region_in(
+            &ControlBlock::Elf(PathBuf::from("/nonexistent/zephyr.elf")),
+            &ScanRegion::Ram,
+            &imxrt1020_ram(),
+            &logger(),
+        );
+
+        assert_eq!(shape(&region), imxrt1020_windows());
+    }
+
+    #[test]
+    fn the_default_probe_speed_is_unchanged() {
+        // The speed the code hard-coded before `--speed` existed.
+        let shared = RttShared::new(RttSetup::default());
+
+        assert_eq!(shared.probe_speed, 4_000);
+        assert_eq!(shared.control_block, ControlBlock::Scan);
+    }
+
+    #[test]
+    fn setup_values_override_the_defaults() {
+        let shared = RttShared::new(RttSetup {
+            target: Some("MIMXRT1020".to_string()),
+            channel: Some(2),
+            control_block: Some(ControlBlock::Exact(0x2020_0410)),
+            probe_speed: Some(8_000),
+        });
+
+        assert_eq!(shared.channel, 2);
+        assert_eq!(shared.probe_speed, 8_000);
+        assert_eq!(shared.control_block, ControlBlock::Exact(0x2020_0410));
     }
 }

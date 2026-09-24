@@ -127,7 +127,9 @@ scope serial          # pick a port, then a baud rate, from a menu
 scope --headless rtt  # same idea for RTT, in headless mode
 ```
 
-Use `↑`/`↓` to move and `Enter` to confirm; press `s` to start without connecting (as `serial`/`rtt` with no picker used to), and `q`/`Esc` to quit. When stdin/stdout isn't an interactive terminal (a pipe, or a script), the picker is skipped and `Scope` starts disconnected as before.
+For RTT the picker asks for the target and channel, then the probe speed and where the RTT control block is — the same menus, with the defaults (`4000` kHz, scanning) pre-selected, so `Enter` twice takes them.
+
+Use `↑`/`↓` to move and `Enter` to confirm; press `s` to start without connecting (as `serial`/`rtt` with no picker used to), and `q`/`Esc` to quit. Any argument already on the command line is kept and its step skipped, so `scope rtt --speed 8000` only asks what is missing. When stdin/stdout isn't an interactive terminal (a pipe, or a script), the picker is skipped and `Scope` starts disconnected as before.
 
 ## Features
 
@@ -254,6 +256,22 @@ While connected you can:
 - `!rtt disconnect` — detach from the target.
 - `!rtt read <address> [<size>]` — read `size` bytes (default `4`) from the target's memory. The address may be hexadecimal (`0x...`) or decimal.
 
+##### Finding the control block
+
+Attaching means finding SEGGER's RTT control block in the target's RAM, and `Scope` works that out from the target itself: it probes the first 32 KiB of **each RAM region in the chip's memory map** (or the scan windows the `probe-rs` target description names, when it names them), because the block conventionally sits at the start of a RAM region. Only if that misses does it fall back to sweeping the whole RAM.
+
+That needs no flags and no firmware changes. Two options pin it down exactly when you want to skip scanning altogether:
+
+```shell
+scope rtt MIMXRT1020 0 --elf build/zephyr/zephyr.elf   # read _SEGGER_RTT from the ELF
+scope rtt MIMXRT1020 0 --addr 0x20200410               # or give the address yourself
+```
+
+- `--elf <PATH>` reads the `_SEGGER_RTT` symbol out of a firmware ELF — usually the very build you just flashed. It is re-read on every attach, so re-flashing a build that moved the block needs no restart. An unreadable or stale ELF is reported and attaching falls back to scanning, so it costs speed, not the connection.
+- `--addr <ADDR>` attaches at exactly that address (`0x...` or decimal). It is taken at face value: there is no fallback scan, since that would spend the time you asked to save.
+
+`--speed <KHZ>` sets the probe clock (default `4000`), if you would rather trade link speed against scan cost.
+
 #### Auto Reconnect
 
 `Scope` has an auto-reconnect feature: when the serial port isn't available, it keeps trying to reconnect until the port comes back.
@@ -365,7 +383,7 @@ Commands:
 | Command | Description |
 |---------|-------------|
 | `serial [<port>] [<baudrate>]` | Open a serial port (e.g. `scope serial COM3 115200`). |
-| `rtt [<target>] [<channel>]` | Attach to an RTT target via `probe-rs` (e.g. `scope rtt STM32F303 0`). |
+| `rtt [<target>] [<channel>]` | Attach to an RTT target via `probe-rs` (e.g. `scope rtt STM32F303 0`). Options: `--elf <PATH>`, `--addr <ADDR>`, `--speed <KHZ>` — see [Finding the control block](#finding-the-control-block). |
 | `list [-v\|--verbose]` | List the available serial ports. |
 | `ble <name> <mtu>` | *(Not yet implemented.)* |
 | `completions <SHELL>` | Print a shell completion script for `scope` (`bash`, `zsh`, `fish`, `powershell`, `elvish`) — see [Shell completions](#shell-completions). |
@@ -463,6 +481,8 @@ Load a plugin with `!plugin load <file>` (and `!plugin reload <file>` / `!plugin
 **Auto-reconnect misbehaves on Windows.** This is a known limitation of the Windows build; reconnect works reliably on Linux and macOS.
 
 **RTT won't connect.** The RTT interface needs a debug probe supported by [`probe-rs`](https://probe.rs/) and the correct target chip name and channel — for example `scope rtt STM32F303 0`. Make sure the probe is connected and not held by another debugger.
+
+**RTT attaches, but slowly.** `Scope` probes the start of each RAM region first and only sweeps the whole RAM if the control block is not there (the `No control block at the start of a RAM region` debug line). A firmware that parks the block in the middle of a region will hit that sweep every time — point at it directly with `--elf <PATH>` or `--addr <ADDR>` (see [Finding the control block](#finding-the-control-block)).
 
 **My `tag_file` / config path isn't found.** Path values are used verbatim: `~` and environment variables are **not** expanded. Use an absolute path (for example `/home/user/.config/scope/tags.yml`).
 

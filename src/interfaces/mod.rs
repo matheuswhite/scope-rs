@@ -9,6 +9,7 @@ use crate::{
 };
 
 pub mod file_transfer;
+pub mod rtt_elf;
 pub mod rtt_if;
 pub mod serial_if;
 
