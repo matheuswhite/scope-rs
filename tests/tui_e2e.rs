@@ -432,6 +432,33 @@ impl Tui {
     fn wait_until_ready(&self) {
         self.wait_for("115200bps", READY);
     }
+
+    /// Headless counterpart of [`Self::wait_until_ready`]: press `Ctrl+K` until
+    /// the command-bar prompt shows up. Headless draws nothing until then, so
+    /// there is no banner to wait for, and a key typed before the app enables
+    /// raw mode is just echoed by the PTY (`^K`) and never reaches it — which
+    /// is what made the headless tests flaky on a busy CI runner. Resending is
+    /// harmless: inside the command bar `Ctrl+K` is an unbound chord and is
+    /// swallowed.
+    fn open_headless_command_bar(&mut self) {
+        let start = Instant::now();
+        loop {
+            self.type_text("\x0b");
+            let deadline = Instant::now() + Duration::from_millis(500);
+            while Instant::now() < deadline {
+                if self.screen().contains("> ") {
+                    return;
+                }
+                thread::sleep(Duration::from_millis(50));
+            }
+            if start.elapsed() > READY {
+                panic!(
+                    "headless command bar never opened.\n--- screen ---\n{}\n--------------",
+                    self.screen()
+                );
+            }
+        }
+    }
 }
 
 impl Drop for Tui {
@@ -1027,7 +1054,7 @@ fn headless_ctrl_f_is_swallowed_in_command_bar() {
         ..Default::default()
     });
 
-    tui.type_text("\x0b"); // Ctrl+K -> command bar
+    tui.open_headless_command_bar(); // Ctrl+K
     tui.type_text("\x06"); // Ctrl+F -> must be swallowed
     tui.type_text("Z"); // sentinel
 
