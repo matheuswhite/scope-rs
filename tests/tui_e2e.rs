@@ -1106,6 +1106,87 @@ fn installed_plugin_autoloads_at_startup() {
     tui.wait_for("autoloaded_plugin", SETTLE);
 }
 
+/// Logs every line and byte-count the new receive hooks see (issue #250), with
+/// the terminator stripped so the log reads the same in the TUI (which shows
+/// `\r\n` escaped) and in headless (which prints it raw).
+const RECV_HOOKS_PLUGIN: &str = r#"local log = require("scope").log
+local fmt = require("scope").fmt
+local M = { bytes = 0 }
+function M.on_serial_recv_line(line)
+  log.info("LINE[" .. fmt.to_str(line):gsub("[\r\n]", "") .. "]")
+end
+function M.on_serial_recv_byte(byte)
+  M.bytes = M.bytes + 1
+  if byte == 10 then
+    log.info("BYTES=" .. M.bytes)
+  end
+end
+return M
+"#;
+
+/// Issue #250: the receive hooks get the same data in the TUI and in headless,
+/// although the interface frames RX into lines only in the TUI. The line is
+/// written in two halves with a pause longer than the TUI's 1s idle flush, so
+/// the TUI publishes `hel` on its own first — the line hook must still see one
+/// `hello`, and the byte hook all seven bytes.
+fn recv_hooks_see_the_same_stream(headless: bool) {
+    let mut tui = Tui::start_with(StartOpts {
+        headless,
+        installed_plugins: &[("recv_hooks", RECV_HOOKS_PLUGIN)],
+        ..Default::default()
+    });
+    tui.wait_for("115200bps", READY);
+    tui.wait_for("recv_hooks", SETTLE);
+
+    tui.serial.master.write_all(b"hel").expect("write to wire");
+    tui.serial.master.flush().expect("flush wire");
+    thread::sleep(Duration::from_millis(1_500));
+    tui.serial
+        .master
+        .write_all(b"lo\r\n")
+        .expect("write to wire");
+    tui.serial.master.flush().expect("flush wire");
+
+    let screen = tui.wait_for("LINE[hello]", SETTLE);
+    assert!(
+        !screen.contains("LINE[hel]"),
+        "a partial line must not reach the line hook.\n{screen}"
+    );
+    tui.wait_for("BYTES=7", SETTLE);
+}
+
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS sets baud via the IOSSIOSPEED ioctl, which a PTY rejects with ENOTTY, so scope can't open the virtual serial port; Linux sets baud via termios and works"
+)]
+fn recv_hooks_in_the_tui() {
+    recv_hooks_see_the_same_stream(false);
+}
+
+#[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS sets baud via the IOSSIOSPEED ioctl, which a PTY rejects with ENOTTY, so scope can't open the virtual serial port; Linux sets baud via termios and works"
+)]
+fn recv_hooks_in_headless() {
+    recv_hooks_see_the_same_stream(true);
+}
+
+#[test]
+fn legacy_recv_hook_warns_on_load() {
+    // Issue #250: `on_serial_recv` still loads, but says what to use instead.
+    let tui = Tui::start_with(StartOpts {
+        installed_plugins: &[(
+            "legacy_recv",
+            "local M = {}\nfunction M.on_serial_recv(msg) end\nreturn M\n",
+        )],
+        ..Default::default()
+    });
+
+    tui.wait_for("on_serial_recv is deprecated", SETTLE);
+}
+
 #[test]
 fn plugin_install_failure_does_not_persist() {
     // Safety invariant: a plugin that fails to load must NOT be recorded in the

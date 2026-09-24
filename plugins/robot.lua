@@ -8,7 +8,7 @@ local plugin = {
     status_address = nil
 }
 
-function plugin.on_rtt_recv(msg)
+function plugin.on_rtt_recv_line(msg)
     local msg_str = fmt.to_str(msg)
     local msg_start = msg_str:sub(1, 15)
 

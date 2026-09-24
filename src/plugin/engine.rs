@@ -3,6 +3,7 @@ use super::{
     bridge::{PluginEngineGate, PluginMethodCallGate},
     installed::Installed,
     messages::{self, PluginExternalRequest, PluginMethodMessage, PluginResponse},
+    rx_lines::RxLines,
 };
 use crate::{
     error, info,
@@ -183,6 +184,8 @@ impl PluginEngine {
         let mut engine_gate = PluginEngineGate::new(32);
         let mut interface_recv_reqs = vec![];
         let mut rtt_read_reqs = vec![];
+        let mut rx_lines = RxLines::default();
+        let hooks = RecvHooks::of(&private.interface_type);
         let err_regex = Regex::new(r#".*: \[string ".*"]:"#).unwrap();
 
         // Auto-load every installed plugin (issue #36) before entering the
@@ -430,6 +433,7 @@ impl PluginEngine {
                         }
                     }
                     PluginEngineCommand::SerialDisconnected { port, baudrate } => {
+                        rx_lines.reset();
                         for plugin in plugin_list.values_mut() {
                             plugin.spawn_method_call(
                                 engine_gate.new_method_call_gate(),
@@ -450,6 +454,7 @@ impl PluginEngine {
                         }
                     }
                     PluginEngineCommand::RttDisconnected { target, channel } => {
+                        rx_lines.reset();
                         for plugin in plugin_list.values_mut() {
                             plugin.spawn_method_call(
                                 engine_gate.new_method_call_gate(),
@@ -919,19 +924,60 @@ impl PluginEngine {
                 },
             );
 
-            if let Ok(rx_msg) = private.rx.try_recv() {
-                let fn_name = match private.interface_type {
-                    InterfaceType::Serial => "on_serial_recv",
-                    InterfaceType::Rtt => "on_rtt_recv",
-                };
-
+            // Drain the bus: headless publishes one message per received byte,
+            // and taking a single one per pass would let the line hook fall
+            // behind the wire.
+            while let Ok(rx_msg) = private.rx.try_recv() {
+                // Deprecated: gets the message in whatever shape the interface
+                // published it, which differs between the TUI and headless.
                 for plugin in plugin_list.values_mut() {
                     plugin.spawn_method_call(
                         engine_gate.new_method_call_gate(),
-                        fn_name,
+                        hooks.legacy,
                         rx_msg.message.clone(),
                         false,
                     );
+                }
+
+                // The two hooks below see the same stream in both modes. They
+                // are only spawned for plugins that define them: the byte hook
+                // runs once per received byte, and an undefined hook would
+                // still cost a task per call.
+                for plugin in plugin_list.values_mut() {
+                    if !plugin.defines(hooks.byte) {
+                        continue;
+                    }
+                    for &byte in rx_msg.message.iter() {
+                        plugin.spawn_method_call(
+                            engine_gate.new_method_call_gate(),
+                            hooks.byte,
+                            byte,
+                            false,
+                        );
+                    }
+                }
+
+                let framed = rx_lines.push(&rx_msg.message);
+                if framed.dropped > 0 {
+                    warning!(
+                        private.logger,
+                        "Dropped {} received bytes without a line break; {} only gets complete lines",
+                        framed.dropped,
+                        hooks.line
+                    );
+                }
+                for plugin in plugin_list.values_mut() {
+                    if !plugin.defines(hooks.line) {
+                        continue;
+                    }
+                    for line in framed.lines.iter() {
+                        plugin.spawn_method_call(
+                            engine_gate.new_method_call_gate(),
+                            hooks.line,
+                            line.clone(),
+                            false,
+                        );
+                    }
                 }
 
                 for interface_recv_req in interface_recv_reqs.drain(..) {
@@ -1050,13 +1096,63 @@ impl PluginEngine {
             plugin_name.clone(),
             source,
             dest,
-            logger.with_source((*plugin_name).clone()),
+            logger.clone().with_source((*plugin_name).clone()),
         )?;
+        for (legacy, byte, line) in RecvHooks::DEPRECATED {
+            if plugin.defines(legacy) {
+                warning!(
+                    logger,
+                    "Plugin \"{}\": {} is deprecated, as the message it gets is split differently in the TUI and in headless mode. Use {} (whole lines) or {} (single bytes) instead",
+                    plugin_name,
+                    legacy,
+                    line,
+                    byte
+                );
+            }
+        }
         plugin.spawn_method_call(gate, "on_load", (), false);
 
         plugin_list.insert(plugin_name.clone(), plugin);
 
         Ok(())
+    }
+}
+
+/// The plugin hooks that receive data from the active interface (issue #250).
+struct RecvHooks {
+    /// Deprecated: called with each message on the RX bus as the interface
+    /// published it — a line in the TUI, a byte (serial) or a read chunk (RTT)
+    /// in headless.
+    legacy: &'static str,
+    /// Called once per received byte, with the byte as a number.
+    byte: &'static str,
+    /// Called once per received line, `\n` included; a partial line is never
+    /// delivered.
+    line: &'static str,
+}
+
+impl RecvHooks {
+    const SERIAL: Self = Self {
+        legacy: "on_serial_recv",
+        byte: "on_serial_recv_byte",
+        line: "on_serial_recv_line",
+    };
+    const RTT: Self = Self {
+        legacy: "on_rtt_recv",
+        byte: "on_rtt_recv_byte",
+        line: "on_rtt_recv_line",
+    };
+    /// Every deprecated hook with its replacements, as `(legacy, byte, line)`.
+    const DEPRECATED: [(&'static str, &'static str, &'static str); 2] = [
+        (Self::SERIAL.legacy, Self::SERIAL.byte, Self::SERIAL.line),
+        (Self::RTT.legacy, Self::RTT.byte, Self::RTT.line),
+    ];
+
+    fn of(interface_type: &InterfaceType) -> Self {
+        match interface_type {
+            InterfaceType::Serial => Self::SERIAL,
+            InterfaceType::Rtt => Self::RTT,
+        }
     }
 }
 
