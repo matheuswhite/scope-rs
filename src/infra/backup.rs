@@ -80,6 +80,16 @@ impl Backup {
         }
     }
 
+    /// A backup that never touches the disk (`save_backup = false` in the
+    /// `[history]` config table): with no worker to send to, `append` and
+    /// `rename` are no-ops, so no `.bkp` file or directory is ever created.
+    pub fn disabled() -> Self {
+        Self {
+            sender: None,
+            handle: None,
+        }
+    }
+
     /// Queue already-serialized lines to be appended to the backup file. The
     /// caller shares the serialization with the typewriter/recorder; this just
     /// hands the owned strings to the writer thread without blocking.
@@ -285,6 +295,21 @@ mod tests {
         // `error!` swallows send errors (`let _ = ...`), so a dropped receiver
         // is fine here; the log output is irrelevant to these tests.
         Logger::new("test".to_string()).0
+    }
+
+    #[test]
+    fn disabled_backup_writes_nothing() {
+        let path = temp_path("disabled.bkp");
+        let _ = std::fs::remove_file(&path);
+
+        {
+            let backup = Backup::disabled();
+            backup.append(vec!["hello".to_string()]);
+            backup.rename(path.clone());
+            backup.append(vec!["world".to_string()]);
+        }
+
+        assert!(!Path::new(&path).exists());
     }
 
     #[test]
