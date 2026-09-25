@@ -3,6 +3,7 @@ pub mod engine;
 pub mod installed;
 pub mod messages;
 pub mod method_call;
+pub mod rx_lines;
 pub mod shell;
 
 use crate::infra::LogLevel;
@@ -72,9 +73,14 @@ impl Plugin {
     }
 
     pub fn is_user_command_valid(&self, user_command: &str) -> bool {
+        self.defines(user_command)
+    }
+
+    /// Whether the plugin table has a function named `fn_name`.
+    pub fn defines(&self, fn_name: &str) -> bool {
         let table: Table = self.lua.globals().get("M").unwrap();
 
-        table.get::<_, Function>(user_command).is_ok()
+        table.get::<_, Function>(fn_name).is_ok()
     }
 
     pub fn log_level(&self) -> LogLevel {
@@ -145,7 +151,7 @@ mod tests {
 
         assert_eq!(
             keys,
-            ["data", "level", "on_serial_recv"]
+            ["data", "level", "on_serial_recv_line"]
                 .into_iter()
                 .map(|x| x.to_string())
                 .collect::<Vec<_>>()

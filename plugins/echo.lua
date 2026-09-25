@@ -21,7 +21,7 @@ local function print_with_level(msg, level)
   end
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
   print_with_level(fmt.to_str(msg), M.data.level)
 end
 

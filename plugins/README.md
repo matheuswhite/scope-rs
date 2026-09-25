@@ -25,7 +25,7 @@ local serial = require("scope").serial
 
 local M = {}
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     serial.send("Hello," .. msg)
 end
 
@@ -42,9 +42,41 @@ Let's break down each line of the sample above. At the first line we're importin
 
 We create a local table at the third line. This local table is our plugin, and we name it `M` by a convention. We could name it as our plugin name `hello` for example. What's matter is the table must be returned at the end of file.
 
-Through line 5 to 7 we write a function and there are two notes about this function: the function is associated to our plugin table, and it has a reserved name `on_serial_recv`. The former tell us that any function outside our plugin table will be ignored and the later tell us that this function will be called on every message received from serial interface. Inside the function body, we're sending a message through serial, using `serial.send` function. As function argument, we're concatenating `"Hello,"` to the received message. There are two other functions for serial interaction inside scope standard library: `serial.info` which returns the configured serial port and its baud rate; and `serial.recv` which waits and returns a tuple with the error and the received message. For `serial.recv`, you can pass a table as argument to specify what is the timeout to wait. If the timeout is reach, then the error returned isn't `nil`.
+Through line 5 to 7 we write a function and there are two notes about this function: the function is associated to our plugin table, and it has a reserved name `on_serial_recv_line`. The former tell us that any function outside our plugin table will be ignored and the later tell us that this function will be called on every line received from serial interface (see [Receiving data](#receiving-data) for the other receive hook). Inside the function body, we're sending a message through serial, using `serial.send` function. As function argument, we're concatenating `"Hello,"` to the received message. There are two other functions for serial interaction inside scope standard library: `serial.info` which returns the configured serial port and its baud rate; and `serial.recv` which waits and returns a tuple with the error and the received message. For `serial.recv`, you can pass a table as argument to specify what is the timeout to wait. If the timeout is reach, then the error returned isn't `nil`.
 
 The last line is already explained: it returns our plugin table. Without this line, anything inside our plugin will have effect.
+
+## Receiving data
+
+Two hooks receive what the serial interface reads. Define either or both:
+
+| Hook | Called | Argument |
+| --- | --- | --- |
+| `on_serial_recv_line(line)` | once per received line | list of bytes (table of numbers), ending in the `\n` (a `\r` before it is kept too) |
+| `on_serial_recv_byte(byte)` | once per received byte | the byte, as a number (`0`-`255`) |
+
+Both behave exactly the same in the TUI and in headless mode (`--headless`). A line is delivered only once its `\n` arrives: text the device leaves without a line break, like a shell prompt, never reaches `on_serial_recv_line` — use `on_serial_recv_byte` to see it as it arrives. A partial line still pending when the port disconnects is discarded, and so is one that grows past 64 KiB without a `\n`.
+
+```lua
+local log = require("scope").log
+local fmt = require("scope").fmt
+
+local M = { prompt = "" }
+
+function M.on_serial_recv_line(line)
+    log.info("line: " .. fmt.to_str(line))
+end
+
+function M.on_serial_recv_byte(byte)
+    M.prompt = M.prompt .. string.char(byte)
+end
+
+return M
+```
+
+### Deprecated: on_serial_recv and on_rtt_recv
+
+`on_serial_recv(msg)` and `on_rtt_recv(msg)` still work, but are deprecated and log a warning when the plugin is loaded. They get each message in the shape the interface happened to read it, which is not the same in both modes: a whole line in the TUI, but a single byte (serial) or a read chunk (RTT) in headless mode — so a plugin that parses lines breaks under `--headless`. Rename `on_serial_recv` to `on_serial_recv_line` (and `on_rtt_recv` to `on_rtt_recv_line`) to keep line-based code working in both modes.
 
 ## RTT
 
@@ -97,7 +129,7 @@ Waits for the next RTT message.
 
 Important:
 
-- If your plugin implements `on_rtt_recv`, it will still be called for the same incoming message that unblocks `rtt.recv`. Avoid processing the same message twice.
+- If your plugin implements `on_rtt_recv_line` or `on_rtt_recv_byte`, it will still be called for the same incoming data that unblocks `rtt.recv`. Avoid processing the same data twice.
 - `rtt.recv` requires the active interface to be RTT. If another interface is active, this call may wait indefinitely and never complete.
 
 ### rtt.read(opts)
@@ -116,9 +148,9 @@ Notes:
 - This call requires the active interface to be **RTT**. If Scope is running with another interface selected, the request will immediately fail with an error indicating that RTT is not the active interface. Use `rtt.info()` to detect whether RTT is active.
 - Lua numbers are typically floating-point; very large addresses may lose precision. In practice, this works best for 32-bit addresses.
 
-### Callback: on_rtt_recv(msg)
+### Callback: on_rtt_recv_line(msg) and on_rtt_recv_byte(byte)
 
-If your plugin table defines `on_rtt_recv`, Scope will call it automatically every time a message is received from RTT **while the active interface is RTT**.
+The RTT counterparts of [`on_serial_recv_line` and `on_serial_recv_byte`](#receiving-data), with the same guarantees: `on_rtt_recv_line` gets each complete line (terminator included), `on_rtt_recv_byte` gets each byte as a number, identically in the TUI and in headless mode. They are called only **while the active interface is RTT**.
 
 ```lua
 local scope = require("scope")
@@ -127,7 +159,7 @@ local log = scope.log
 
 local M = {}
 
-function M.on_rtt_recv(msg)
+function M.on_rtt_recv_line(msg)
         log.info("RTT: " .. fmt.to_str(msg))
 end
 
@@ -136,7 +168,8 @@ return M
 
 Notes:
 
-- When the active interface is RTT, `on_serial_recv` is not called; RTT uses `on_rtt_recv` instead.
+- When the active interface is RTT, the `on_serial_recv_*` hooks are not called; RTT uses `on_rtt_recv_*` instead.
+- `on_rtt_recv` (no suffix) is deprecated, for the same reason as [`on_serial_recv`](#deprecated-on_serial_recv-and-on_rtt_recv).
 
 ### Callback: on_rtt_send(msg)
 
@@ -162,14 +195,14 @@ Notes:
 
 ## Analytics Plugin
 
-After understand the basic plugin sample shown above, let's move on to a more complex and functional sample. Let's build an analytics plugin. You can use the code of `hello.lua` as base and edit the same file or duplicate the file and rename it to `analytics.lua`. This plugin is going to count the number of times we receive and send a message through the serial port. We already use `on_serial_recv` on the previous sample to get the received messages. To get the messages sent we're going to use `on_serial_send` function. See the snippet below:
+After understand the basic plugin sample shown above, let's move on to a more complex and functional sample. Let's build an analytics plugin. You can use the code of `hello.lua` as base and edit the same file or duplicate the file and rename it to `analytics.lua`. This plugin is going to count the number of times we receive and send a message through the serial port. We already use `on_serial_recv_line` on the previous sample to get the received messages. To get the messages sent we're going to use `on_serial_send` function. See the snippet below:
 
 ```lua
 local serial = require("scope").serial
 
 local M = {}
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     serial.send("Hello," .. msg)
 end
 
@@ -190,7 +223,7 @@ local M = {
     send = 0,
 }
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     serial.send("Hello," .. msg)
 end
 
@@ -201,7 +234,7 @@ end
 return M
 ```
 
-As we're planning, let's increase these values to register our analytics. So, inside `on_serial_recv` and `on_serial_send` function body we'll increase `recv` and `send` respectively. The bellow snippet shows where to increase these variables:
+As we're planning, let's increase these values to register our analytics. So, inside `on_serial_recv_line` and `on_serial_send` function body we'll increase `recv` and `send` respectively. The bellow snippet shows where to increase these variables:
 
 ```lua
 local serial = require("scope").serial
@@ -211,7 +244,7 @@ local M = {
     send = 0,
 }
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 end
@@ -233,7 +266,7 @@ local M = {
     send = 0,
 }
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 
@@ -269,7 +302,7 @@ local function save()
     file:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 
@@ -308,7 +341,7 @@ function M.on_unload()
     M.f:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 
@@ -356,7 +389,7 @@ function M.on_unload()
     M.f:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 
@@ -410,7 +443,7 @@ function M.on_unload()
     M.f:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 
@@ -473,7 +506,7 @@ function M.on_unload()
     M.f:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 
@@ -523,7 +556,7 @@ function M.on_unload()
     M.f:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 
@@ -573,7 +606,7 @@ function M.on_unload()
     M.f:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 
@@ -628,7 +661,7 @@ function M.on_unload()
     M.f:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 
@@ -688,7 +721,7 @@ function M.on_unload()
     M.f:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 
@@ -758,7 +791,7 @@ function M.on_unload()
     M.f:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 
@@ -828,7 +861,7 @@ function M.on_unload()
     M.f:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 

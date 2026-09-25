@@ -33,7 +33,7 @@ function M.on_unload()
     M.f:close()
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     M.recv = M.recv + 1
     serial.send("Hello," .. msg)
 

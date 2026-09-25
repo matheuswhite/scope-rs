@@ -36,7 +36,7 @@ function M.on_serial_send(msg)
     log.info("Receive AT: " .. fmt.to_str(data))
 end
 
-function M.on_serial_recv(msg)
+function M.on_serial_recv_line(msg)
     log.info("Receive pkt: " .. fmt.to_str(msg))
 end
 
