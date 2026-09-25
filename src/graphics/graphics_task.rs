@@ -1,8 +1,7 @@
 use super::Serialize;
-use crate::graphics::ansi::ANSI;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
 use crate::graphics::message_filter::MessageFilter;
-use crate::graphics::screen::{Screen, ScreenPosition, SearchHit};
+use crate::graphics::screen::{HexFormat, Screen, ScreenPosition, SearchHit};
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::inputs::inputs_task::InputMode;
 use crate::interfaces::InterfaceShared;
@@ -61,6 +60,8 @@ pub struct GraphicsConfig {
     /// Mirror the session into the crash-recovery `.bkp` (`[history]
     /// save_backup` in config.toml).
     pub save_backup: bool,
+    /// How bytes with no text form are displayed (`hex_format` in config.toml).
+    pub hex_format: HexFormat,
 }
 
 pub struct GraphicsConnections {
@@ -1141,8 +1142,7 @@ impl GraphicsTask {
         for message in private.buffer.iter() {
             let line = message.line;
             let line_id = message.id;
-            let message = message.decode(decoder).message;
-            let message = ANSI::remove_encoding(message);
+            let message = decoder.plain_text(&message.message);
 
             // Same matcher and same `message` as `search_line`, so the columns
             // recorded here match the highlighted spans exactly (regex or not).
@@ -1192,7 +1192,7 @@ impl GraphicsConnections {
             full_buffer: Buffer::new(config.capacity),
             buffer: Buffer::new(config.capacity),
             message_filter: MessageFilter::default(),
-            screen: Screen::default(),
+            screen: Screen::new(config.hex_format),
             typewriter: TypeWriter::new(config.storage_base_filename.clone()),
             recorder: Recorder::new(config.storage_base_filename).expect("Cannot create Recorder"),
             backup,

@@ -17,6 +17,7 @@ use crate::interfaces::{InterfaceCommand, InterfaceTask, InterfaceType};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::aot::{Shell, generate};
 use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
+use graphics::screen::HexFormat;
 use infra::config::{Autosave, Config};
 use infra::logger::Logger;
 use infra::mpmc::Channel;
@@ -150,6 +151,7 @@ fn app_serial(
     headless: bool,
     keymap: Keymap,
     autosave: Autosave,
+    hex_format: HexFormat,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -258,6 +260,7 @@ fn app_serial(
             capacity,
             latency,
             save_backup: autosave.backup,
+            hex_format,
         };
         let graphics_connections = GraphicsConnections::new(
             logger.clone().with_source("graphics".to_string()),
@@ -297,6 +300,7 @@ fn app_rtt(
     headless: bool,
     keymap: Keymap,
     autosave: Autosave,
+    hex_format: HexFormat,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -397,6 +401,7 @@ fn app_rtt(
             capacity,
             latency,
             save_backup: autosave.backup,
+            hex_format,
         };
         let graphics_connections = GraphicsConnections::new(
             logger.clone().with_source("graphics".to_string()),
@@ -521,6 +526,8 @@ fn main() -> Result<(), String> {
         let keymap = Keymap::from_config(config.shortcuts.as_ref())?;
         // Likewise `[history]`: config.toml > default (save everything).
         let autosave = Autosave::from_config(config.history.as_ref());
+        // And `hex_format`; an unknown value is fatal like any config typo.
+        let hex_format = HexFormat::from_config(config.hex_format.as_deref())?;
         let name = cli
             .name
             .as_deref()
@@ -532,6 +539,7 @@ fn main() -> Result<(), String> {
             Commands::Serial { port, baudrate } => match resolve_serial(port, baudrate)? {
                 Some((port, baudrate)) => app_serial(
                     capacity, tag_file, port, baudrate, latency, name, headless, keymap, autosave,
+                    hex_format,
                 ),
                 // User quit the picker before connecting.
                 None => Ok(()),
@@ -559,6 +567,7 @@ fn main() -> Result<(), String> {
             })? {
                 Some(setup) => app_rtt(
                     capacity, tag_file, setup, latency, name, headless, keymap, autosave,
+                    hex_format,
                 ),
                 None => Ok(()),
             },

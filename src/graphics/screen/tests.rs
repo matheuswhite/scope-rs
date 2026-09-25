@@ -5,12 +5,15 @@
 //! this still reaches its private fields and associated functions, which is
 //! what most of these tests assert on.
 
-use super::{Screen, ScreenMode, ScreenPosition, SearchHit, SearchMatcher};
+use super::{
+    HexFormat, Screen, ScreenDecoder, ScreenMode, ScreenPosition, SearchHit, SearchMatcher,
+};
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
 use crate::graphics::selection::Selection;
 use chrono::Local;
 use ratatui::layout::Rect;
 use ratatui::style::Color;
+use std::collections::BTreeSet;
 
 /// A buffer holding `n` lines at a capacity of `n` — so it is full, and the
 /// next line evicts the oldest. Each line is labelled with its ordinal
@@ -567,4 +570,101 @@ fn current_bookmark_is_highlighted_apart_from_other_bookmarks() {
     let current = style_of(true, true);
     assert_eq!(current.bg, Some(Color::Yellow));
     assert_eq!(current.fg, Some(Color::Black));
+}
+
+// Issue #239: the display format of bytes with no text form.
+
+#[test]
+fn hex_format_resolves_every_config_value() {
+    assert_eq!(HexFormat::from_config(None), Ok(HexFormat::Escaped));
+    assert_eq!(
+        HexFormat::from_config(Some("\\xaa")),
+        Ok(HexFormat::Escaped)
+    );
+    assert_eq!(
+        HexFormat::from_config(Some("0xAA")),
+        Ok(HexFormat::PrefixedUpper)
+    );
+    assert_eq!(
+        HexFormat::from_config(Some("0xaa")),
+        Ok(HexFormat::PrefixedLower)
+    );
+    assert_eq!(HexFormat::from_config(Some("AA")), Ok(HexFormat::Bare));
+}
+
+#[test]
+fn hex_format_rejects_an_unknown_value_listing_the_valid_ones() {
+    // Case matters: `0xAA` and `0xaa` are different formats.
+    let err = HexFormat::from_config(Some("0XAA")).unwrap_err();
+    assert!(err.contains("\"0XAA\""), "got: {err}");
+    for name in ["\"\\xaa\"", "\"0xAA\"", "\"0xaa\"", "\"AA\""] {
+        assert!(err.contains(name), "{name} missing from: {err}");
+    }
+}
+
+#[test]
+fn hex_format_rewrites_each_escape() {
+    let text = "Hi\\xa5\\x0f!";
+    assert_eq!(HexFormat::Escaped.apply(text), text);
+    assert_eq!(HexFormat::PrefixedUpper.apply(text), "Hi0xA50x0F!");
+    assert_eq!(HexFormat::PrefixedLower.apply(text), "Hi0xa50x0f!");
+    assert_eq!(HexFormat::Bare.apply(text), "HiA50F!");
+}
+
+#[test]
+fn hex_format_skips_what_is_not_an_escape() {
+    // A `\x` without two hex digits is text; the escape after it still counts.
+    assert_eq!(HexFormat::Bare.apply("\\xzz\\x01\\x+1"), "\\xzz01\\x+1");
+    // Multi-byte text around an escape is kept intact.
+    assert_eq!(HexFormat::PrefixedUpper.apply("é\\xffç"), "é0xFFç");
+    // A truncated escape at the end of the line is left alone.
+    assert_eq!(HexFormat::Bare.apply("ab\\x1"), "ab\\x1");
+}
+
+#[test]
+fn plain_text_strips_ansi_before_formatting() {
+    // The ANSI codes go first (they are parsed from the `\x1b[` form), then the
+    // remaining escapes take the format; `\n`/`\r` keep their own form.
+    let decoder = ScreenDecoder::new(HexFormat::PrefixedUpper);
+    let text = decoder.plain_text(b"\x1b[31mok\xa5\x1b[0m\x1b\r\n");
+    assert_eq!(text, "ok0xA50x1B\\r\\n");
+}
+
+/// The spans drawn for an RX line, without the timestamp in front.
+fn rendered(bytes: &[u8], hex_format: HexFormat) -> Vec<ratatui::text::Span<'static>> {
+    let decoder = ScreenDecoder::new(hex_format);
+    let line = BufferLine::new_rx(Local::now(), bytes.to_vec()).decode(decoder);
+    let lines = ScreenMode::Normal.to_lines(vec![line], None, &BTreeSet::new(), None, hex_format);
+    lines[0].spans[2..].to_vec()
+}
+
+#[test]
+fn rendered_line_matches_plain_text_in_every_format() {
+    // Selection columns come from the screen and the copy slices `plain_text`,
+    // so the two must agree glyph for glyph — `AA` is shorter than `\xaa`.
+    let bytes = b"\x1b[32mid:\x01\x1b[0m val=\xa5\xa6\r\n";
+    for format in [
+        HexFormat::Escaped,
+        HexFormat::PrefixedUpper,
+        HexFormat::PrefixedLower,
+        HexFormat::Bare,
+    ] {
+        let drawn = rendered(bytes, format)
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert_eq!(
+            drawn,
+            ScreenDecoder::new(format).plain_text(bytes),
+            "{format:?}"
+        );
+    }
+}
+
+#[test]
+fn formatted_bytes_keep_the_special_character_highlight() {
+    let spans = rendered(b"a\xa5b", HexFormat::Bare);
+    let texts = spans.iter().map(|s| s.content.as_ref()).collect::<Vec<_>>();
+    assert_eq!(texts, ["a", "A5", "b"]);
+    assert_ne!(spans[1].style, spans[0].style);
 }

@@ -523,6 +523,33 @@ fn hex_mixed_with_plain_text_renders_correctly() {
 }
 
 #[test]
+fn hex_format_from_config_changes_how_bytes_are_shown() {
+    // Issue #239: `hex_format` restyles the escaped bytes; `\r\n` keep their
+    // own form and plain text is untouched.
+    let mut tui = Tui::start_with(StartOpts {
+        config_toml: Some("hex_format = \"0xAA\"\n"),
+        ..Default::default()
+    });
+    tui.wait_until_ready();
+
+    tui.type_text("$a5 $a6 hi");
+    tui.press_enter();
+
+    let screen = tui.wait_for("0xA50xA6hi\\r\\n", SETTLE);
+    assert!(!screen.contains("\\xa5"), "{screen}");
+}
+
+#[test]
+fn invalid_hex_format_is_a_fatal_config_error() {
+    let tui = Tui::start_with(StartOpts {
+        config_toml: Some("hex_format = \"0XAA\"\n"),
+        ..Default::default()
+    });
+
+    tui.wait_for("Invalid hex_format", SETTLE);
+}
+
+#[test]
 fn double_dollar_sends_a_literal_dollar() {
     // Regression for issue #215: `$$` is the only way to send a raw `$`, since a
     // lone `$` is eaten as a hex marker (`$5` would be the byte 0x05).

@@ -57,7 +57,7 @@ impl Default for Screen {
             position: Default::default(),
             auto_scroll: true,
             mode: ScreenMode::Normal,
-            decoder: ScreenDecoder::Ascii,
+            decoder: ScreenDecoder::default(),
             size: Rect {
                 x: 0,
                 y: 0,
@@ -73,6 +73,13 @@ impl Default for Screen {
 }
 
 impl Screen {
+    pub fn new(hex_format: HexFormat) -> Self {
+        Self {
+            decoder: ScreenDecoder::new(hex_format),
+            ..Self::default()
+        }
+    }
+
     const CONTENT_OFFSET_X: usize = 2 + 12; /* border space + timestamp space */
     const CONTENT_OFFSET_Y: usize = 1;
 
@@ -349,6 +356,7 @@ impl Screen {
                 self.selection.as_ref(),
                 &self.bookmarks,
                 self.current_bookmark,
+                self.decoder.hex_format(),
             )
             .into_iter()
             .map(|line| Self::crop(line, self.position.column, max_width))
@@ -846,15 +854,20 @@ impl ScreenMode {
         selection: Option<&Selection>,
         bookmarks: &BTreeSet<u64>,
         current_bookmark: Option<u64>,
+        hex_format: HexFormat,
     ) -> Vec<Line<'static>> {
         match self {
             Self::Normal => cropped_lines
                 .into_iter()
-                .map(|line| self.to_normal_line(line, selection, bookmarks, current_bookmark))
+                .map(|line| {
+                    self.to_normal_line(line, selection, bookmarks, current_bookmark, hex_format)
+                })
                 .collect::<Vec<_>>(),
             Self::Search { .. } => cropped_lines
                 .into_iter()
-                .map(|line| self.to_search_line(line, selection, bookmarks, current_bookmark))
+                .map(|line| {
+                    self.to_search_line(line, selection, bookmarks, current_bookmark, hex_format)
+                })
                 .collect::<Vec<_>>(),
         }
     }
@@ -1006,6 +1019,7 @@ impl ScreenMode {
         selection: Option<&Selection>,
         bookmarks: &BTreeSet<u64>,
         current_bookmark: Option<u64>,
+        hex_format: HexFormat,
     ) -> Line<'static> {
         let is_reversed = selection.is_some_and(|sel| sel.is_inside(line.line));
         let is_bookmarked = bookmarks.contains(&line.id);
@@ -1028,7 +1042,7 @@ impl ScreenMode {
 
         let content = ANSI::decode(content)
             .into_iter()
-            .flat_map(|span| Self::highlight_special_characters(span))
+            .flat_map(|span| Self::highlight_special_characters(span, hex_format))
             .collect::<Vec<_>>();
         let content = Self::reverse_content(content, selection, line_number);
 
@@ -1041,6 +1055,7 @@ impl ScreenMode {
         selection: Option<&Selection>,
         bookmarks: &BTreeSet<u64>,
         current_bookmark: Option<u64>,
+        hex_format: HexFormat,
     ) -> Line<'static> {
         let is_reversed = selection.is_some_and(|sel| sel.is_inside(line.line));
         let is_bookmarked = bookmarks.contains(&line.id);
@@ -1052,13 +1067,13 @@ impl ScreenMode {
             is_current_bookmark,
         );
         let line_number = line.line;
-        let content = self.search_line(line);
+        let content = self.search_line(line, hex_format);
         let content = Self::reverse_content(content, selection, line_number);
 
         Line::from(timestamp.into_iter().chain(content).collect::<Vec<_>>())
     }
 
-    fn search_line(&self, line: BufferLine<String>) -> Vec<Span<'static>> {
+    fn search_line(&self, line: BufferLine<String>, hex_format: HexFormat) -> Vec<Span<'static>> {
         let Self::Search {
             current,
             entries,
@@ -1072,7 +1087,9 @@ impl ScreenMode {
         };
 
         let disable_style = Style::default().bg(Color::Reset).fg(Color::DarkGray);
-        let message = ANSI::remove_encoding(line.message);
+        // `ScreenDecoder::plain_text` of the line, from its already-decoded
+        // message.
+        let message = hex_format.apply(&ANSI::remove_encoding(line.message));
 
         if matcher.is_empty() {
             return vec![Span::styled(message, disable_style)];
@@ -1109,7 +1126,7 @@ impl ScreenMode {
 
             if is_chosen {
                 let chosen = Span::styled(matched, chosen_style);
-                output.extend(Self::highlight_special_characters(chosen));
+                output.extend(Self::highlight_special_characters(chosen, hex_format));
             } else {
                 output.push(Span::styled(matched, highlighted_style));
             }
@@ -1175,21 +1192,17 @@ impl ScreenMode {
         vec![Span::styled(timestamp, style), Span::raw(" ")]
     }
 
-    fn highlight_special_characters(span: Span) -> Vec<Span> {
+    fn highlight_special_characters(span: Span, hex_format: HexFormat) -> Vec<Span> {
         let mut result = vec![];
 
         let iter = span.content.to_special_char(|string| {
             let mut least_pos = usize::MAX;
             let mut found_pattern = None;
 
-            if let Some(pos) = string.find("\\x")
-                && let Some(hex) = string.get(pos + 2..pos + 4)
-                && u8::from_str_radix(hex, 16).is_ok()
-                && pos < least_pos
-            {
+            if let Some((pos, _)) = find_escape(string) {
                 least_pos = pos;
                 let pos = string[..pos].chars().count();
-                found_pattern = Some((pos, "\\x00".chars().count()).into());
+                found_pattern = Some((pos, ESCAPE_LEN).into());
             }
 
             if let Some(start) = string.find("\\n")
@@ -1217,7 +1230,7 @@ impl ScreenMode {
                 }
                 SpecialCharItem::Special(special, _) => {
                     result.push(Span::styled(
-                        special,
+                        hex_format.apply(&special),
                         span.style.fg(Palette::ascent_fg(
                             span.style.bg.unwrap_or(Color::Reset),
                             span.style.fg.unwrap_or(Color::Reset),
@@ -1231,24 +1244,54 @@ impl ScreenMode {
     }
 }
 
-#[derive(Clone, Copy)]
-pub enum ScreenDecoder {
+#[derive(Clone, Copy, Default)]
+enum Charset {
+    #[default]
     Ascii,
     #[allow(unused)]
     Utf8,
 }
 
+/// Turns a line's bytes into text. A byte with no text form is escaped as
+/// `\xNN` by [`Self::decode`] — the form [`ANSI`] finds `\x1b[` sequences in —
+/// and only rendered in the user's [`HexFormat`] once the ANSI codes are gone,
+/// by [`Self::plain_text`].
+#[derive(Clone, Copy, Default)]
+pub struct ScreenDecoder {
+    charset: Charset,
+    hex_format: HexFormat,
+}
+
 impl ScreenDecoder {
-    fn name(&self) -> &str {
-        match self {
-            Self::Ascii => "ASCII",
-            Self::Utf8 => "UTF-8",
+    pub fn new(hex_format: HexFormat) -> Self {
+        Self {
+            charset: Charset::default(),
+            hex_format,
         }
     }
 
+    fn name(&self) -> &str {
+        match self.charset {
+            Charset::Ascii => "ASCII",
+            Charset::Utf8 => "UTF-8",
+        }
+    }
+
+    pub fn hex_format(&self) -> HexFormat {
+        self.hex_format
+    }
+
+    /// The line as the screen shows it: decoded, ANSI codes stripped and the
+    /// escaped bytes in the configured [`HexFormat`]. Search, the filter and
+    /// the clipboard all work on this, so their columns match what is drawn.
+    pub fn plain_text(&self, data: &[u8]) -> String {
+        self.hex_format
+            .apply(&ANSI::remove_encoding(self.decode(data)))
+    }
+
     pub fn decode(&self, data: &[u8]) -> String {
-        match self {
-            Self::Ascii => data
+        match self.charset {
+            Charset::Ascii => data
                 .iter()
                 .map(|&b| match b {
                     b'\n' => "\\n".to_string(),
@@ -1259,7 +1302,7 @@ impl ScreenDecoder {
                 })
                 .collect::<Vec<_>>()
                 .join(""),
-            Self::Utf8 => {
+            Charset::Utf8 => {
                 let mut result = String::new();
                 let mut i = 0;
 
@@ -1304,6 +1347,102 @@ impl ScreenDecoder {
             }
         }
     }
+}
+
+/// How a byte with no text form is displayed (issue #239), chosen by
+/// `hex_format` in config.toml. Every format but the default changes only the
+/// look of the escape, never what it stands for.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum HexFormat {
+    /// `\xaa`, the form the decoder produces.
+    #[default]
+    Escaped,
+    /// `0xAA`
+    PrefixedUpper,
+    /// `0xaa`
+    PrefixedLower,
+    /// `AA`
+    Bare,
+}
+
+impl HexFormat {
+    /// The config values, each written as the byte `0xAA` would look.
+    const NAMES: [(&str, Self); 4] = [
+        ("\\xaa", Self::Escaped),
+        ("0xAA", Self::PrefixedUpper),
+        ("0xaa", Self::PrefixedLower),
+        ("AA", Self::Bare),
+    ];
+
+    /// Resolve `hex_format` from config.toml, an omitted key keeping the
+    /// default. An unknown value is a fatal config error.
+    pub fn from_config(value: Option<&str>) -> Result<Self, String> {
+        let Some(value) = value else {
+            return Ok(Self::default());
+        };
+
+        Self::NAMES
+            .iter()
+            .find(|(name, _)| *name == value)
+            .map(|(_, format)| *format)
+            .ok_or_else(|| {
+                let names = Self::NAMES
+                    .iter()
+                    .map(|(name, _)| format!("\"{name}\""))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("Invalid hex_format \"{value}\" in config.toml: expected one of {names}")
+            })
+    }
+
+    fn format(&self, byte: u8) -> String {
+        match self {
+            Self::Escaped => format!("\\x{byte:02x}"),
+            Self::PrefixedUpper => format!("0x{byte:02X}"),
+            Self::PrefixedLower => format!("0x{byte:02x}"),
+            Self::Bare => format!("{byte:02X}"),
+        }
+    }
+
+    /// Rewrite every `\xNN` escape in `text` in this format.
+    pub fn apply(&self, text: &str) -> String {
+        if *self == Self::Escaped {
+            return text.to_string();
+        }
+
+        let mut result = String::with_capacity(text.len());
+        let mut rest = text;
+        while let Some((pos, byte)) = find_escape(rest) {
+            result.push_str(&rest[..pos]);
+            result.push_str(&self.format(byte));
+            rest = &rest[pos + ESCAPE_LEN..];
+        }
+        result.push_str(rest);
+
+        result
+    }
+}
+
+/// Length of a `\xNN` escape, in bytes and in chars (it is all ASCII).
+const ESCAPE_LEN: usize = 4;
+
+/// Byte offset and value of the first `\xNN` escape in `text`. Shared by the
+/// highlighting and [`HexFormat::apply`], so the spans drawn and the text that
+/// search and copy see agree on every escape.
+fn find_escape(text: &str) -> Option<(usize, u8)> {
+    let mut search_from = 0;
+
+    while let Some(rel) = text[search_from..].find("\\x") {
+        let pos = search_from + rel;
+        if let Some(hex) = text.get(pos + 2..pos + ESCAPE_LEN)
+            && hex.bytes().all(|b| b.is_ascii_hexdigit())
+        {
+            return u8::from_str_radix(hex, 16).ok().map(|byte| (pos, byte));
+        }
+        search_from = pos + 2;
+    }
+
+    None
 }
 
 #[cfg(test)]
