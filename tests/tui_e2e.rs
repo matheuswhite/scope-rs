@@ -193,6 +193,10 @@ impl Tui {
         cmd.env("TERM", "xterm-256color");
         cmd.env("HOME", tmp.path());
         cmd.env("XDG_CONFIG_HOME", &xdg);
+        // `.scope_history` lives in `dirs::data_dir()`, which on Linux honors
+        // `XDG_DATA_HOME` before falling back to `$HOME/.local/share`; pin it
+        // so a runner exporting its own can't leak the test history out.
+        cmd.env("XDG_DATA_HOME", xdg.join("data"));
 
         let child = pair.slave.spawn_command(cmd).expect("spawn scope");
         drop(pair.slave);
@@ -233,11 +237,27 @@ impl Tui {
     /// plugins`), resolved to the platform-correct root under the isolated temp
     /// config tree. Used to seed or inspect the install manifest.
     fn plugins_dir(&self) -> PathBuf {
+        self.config_dir().join("plugins")
+    }
+
+    /// `<config_dir>/scope` under the isolated temp tree (config.toml, the
+    /// crash-recovery `backup/`, the plugins).
+    fn config_dir(&self) -> PathBuf {
         #[cfg(target_os = "macos")]
         let base = self._tmp.path().join("Library").join("Application Support");
         #[cfg(not(target_os = "macos"))]
         let base = self._tmp.path().join("xdg");
-        base.join("scope").join("plugins")
+        base.join("scope")
+    }
+
+    /// `<data_dir>/scope` under the isolated temp tree (`.scope_history`). On
+    /// macOS the data and config dirs are the same directory.
+    fn data_dir(&self) -> PathBuf {
+        #[cfg(target_os = "macos")]
+        let base = self._tmp.path().join("Library").join("Application Support");
+        #[cfg(not(target_os = "macos"))]
+        let base = self._tmp.path().join("xdg").join("data");
+        base.join("scope")
     }
 
     /// The currently rendered screen as plain text (like `tmux capture-pane -p`).
@@ -1039,6 +1059,54 @@ fn custom_shortcut_from_config_remaps_action() {
     // The new key works: Ctrl+G (0x07) starts a recording.
     tui.type_text("\x07"); // Ctrl+G
     tui.wait_for("Recording content on", SETTLE);
+}
+
+/// Send one line, then report whether the command history and the
+/// crash-recovery backup reached the disk within `grace` (issue #247).
+fn autosaved_files(config_toml: Option<&'static str>, grace: Duration) -> (bool, bool) {
+    let mut tui = Tui::start_with(StartOpts {
+        config_toml,
+        ..Default::default()
+    });
+    tui.wait_until_ready();
+
+    tui.send_line("probe");
+    tui.wait_for("probe", SETTLE);
+
+    let history = tui.data_dir().join(".scope_history");
+    let backup = tui.config_dir().join("backup");
+    let has_backup = || {
+        std::fs::read_dir(&backup).is_ok_and(|mut entries| {
+            entries.any(|e| e.is_ok_and(|e| e.path().extension().is_some_and(|x| x == "bkp")))
+        })
+    };
+
+    // The history is appended synchronously on Enter, but the backup is
+    // written by its own worker thread, so give both the same grace period.
+    let start = Instant::now();
+    while start.elapsed() < grace && !(history.exists() && has_backup()) {
+        thread::sleep(Duration::from_millis(50));
+    }
+
+    (history.exists(), has_backup())
+}
+
+#[test]
+fn history_and_backup_are_autosaved_by_default() {
+    // Control for the test below: proves the paths it checks are the ones the
+    // app writes, so an absence there really means "not saved".
+    assert_eq!(autosaved_files(None, SETTLE), (true, true));
+}
+
+#[test]
+fn history_table_disables_autosave() {
+    // A negative can only be observed by waiting; the control above shows the
+    // backup lands well within this when it is enabled.
+    let config = "[history]\nsave_commands = false\nsave_backup = false\n";
+    assert_eq!(
+        autosaved_files(Some(config), Duration::from_secs(2)),
+        (false, false)
+    );
 }
 
 #[test]

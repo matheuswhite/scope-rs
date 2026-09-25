@@ -400,7 +400,7 @@ Global options (given before the command):
 
 ## Configuration File
 
-The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It supports the `capacity` and `tag_file` fields and an optional `[shortcuts]` table:
+The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It supports the `capacity` and `tag_file` fields and the optional `[shortcuts]` and `[history]` tables:
 
 ```toml
 capacity = 5000
@@ -411,9 +411,22 @@ record        = "Ctrl+G"   # move record off Ctrl+R
 next_bookmark = "F2"
 prev_bookmark = "F3"
 # every other action keeps its default
+
+[history]
+save_commands = false   # don't persist the command-bar history
+save_backup   = false   # don't write the crash-recovery backup
 ```
 
 Values resolve as **CLI flag > `config.toml` > built-in default**, so a flag always wins over the file, and the file wins over the defaults. A missing file (or a missing field) just falls back to the defaults; a malformed file or an unknown key is reported as an error. Paths are used verbatim — `~` and environment variables are **not** expanded, so use an absolute path.
+
+### Disabling history autosave
+
+Besides the session record you save explicitly (`Ctrl+S`, `!record`), scope writes two files on its own. The `[history]` table turns each one off; both default to `true`, and there is no CLI flag, so they resolve as `config.toml` > built-in default:
+
+| Key | File | When `false` |
+|---|---|---|
+| `save_commands` | `<data_dir>/scope/.scope_history` (e.g. `~/.local/share/scope/.scope_history`) | The command-bar history is neither loaded nor written; `Up`/`Down` still recall what you typed during the current run. |
+| `save_backup` | `<config_dir>/scope/backup/<session>.txt.bkp` | The session (RX, TX and logs) is no longer mirrored for crash recovery, so anything you didn't save explicitly is lost when scope exits. |
 
 ### Custom shortcuts
 

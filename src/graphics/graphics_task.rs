@@ -58,6 +58,9 @@ pub struct GraphicsConfig {
     pub storage_base_filename: String,
     pub capacity: usize,
     pub latency: u64,
+    /// Mirror the session into the crash-recovery `.bkp` (`[history]
+    /// save_backup` in config.toml).
+    pub save_backup: bool,
 }
 
 pub struct GraphicsConnections {
@@ -1170,10 +1173,14 @@ impl GraphicsConnections {
         interface_shared: Shared<InterfaceShared>,
         config: GraphicsConfig,
     ) -> Self {
-        let backup = Backup::new(
-            backup_path(&format!("{}.bkp", config.storage_base_filename)),
-            logger.clone(),
-        );
+        let backup = if config.save_backup {
+            Backup::new(
+                backup_path(&format!("{}.bkp", config.storage_base_filename)),
+                logger.clone(),
+            )
+        } else {
+            Backup::disabled()
+        };
 
         Self {
             logger,

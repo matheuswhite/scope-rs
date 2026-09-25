@@ -17,7 +17,7 @@ use crate::interfaces::{InterfaceCommand, InterfaceTask, InterfaceType};
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::aot::{Shell, generate};
 use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
-use infra::config::Config;
+use infra::config::{Autosave, Config};
 use infra::logger::Logger;
 use infra::mpmc::Channel;
 use infra::session;
@@ -149,6 +149,7 @@ fn app_serial(
     name: Option<String>,
     headless: bool,
     keymap: Keymap,
+    autosave: Autosave,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -203,6 +204,7 @@ fn app_serial(
         InterfaceType::Serial,
         headless,
         keymap,
+        autosave.commands,
     );
 
     let serial_if = InterfaceTask::spawn_serial_interface(
@@ -255,6 +257,7 @@ fn app_serial(
             storage_base_filename,
             capacity,
             latency,
+            save_backup: autosave.backup,
         };
         let graphics_connections = GraphicsConnections::new(
             logger.clone().with_source("graphics".to_string()),
@@ -293,6 +296,7 @@ fn app_rtt(
     name: Option<String>,
     headless: bool,
     keymap: Keymap,
+    autosave: Autosave,
 ) -> Result<(), String> {
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
@@ -341,6 +345,7 @@ fn app_rtt(
         InterfaceType::Rtt,
         headless,
         keymap,
+        autosave.commands,
     );
 
     let rtt_if = InterfaceTask::spawn_rtt_interface(
@@ -391,6 +396,7 @@ fn app_rtt(
             storage_base_filename,
             capacity,
             latency,
+            save_backup: autosave.backup,
         };
         let graphics_connections = GraphicsConnections::new(
             logger.clone().with_source("graphics".to_string()),
@@ -513,6 +519,8 @@ fn main() -> Result<(), String> {
         // A bad key string, unknown action, reserved key or duplicate binding
         // is fatal, joining the single `[ERR]` funnel below.
         let keymap = Keymap::from_config(config.shortcuts.as_ref())?;
+        // Likewise `[history]`: config.toml > default (save everything).
+        let autosave = Autosave::from_config(config.history.as_ref());
         let name = cli
             .name
             .as_deref()
@@ -523,7 +531,7 @@ fn main() -> Result<(), String> {
         match cli.command {
             Commands::Serial { port, baudrate } => match resolve_serial(port, baudrate)? {
                 Some((port, baudrate)) => app_serial(
-                    capacity, tag_file, port, baudrate, latency, name, headless, keymap,
+                    capacity, tag_file, port, baudrate, latency, name, headless, keymap, autosave,
                 ),
                 // User quit the picker before connecting.
                 None => Ok(()),
@@ -549,7 +557,9 @@ fn main() -> Result<(), String> {
                     .or_else(|| elf.map(ControlBlock::Elf)),
                 probe_speed: speed,
             })? {
-                Some(setup) => app_rtt(capacity, tag_file, setup, latency, name, headless, keymap),
+                Some(setup) => app_rtt(
+                    capacity, tag_file, setup, latency, name, headless, keymap, autosave,
+                ),
                 None => Ok(()),
             },
             // Handled right after `Cli::parse()`, before this closure, so a

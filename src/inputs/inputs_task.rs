@@ -1912,16 +1912,23 @@ impl InputsConnections {
         if_type: InterfaceType,
         headless: bool,
         keymap: Keymap,
+        save_history: bool,
     ) -> Self {
-        let history = match PersistHistory::new(".scope_history") {
-            Ok(h) => AnyHistory::Persist(h),
-            Err(err) => {
-                warning!(
-                    logger,
-                    "History persistence failed. Using in-memory fallback [{}]",
-                    err
-                );
-                AnyHistory::Base(History::new())
+        // With `save_commands = false` the history never touches the disk —
+        // not even to load the entries of earlier runs.
+        let history = if !save_history {
+            AnyHistory::Base(History::new())
+        } else {
+            match PersistHistory::new(".scope_history") {
+                Ok(h) => AnyHistory::Persist(h),
+                Err(err) => {
+                    warning!(
+                        logger,
+                        "History persistence failed. Using in-memory fallback [{}]",
+                        err
+                    );
+                    AnyHistory::Base(History::new())
+                }
             }
         };
         Self {

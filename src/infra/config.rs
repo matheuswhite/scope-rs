@@ -39,6 +39,43 @@ pub struct Config {
     /// keys, duplicate bindings) are rejected by `Keymap::from_config`.
     #[serde(default)]
     pub shortcuts: Option<BTreeMap<String, String>>,
+    /// Optional `[history]` table switching off the files scope writes on its
+    /// own, without the user asking (issue #247). There is no CLI flag, so
+    /// precedence is config.toml > built-in default (everything saved).
+    #[serde(default)]
+    pub history: Option<HistoryConfig>,
+}
+
+/// The `[history]` table. Each key covers one file that is written
+/// automatically; an explicit save (`Ctrl+S`) or `!record` is never affected.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryConfig {
+    /// Persist the command-bar history to `<data_dir>/scope/.scope_history`,
+    /// so `Up`/`Down` reach commands from earlier runs. When off, the history
+    /// still works for the current run, it just lives in memory only.
+    pub save_commands: Option<bool>,
+    /// Mirror the session (RX, TX and logs) into the crash-recovery
+    /// `<config_dir>/scope/backup/<session>.txt.bkp`.
+    pub save_backup: Option<bool>,
+}
+
+/// What scope may write to disk on its own, resolved from `[history]`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Autosave {
+    pub commands: bool,
+    pub backup: bool,
+}
+
+impl Autosave {
+    /// Resolve the `[history]` table, an omitted table or key keeping the
+    /// built-in default of saving.
+    pub fn from_config(history: Option<&HistoryConfig>) -> Self {
+        Self {
+            commands: history.and_then(|h| h.save_commands).unwrap_or(true),
+            backup: history.and_then(|h| h.save_backup).unwrap_or(true),
+        }
+    }
 }
 
 impl Config {
@@ -143,6 +180,67 @@ mod tests {
             shortcuts.get("next_bookmark").map(String::as_str),
             Some("F2")
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn history_defaults_to_saving_everything() {
+        let path = temp_path("history_default");
+        std::fs::write(&path, "capacity = 100\n").unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+        assert!(config.history.is_none());
+        assert_eq!(
+            Autosave::from_config(config.history.as_ref()),
+            Autosave {
+                commands: true,
+                backup: true,
+            }
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn history_keys_switch_off_each_file() {
+        let path = temp_path("history_off");
+        std::fs::write(&path, "[history]\nsave_commands = false\n").unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+        // An omitted key keeps its default, independently of the other one.
+        assert_eq!(
+            Autosave::from_config(config.history.as_ref()),
+            Autosave {
+                commands: false,
+                backup: true,
+            }
+        );
+
+        std::fs::write(
+            &path,
+            "[history]\nsave_commands = false\nsave_backup = false\n",
+        )
+        .unwrap();
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(
+            Autosave::from_config(config.history.as_ref()),
+            Autosave {
+                commands: false,
+                backup: false,
+            }
+        );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn unknown_history_key_is_rejected() {
+        let path = temp_path("history_unknown");
+        std::fs::write(&path, "[history]\nlog_read = false\n").unwrap();
+
+        let err = Config::load_from(&path).unwrap_err();
+        assert!(err.contains("Cannot parse config file"), "got: {err}");
 
         let _ = std::fs::remove_file(&path);
     }
