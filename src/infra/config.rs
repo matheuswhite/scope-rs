@@ -39,6 +39,11 @@ pub struct Config {
     /// keys, duplicate bindings) are rejected by `Keymap::from_config`.
     #[serde(default)]
     pub shortcuts: Option<BTreeMap<String, String>>,
+    /// How a byte with no text form is displayed (issue #239): `"\\xaa"` (the
+    /// default), `"0xAA"`, `"0xaa"` or `"AA"`. Kept a plain string so the value
+    /// vocabulary lives with the renderer ([`crate::graphics::screen::HexFormat`]),
+    /// which rejects an unknown one. There is no CLI flag.
+    pub hex_format: Option<String>,
     /// Optional `[history]` table switching off the files scope writes on its
     /// own, without the user asking (issue #247). There is no CLI flag, so
     /// precedence is config.toml > built-in default (everything saved).
@@ -180,6 +185,23 @@ mod tests {
             shortcuts.get("next_bookmark").map(String::as_str),
             Some("F2")
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn parses_hex_format() {
+        let path = temp_path("hex_format");
+        std::fs::write(&path, "hex_format = \"0xAA\"\n").unwrap();
+
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(config.hex_format.as_deref(), Some("0xAA"));
+
+        // The documented spelling of the default: a literal string, where the
+        // backslash needs no escaping.
+        std::fs::write(&path, "hex_format = '\\xaa'\n").unwrap();
+        let config = Config::load_from(&path).unwrap();
+        assert_eq!(config.hex_format.as_deref(), Some("\\xaa"));
 
         let _ = std::fs::remove_file(&path);
     }

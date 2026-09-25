@@ -400,11 +400,12 @@ Global options (given before the command):
 
 ## Configuration File
 
-The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It supports the `capacity` and `tag_file` fields and the optional `[shortcuts]` and `[history]` tables:
+The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It supports the `capacity`, `tag_file` and `hex_format` fields and the optional `[shortcuts]` and `[history]` tables:
 
 ```toml
 capacity = 5000
 tag_file = "/home/user/.config/scope/tags.yml"
+hex_format = "0xAA"   # how non-printable bytes are shown
 
 [shortcuts]
 record        = "Ctrl+G"   # move record off Ctrl+R
@@ -418,6 +419,19 @@ save_backup   = false   # don't write the crash-recovery backup
 ```
 
 Values resolve as **CLI flag > `config.toml` > built-in default**, so a flag always wins over the file, and the file wins over the defaults. A missing file (or a missing field) just falls back to the defaults; a malformed file or an unknown key is reported as an error. Paths are used verbatim — `~` and environment variables are **not** expanded, so use an absolute path.
+
+### Hex format
+
+A byte that has no printable form (outside `0x20`–`0x7e`, apart from `\n`, `\r` and tab) is shown as an escaped hex value, highlighted in an accent colour. `hex_format` picks how it looks; each value is written the way the byte `0xAA` would appear:
+
+| `hex_format` | The bytes `A5 A6` show as |
+|---|---|
+| `'\xaa'` (default) | `\xa5\xa6` |
+| `"0xAA"` | `0xA50xA6` |
+| `"0xaa"` | `0xa50xa6` |
+| `"AA"` | `A5A6` |
+
+Write the default as a TOML literal string (`'\xaa'`) or escape the backslash (`"\\xaa"`). Any other value is reported as an error. The format also applies to search, `!filter`/`!mute` patterns and copied text, since they all work on what is on screen. Saved session files (`Ctrl+S`, `!record`) always keep the `\xaa` form. There is no CLI flag.
 
 ### Disabling history autosave
 
