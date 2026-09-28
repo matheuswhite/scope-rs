@@ -1157,6 +1157,9 @@ impl RecvHooks {
 }
 
 impl PluginEngineConnections {
+    // One argument per channel end or setting `main` wires in; bundling them
+    // would only move the same list into a struct literal.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         logger: Logger,
         tx_producer: Producer<Arc<TimedBytes>>,

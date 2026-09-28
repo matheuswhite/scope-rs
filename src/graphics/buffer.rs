@@ -1,7 +1,6 @@
 use crate::{
     graphics::{
         Serialize,
-        ansi::ANSI,
         screen::ScreenDecoder,
         selection::{Selection, SelectionPosition},
     },
@@ -65,7 +64,7 @@ impl Buffer {
             // codes (they paint color, not glyphs). Slicing the still-encoded
             // string would misalign every column past an ANSI code and leak the
             // raw `\x1b[..m` text into the clipboard (issue #180).
-            let content = ANSI::remove_encoding(decoder.decode(&line.message));
+            let content = decoder.plain_text(&line.message);
             let content = content.as_str().chars();
 
             match selection.selection_position(line.line) {
@@ -227,7 +226,7 @@ impl BufferLine<LineBytes> {
 
 impl Serialize for BufferLine<LineBytes> {
     fn serialize(&self) -> String {
-        let message = ScreenDecoder::Ascii.decode(&self.message);
+        let message = ScreenDecoder::default().decode(&self.message);
 
         if let Some(level) = self.level {
             let log_level = match level {
@@ -315,9 +314,24 @@ mod tests {
         let buffer = buffer_from(&[b"Hello \x1b[31mRed\x1b[0m World"]);
         let selection = Selection::new(pos(0, 6), pos(0, 9));
 
-        let content = buffer.get_selection_content(&selection, ScreenDecoder::Ascii);
+        let content = buffer.get_selection_content(&selection, ScreenDecoder::default());
 
         assert_eq!(content, "Red");
+    }
+
+    // Issue #239: the copy is what the screen shows, so the selection columns
+    // are counted over the formatted bytes.
+    #[test]
+    fn selection_copies_bytes_in_the_display_format() {
+        use crate::graphics::screen::HexFormat;
+
+        // Rendered as "idA5A6"; "A5A6" starts at visible column 2.
+        let buffer = buffer_from(&[b"id\xa5\xa6"]);
+        let selection = Selection::new(pos(0, 2), pos(0, 6));
+
+        let content = buffer.get_selection_content(&selection, ScreenDecoder::new(HexFormat::Bare));
+
+        assert_eq!(content, "A5A6");
     }
 
     #[test]
@@ -326,7 +340,7 @@ mod tests {
         let buffer = buffer_from(&[b"\x1b[32mgreen\x1b[0m"]);
         let selection = Selection::new(pos(0, 0), pos(0, 5));
 
-        let content = buffer.get_selection_content(&selection, ScreenDecoder::Ascii);
+        let content = buffer.get_selection_content(&selection, ScreenDecoder::default());
 
         assert_eq!(content, "green");
     }
@@ -401,7 +415,7 @@ mod tests {
         // Top line from column 1, bottom line up to column 2.
         let selection = Selection::new(pos(0, 1), pos(1, 2));
 
-        let content = buffer.get_selection_content(&selection, ScreenDecoder::Ascii);
+        let content = buffer.get_selection_content(&selection, ScreenDecoder::default());
 
         assert_eq!(content, "ooba");
     }

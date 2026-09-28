@@ -381,11 +381,10 @@ impl SerialInterface {
             && let Some(usb_id) = &usb_id
             && let Some(new_port) = Self::find_renamed_port(&connected_port, usb_id)
             && new_port != connected_port
+            && let Ok(ser) = open(&new_port)
         {
-            if let Ok(ser) = open(&new_port) {
-                connected_port = new_port;
-                connect_res = Ok(ser);
-            }
+            connected_port = new_port;
+            connect_res = Ok(ser);
         }
 
         match connect_res {

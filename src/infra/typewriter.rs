@@ -53,7 +53,7 @@ impl TypeWriter {
             .open(self.get_filename())
             .map_err(|err| err.to_string())?;
 
-        let content = self.contents.drain(..).collect::<Vec<_>>().join("");
+        let content = std::mem::take(&mut self.contents).join("");
 
         file.write_all(content.as_bytes())
             .map_err(|err| err.to_string())?;

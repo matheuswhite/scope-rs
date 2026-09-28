@@ -11,6 +11,7 @@
 //! present-but-unreadable or malformed file is a hard error so a typo doesn't
 //! silently do nothing.
 
+use crate::graphics::screen::HexFormat;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -39,6 +40,12 @@ pub struct Config {
     /// keys, duplicate bindings) are rejected by `Keymap::from_config`.
     #[serde(default)]
     pub shortcuts: Option<BTreeMap<String, String>>,
+    /// How a byte with no text form is displayed (issue #239), by name:
+    /// `escaped` (the default, `\xaa`), `prefixed_upper` (`0xAA`),
+    /// `prefixed_lower` (`0xaa`) or `bare` (`AA`). Parsed straight into the
+    /// renderer's [`HexFormat`], so an unknown name gets the same located error
+    /// as an unknown key. There is no CLI flag.
+    pub hex_format: Option<HexFormat>,
     /// Optional `[history]` table switching off the files scope writes on its
     /// own, without the user asking (issue #247). There is no CLI flag, so
     /// precedence is config.toml > built-in default (everything saved).
@@ -180,6 +187,43 @@ mod tests {
             shortcuts.get("next_bookmark").map(String::as_str),
             Some("F2")
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn parses_every_hex_format_name() {
+        let path = temp_path("hex_format");
+        for (name, format) in [
+            ("escaped", HexFormat::Escaped),
+            ("prefixed_upper", HexFormat::PrefixedUpper),
+            ("prefixed_lower", HexFormat::PrefixedLower),
+            ("bare", HexFormat::Bare),
+        ] {
+            std::fs::write(&path, format!("hex_format = \"{name}\"\n")).unwrap();
+            let config = Config::load_from(&path).unwrap();
+            assert_eq!(config.hex_format, Some(format), "{name}");
+        }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rejects_an_unknown_hex_format_with_its_location_and_the_valid_names() {
+        let path = temp_path("hex_format_bad");
+        // A sample of the format rather than its name is the likely mistake.
+        std::fs::write(&path, "capacity = 10\nhex_format = \"0xAA\"\n").unwrap();
+
+        let err = Config::load_from(&path).unwrap_err();
+        assert!(err.contains(&path.display().to_string()), "got: {err}");
+        assert!(err.contains("line 2"), "got: {err}");
+        assert!(err.contains("0xAA"), "got: {err}");
+        for name in ["escaped", "prefixed_upper", "prefixed_lower", "bare"] {
+            assert!(
+                err.contains(&format!("`{name}`")),
+                "{name} missing from: {err}"
+            );
+        }
 
         let _ = std::fs::remove_file(&path);
     }
