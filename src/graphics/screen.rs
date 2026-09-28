@@ -20,6 +20,7 @@ use ratatui::{
     },
 };
 use regex::{Regex, RegexBuilder};
+use serde::Deserialize;
 use std::collections::BTreeSet;
 
 pub struct Screen {
@@ -1202,7 +1203,7 @@ impl ScreenMode {
             if let Some((pos, _)) = find_escape(string) {
                 least_pos = pos;
                 let pos = string[..pos].chars().count();
-                found_pattern = Some((pos, ESCAPE_LEN).into());
+                found_pattern = Some((pos, RAW_ESCAPE_LEN).into());
             }
 
             if let Some(start) = string.find("\\n")
@@ -1350,9 +1351,15 @@ impl ScreenDecoder {
 }
 
 /// How a byte with no text form is displayed (issue #239), chosen by
-/// `hex_format` in config.toml. Every format but the default changes only the
-/// look of the escape, never what it stands for.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// `hex_format` in config.toml by its snake_case name (`escaped`,
+/// `prefixed_upper`, `prefixed_lower`, `bare`). Every format but the default
+/// changes only the look of the escape, never what it stands for.
+///
+/// Deserialized straight from the config, so an unknown name is reported by
+/// the TOML parser like any other typo: with the file, line and column, and
+/// the list of valid names.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum HexFormat {
     /// `\xaa`, the form the decoder produces.
     #[default]
@@ -1366,35 +1373,6 @@ pub enum HexFormat {
 }
 
 impl HexFormat {
-    /// The config values, each written as the byte `0xAA` would look.
-    const NAMES: [(&str, Self); 4] = [
-        ("\\xaa", Self::Escaped),
-        ("0xAA", Self::PrefixedUpper),
-        ("0xaa", Self::PrefixedLower),
-        ("AA", Self::Bare),
-    ];
-
-    /// Resolve `hex_format` from config.toml, an omitted key keeping the
-    /// default. An unknown value is a fatal config error.
-    pub fn from_config(value: Option<&str>) -> Result<Self, String> {
-        let Some(value) = value else {
-            return Ok(Self::default());
-        };
-
-        Self::NAMES
-            .iter()
-            .find(|(name, _)| *name == value)
-            .map(|(_, format)| *format)
-            .ok_or_else(|| {
-                let names = Self::NAMES
-                    .iter()
-                    .map(|(name, _)| format!("\"{name}\""))
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                format!("Invalid hex_format \"{value}\" in config.toml: expected one of {names}")
-            })
-    }
-
     fn format(&self, byte: u8) -> String {
         match self {
             Self::Escaped => format!("\\x{byte:02x}"),
@@ -1415,7 +1393,7 @@ impl HexFormat {
         while let Some((pos, byte)) = find_escape(rest) {
             result.push_str(&rest[..pos]);
             result.push_str(&self.format(byte));
-            rest = &rest[pos + ESCAPE_LEN..];
+            rest = &rest[pos + RAW_ESCAPE_LEN..];
         }
         result.push_str(rest);
 
@@ -1423,8 +1401,13 @@ impl HexFormat {
     }
 }
 
-/// Length of a `\xNN` escape, in bytes and in chars (it is all ASCII).
-const ESCAPE_LEN: usize = 4;
+/// Length of a `\xNN` escape as [`ScreenDecoder::decode`] emits it, in bytes
+/// and in chars (it is all ASCII). This is the *input* side of every
+/// [`HexFormat`]: the escape is always found in this form and only then
+/// rewritten, so the formatted length (2 for `bare`, 4 for the others) never
+/// enters the search — the rewritten text is measured afresh wherever it is
+/// used.
+const RAW_ESCAPE_LEN: usize = 4;
 
 /// Byte offset and value of the first `\xNN` escape in `text`. Shared by the
 /// highlighting and [`HexFormat::apply`], so the spans drawn and the text that
@@ -1434,7 +1417,7 @@ fn find_escape(text: &str) -> Option<(usize, u8)> {
 
     while let Some(rel) = text[search_from..].find("\\x") {
         let pos = search_from + rel;
-        if let Some(hex) = text.get(pos + 2..pos + ESCAPE_LEN)
+        if let Some(hex) = text.get(pos + 2..pos + RAW_ESCAPE_LEN)
             && hex.bytes().all(|b| b.is_ascii_hexdigit())
         {
             return u8::from_str_radix(hex, 16).ok().map(|byte| (pos, byte));

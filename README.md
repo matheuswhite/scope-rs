@@ -405,7 +405,7 @@ The options above can also be set in an optional `config.toml` placed in your pl
 ```toml
 capacity = 5000
 tag_file = "/home/user/.config/scope/tags.yml"
-hex_format = "0xAA"   # how non-printable bytes are shown
+hex_format = "prefixed_upper"   # how non-printable bytes are shown (0xAA)
 
 [shortcuts]
 record        = "Ctrl+G"   # move record off Ctrl+R
@@ -422,16 +422,16 @@ Values resolve as **CLI flag > `config.toml` > built-in default**, so a flag alw
 
 ### Hex format
 
-A byte that has no printable form (outside `0x20`–`0x7e`, apart from `\n`, `\r` and tab) is shown as an escaped hex value, highlighted in an accent colour. `hex_format` picks how it looks; each value is written the way the byte `0xAA` would appear:
+A byte that has no printable form (outside `0x20`–`0x7e`, apart from `\n`, `\r` and tab) is shown as an escaped hex value, highlighted in an accent colour. `hex_format` picks one of four named styles:
 
-| `hex_format` | The bytes `A5 A6` show as |
-|---|---|
-| `'\xaa'` (default) | `\xa5\xa6` |
-| `"0xAA"` | `0xA50xA6` |
-| `"0xaa"` | `0xa50xa6` |
-| `"AA"` | `A5A6` |
+| `hex_format` | Style | The bytes `A5 A6` show as |
+|---|---|---|
+| `"escaped"` (default) | `\xaa` | `\xa5\xa6` |
+| `"prefixed_upper"` | `0xAA` | `0xA50xA6` |
+| `"prefixed_lower"` | `0xaa` | `0xa50xa6` |
+| `"bare"` | `AA` | `A5A6` |
 
-Write the default as a TOML literal string (`'\xaa'`) or escape the backslash (`"\\xaa"`). Any other value is reported as an error. The format also applies to search, `!filter`/`!mute` patterns and copied text, since they all work on what is on screen. Saved session files (`Ctrl+S`, `!record`) always keep the `\xaa` form. There is no CLI flag.
+Only these names are accepted — the style is not a template, so a value like `"0xAA"` is rejected, and the error points at the line in `config.toml` and lists the valid names. The format also applies to search, `!filter`/`!mute` patterns and copied text, since they all work on what is on screen. Saved session files (`Ctrl+S`, `!record`) always keep the `\xaa` form. There is no CLI flag.
 
 ### Disabling history autosave
 

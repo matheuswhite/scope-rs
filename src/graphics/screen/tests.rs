@@ -575,34 +575,6 @@ fn current_bookmark_is_highlighted_apart_from_other_bookmarks() {
 // Issue #239: the display format of bytes with no text form.
 
 #[test]
-fn hex_format_resolves_every_config_value() {
-    assert_eq!(HexFormat::from_config(None), Ok(HexFormat::Escaped));
-    assert_eq!(
-        HexFormat::from_config(Some("\\xaa")),
-        Ok(HexFormat::Escaped)
-    );
-    assert_eq!(
-        HexFormat::from_config(Some("0xAA")),
-        Ok(HexFormat::PrefixedUpper)
-    );
-    assert_eq!(
-        HexFormat::from_config(Some("0xaa")),
-        Ok(HexFormat::PrefixedLower)
-    );
-    assert_eq!(HexFormat::from_config(Some("AA")), Ok(HexFormat::Bare));
-}
-
-#[test]
-fn hex_format_rejects_an_unknown_value_listing_the_valid_ones() {
-    // Case matters: `0xAA` and `0xaa` are different formats.
-    let err = HexFormat::from_config(Some("0XAA")).unwrap_err();
-    assert!(err.contains("\"0XAA\""), "got: {err}");
-    for name in ["\"\\xaa\"", "\"0xAA\"", "\"0xaa\"", "\"AA\""] {
-        assert!(err.contains(name), "{name} missing from: {err}");
-    }
-}
-
-#[test]
 fn hex_format_rewrites_each_escape() {
     let text = "Hi\\xa5\\x0f!";
     assert_eq!(HexFormat::Escaped.apply(text), text);

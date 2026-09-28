@@ -526,8 +526,8 @@ fn main() -> Result<(), String> {
         let keymap = Keymap::from_config(config.shortcuts.as_ref())?;
         // Likewise `[history]`: config.toml > default (save everything).
         let autosave = Autosave::from_config(config.history.as_ref());
-        // And `hex_format`; an unknown value is fatal like any config typo.
-        let hex_format = HexFormat::from_config(config.hex_format.as_deref())?;
+        // And `hex_format`; an unknown name was already rejected by `Config::load`.
+        let hex_format = config.hex_format.unwrap_or_default();
         let name = cli
             .name
             .as_deref()
