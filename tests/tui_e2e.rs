@@ -527,7 +527,7 @@ fn hex_format_from_config_changes_how_bytes_are_shown() {
     // Issue #239: `hex_format` restyles the escaped bytes; `\r\n` keep their
     // own form and plain text is untouched.
     let mut tui = Tui::start_with(StartOpts {
-        config_toml: Some("hex_format = \"0xAA\"\n"),
+        config_toml: Some("hex_format = \"prefixed_upper\"\n"),
         ..Default::default()
     });
     tui.wait_until_ready();
@@ -542,11 +542,12 @@ fn hex_format_from_config_changes_how_bytes_are_shown() {
 #[test]
 fn invalid_hex_format_is_a_fatal_config_error() {
     let tui = Tui::start_with(StartOpts {
-        config_toml: Some("hex_format = \"0XAA\"\n"),
+        // A sample of the style instead of its name: the likely mistake.
+        config_toml: Some("hex_format = \"0xAA\"\n"),
         ..Default::default()
     });
 
-    tui.wait_for("Invalid hex_format", SETTLE);
+    tui.wait_for("unknown variant `0xAA`", SETTLE);
 }
 
 #[test]
