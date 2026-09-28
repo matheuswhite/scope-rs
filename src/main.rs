@@ -141,18 +141,34 @@ pub enum Commands {
     },
 }
 
-fn app_serial(
+/// The settings `app_serial` and `app_rtt` share, each already resolved as
+/// CLI flag > config.toml > built-in default.
+struct AppSettings {
     capacity: usize,
     tag_file: PathBuf,
-    port: Option<String>,
-    baudrate: Option<u32>,
     latency: u64,
     name: Option<String>,
     headless: bool,
     keymap: Keymap,
     autosave: Autosave,
     hex_format: HexFormat,
+}
+
+fn app_serial(
+    settings: AppSettings,
+    port: Option<String>,
+    baudrate: Option<u32>,
 ) -> Result<(), String> {
+    let AppSettings {
+        capacity,
+        tag_file,
+        latency,
+        name,
+        headless,
+        keymap,
+        autosave,
+        hex_format,
+    } = settings;
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
             "Failed to read or parse tag file at {}: {}",
@@ -291,17 +307,17 @@ fn app_serial(
     Ok(())
 }
 
-fn app_rtt(
-    capacity: usize,
-    tag_file: PathBuf,
-    setup: RttSetup,
-    latency: u64,
-    name: Option<String>,
-    headless: bool,
-    keymap: Keymap,
-    autosave: Autosave,
-    hex_format: HexFormat,
-) -> Result<(), String> {
+fn app_rtt(settings: AppSettings, setup: RttSetup) -> Result<(), String> {
+    let AppSettings {
+        capacity,
+        tag_file,
+        latency,
+        name,
+        headless,
+        keymap,
+        autosave,
+        hex_format,
+    } = settings;
     let tag_list = TagList::new(tag_file.clone()).map_err(|err| {
         format!(
             "Failed to read or parse tag file at {}: {}",
@@ -439,13 +455,16 @@ fn is_interactive() -> bool {
     stdin().is_terminal() && stdout().is_terminal()
 }
 
+/// A serial port and baud rate, either of which may still be unknown.
+type SerialTarget = (Option<String>, Option<u32>);
+
 /// Resolve the serial port/baud, prompting via the icon-mode picker when either
 /// is missing and we have an interactive terminal. `Ok(None)` means the user
 /// quit the picker before starting the app.
 fn resolve_serial(
     port: Option<String>,
     baudrate: Option<u32>,
-) -> Result<Option<(Option<String>, Option<u32>)>, String> {
+) -> Result<Option<SerialTarget>, String> {
     if (port.is_some() && baudrate.is_some()) || !is_interactive() {
         return Ok(Some((port, baudrate)));
     }
@@ -533,14 +552,20 @@ fn main() -> Result<(), String> {
             .as_deref()
             .map(session::sanitize_name)
             .transpose()?;
-        let headless = cli.headless;
+        let settings = AppSettings {
+            capacity,
+            tag_file,
+            latency,
+            name,
+            headless: cli.headless,
+            keymap,
+            autosave,
+            hex_format,
+        };
 
         match cli.command {
             Commands::Serial { port, baudrate } => match resolve_serial(port, baudrate)? {
-                Some((port, baudrate)) => app_serial(
-                    capacity, tag_file, port, baudrate, latency, name, headless, keymap, autosave,
-                    hex_format,
-                ),
+                Some((port, baudrate)) => app_serial(settings, port, baudrate),
                 // User quit the picker before connecting.
                 None => Ok(()),
             },
@@ -565,10 +590,7 @@ fn main() -> Result<(), String> {
                     .or_else(|| elf.map(ControlBlock::Elf)),
                 probe_speed: speed,
             })? {
-                Some(setup) => app_rtt(
-                    capacity, tag_file, setup, latency, name, headless, keymap, autosave,
-                    hex_format,
-                ),
+                Some(setup) => app_rtt(settings, setup),
                 None => Ok(()),
             },
             // Handled right after `Cli::parse()`, before this closure, so a

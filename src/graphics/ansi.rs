@@ -162,10 +162,7 @@ impl ANSI {
         let style = input.style;
         let mut color = input.style.fg.unwrap_or(Color::Reset);
 
-        for item in input
-            .content
-            .to_special_char(|string| Self::next_csi(string))
-        {
+        for item in input.content.to_special_char(Self::next_csi) {
             match item {
                 SpecialCharItem::Plain(plain) => {
                     spans.push(Span::styled(plain, style.fg(color)));
@@ -182,7 +179,7 @@ impl ANSI {
     pub fn remove_encoding(input: String) -> String {
         let mut result = String::new();
 
-        for item in input.to_special_char(|string| Self::next_csi(string)) {
+        for item in input.to_special_char(Self::next_csi) {
             let SpecialCharItem::Plain(plain) = item else {
                 continue;
             };

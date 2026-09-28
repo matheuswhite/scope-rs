@@ -97,9 +97,7 @@ pub enum PluginResponse {
 impl PluginRequest {
     fn deadline_from_timeout_ms(timeout_ms: Option<u64>) -> Option<Instant> {
         // None (or a very large sentinel) means “no timeout”.
-        let Some(timeout_ms) = timeout_ms else {
-            return None;
-        };
+        let timeout_ms = timeout_ms?;
         if timeout_ms == u64::MAX {
             return None;
         }

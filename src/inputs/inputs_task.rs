@@ -515,7 +515,7 @@ impl InputsTask {
                             return LoopStatus::Continue;
                         }
 
-                        let command_line = sw.command_line.drain(..).collect::<String>();
+                        let command_line = std::mem::take(&mut sw.command_line);
                         Self::set_hint(&mut sw.current_hint, &private.hints);
 
                         if let Err(err) = private.history.push(&command_line) {
@@ -1902,6 +1902,9 @@ impl InputsTask {
 }
 
 impl InputsConnections {
+    // One argument per channel end or setting `main` wires in; bundling them
+    // would only move the same list into a struct literal.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         logger: Logger,
         tx: Producer<Arc<TimedBytes>>,

@@ -412,7 +412,7 @@ impl RttInterface {
                                     now = Instant::now();
                                 }
 
-                                if last.len() > 0 {
+                                if !last.is_empty() {
                                     line.extend_from_slice(last);
                                     now = Instant::now();
                                 }
@@ -733,7 +733,7 @@ impl RttInterface {
         let probes = lister.list_all();
         let Some(new_session) =
             probes
-                .get(0)
+                .first()
                 .and_then(|probe| probe.open().ok())
                 .and_then(|mut probe| {
                     let Ok(speed) = probe.set_speed(probe_speed) else {
@@ -955,6 +955,8 @@ impl RttConnections {
 }
 
 #[cfg(test)]
+// Memory maps are lists of ranges, and a one-region map is a real case here.
+#[allow(clippy::single_range_in_vec_init)]
 mod tests {
     use super::*;
 
@@ -1034,6 +1036,8 @@ mod tests {
     }
 
     #[test]
+    // The empty and reversed ranges are the input under test.
+    #[allow(clippy::reversed_empty_ranges)]
     fn empty_and_degenerate_regions_are_dropped() {
         assert!(RttInterface::scan_windows(&[]).is_empty());
         // start == end, and a reversed range: neither names any memory.

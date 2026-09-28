@@ -458,12 +458,10 @@ fn rtt_loop(tui: &mut Tui, cli: RttSetup) -> Result<Outcome<RttSetup>, String> {
                     channel_buf.pop();
                 }
                 KeyCode::Esc => stage = RttStage::Target,
-                KeyCode::Enter => {
-                    if parse_channel(&channel_buf).is_some() {
-                        match stage_after_channel(ask_speed, ask_control_block) {
-                            Some(next) => stage = next,
-                            None => return selected!(cli.control_block.clone()),
-                        }
+                KeyCode::Enter if parse_channel(&channel_buf).is_some() => {
+                    match stage_after_channel(ask_speed, ask_control_block) {
+                        Some(next) => stage = next,
+                        None => return selected!(cli.control_block.clone()),
                     }
                 }
                 _ => {}

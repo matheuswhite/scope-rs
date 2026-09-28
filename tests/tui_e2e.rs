@@ -1005,7 +1005,7 @@ fn scrollbar_thumb_reaches_both_ends() {
         screen
             .lines()
             .enumerate()
-            .filter(|(_, line)| line.chars().last() == Some(glyph))
+            .filter(|(_, line)| line.ends_with(glyph))
             .map(|(i, _)| i)
             .collect()
     };

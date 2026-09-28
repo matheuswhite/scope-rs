@@ -96,7 +96,7 @@ where
         }
 
         let Some(SpecialCharPosition { start, length }) = (self.filter)(&self.content) else {
-            let plain = self.content.drain(..).collect();
+            let plain = std::mem::take(&mut self.content);
             return Some(SpecialCharItem::Plain(plain));
         };
 
