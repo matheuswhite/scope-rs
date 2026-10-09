@@ -606,7 +606,8 @@ fn plain_text_strips_ansi_before_formatting() {
 fn rendered(bytes: &[u8], hex_format: HexFormat) -> Vec<ratatui::text::Span<'static>> {
     let decoder = ScreenDecoder::new(hex_format);
     let line = BufferLine::new_rx(Local::now(), bytes.to_vec()).decode(decoder);
-    let lines = ScreenMode::Normal.to_lines(vec![line], None, &BTreeSet::new(), None, hex_format);
+    let lines =
+        ScreenMode::Normal.to_lines(vec![line], None, &BTreeSet::new(), None, hex_format, true);
     lines[0].spans[2..].to_vec()
 }
 
@@ -639,4 +640,24 @@ fn formatted_bytes_keep_the_special_character_highlight() {
     let texts = spans.iter().map(|s| s.content.as_ref()).collect::<Vec<_>>();
     assert_eq!(texts, ["a", "A5", "b"]);
     assert_ne!(spans[1].style, spans[0].style);
+}
+
+#[test]
+fn hidden_special_characters_are_omitted_from_rendering() {
+    let decoder = ScreenDecoder::default();
+    let line = BufferLine::new_rx(Local::now(), b"a\x00b\r\n".to_vec()).decode(decoder);
+    let lines = ScreenMode::Normal.to_lines(
+        vec![line],
+        None,
+        &BTreeSet::new(),
+        None,
+        HexFormat::default(),
+        false,
+    );
+    let drawn = lines[0].spans[2..]
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect::<String>();
+    assert_eq!(drawn, "ab");
+    assert_eq!(decoder.plain_text(b"a\x00b\r\n"), "a\\x00b\\r\\n");
 }

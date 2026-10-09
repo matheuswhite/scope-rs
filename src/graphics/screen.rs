@@ -45,6 +45,9 @@ pub struct Screen {
     /// far a frozen viewport (and any selection) has to slide to stay on the
     /// same content — see [`Screen::update_after_new_lines`].
     evicted_seen: u64,
+    /// Whether escaped control characters and other non-printable bytes are
+    /// shown in the rendered view. History, filtering and search stay intact.
+    special_characters_visible: bool,
 }
 
 pub struct ScreenPosition {
@@ -69,6 +72,7 @@ impl Default for Screen {
             bookmarks: BTreeSet::new(),
             current_bookmark: None,
             evicted_seen: 0,
+            special_characters_visible: true,
         }
     }
 }
@@ -175,6 +179,14 @@ impl Screen {
         self.rebase_on_rebuilt_buffer();
         self.bookmarks.clear();
         self.current_bookmark = None;
+    }
+
+    pub fn toggle_special_characters(&mut self) {
+        self.special_characters_visible = !self.special_characters_visible;
+    }
+
+    pub fn special_characters_visible(&self) -> bool {
+        self.special_characters_visible
     }
 
     /// Re-anchors the viewport after the displayed buffer was re-derived from
@@ -358,6 +370,7 @@ impl Screen {
                 &self.bookmarks,
                 self.current_bookmark,
                 self.decoder.hex_format(),
+                self.special_characters_visible,
             )
             .into_iter()
             .map(|line| Self::crop(line, self.position.column, max_width))
@@ -856,18 +869,33 @@ impl ScreenMode {
         bookmarks: &BTreeSet<u64>,
         current_bookmark: Option<u64>,
         hex_format: HexFormat,
+        special_characters_visible: bool,
     ) -> Vec<Line<'static>> {
         match self {
             Self::Normal => cropped_lines
                 .into_iter()
                 .map(|line| {
-                    self.to_normal_line(line, selection, bookmarks, current_bookmark, hex_format)
+                    self.to_normal_line(
+                        line,
+                        selection,
+                        bookmarks,
+                        current_bookmark,
+                        hex_format,
+                        special_characters_visible,
+                    )
                 })
                 .collect::<Vec<_>>(),
             Self::Search { .. } => cropped_lines
                 .into_iter()
                 .map(|line| {
-                    self.to_search_line(line, selection, bookmarks, current_bookmark, hex_format)
+                    self.to_search_line(
+                        line,
+                        selection,
+                        bookmarks,
+                        current_bookmark,
+                        hex_format,
+                        special_characters_visible,
+                    )
                 })
                 .collect::<Vec<_>>(),
         }
@@ -1021,6 +1049,7 @@ impl ScreenMode {
         bookmarks: &BTreeSet<u64>,
         current_bookmark: Option<u64>,
         hex_format: HexFormat,
+        special_characters_visible: bool,
     ) -> Line<'static> {
         let is_reversed = selection.is_some_and(|sel| sel.is_inside(line.line));
         let is_bookmarked = bookmarks.contains(&line.id);
@@ -1043,7 +1072,9 @@ impl ScreenMode {
 
         let content = ANSI::decode(content)
             .into_iter()
-            .flat_map(|span| Self::highlight_special_characters(span, hex_format))
+            .flat_map(|span| {
+                Self::highlight_special_characters(span, hex_format, special_characters_visible)
+            })
             .collect::<Vec<_>>();
         let content = Self::reverse_content(content, selection, line_number);
 
@@ -1057,6 +1088,7 @@ impl ScreenMode {
         bookmarks: &BTreeSet<u64>,
         current_bookmark: Option<u64>,
         hex_format: HexFormat,
+        special_characters_visible: bool,
     ) -> Line<'static> {
         let is_reversed = selection.is_some_and(|sel| sel.is_inside(line.line));
         let is_bookmarked = bookmarks.contains(&line.id);
@@ -1068,13 +1100,18 @@ impl ScreenMode {
             is_current_bookmark,
         );
         let line_number = line.line;
-        let content = self.search_line(line, hex_format);
+        let content = self.search_line(line, hex_format, special_characters_visible);
         let content = Self::reverse_content(content, selection, line_number);
 
         Line::from(timestamp.into_iter().chain(content).collect::<Vec<_>>())
     }
 
-    fn search_line(&self, line: BufferLine<String>, hex_format: HexFormat) -> Vec<Span<'static>> {
+    fn search_line(
+        &self,
+        line: BufferLine<String>,
+        hex_format: HexFormat,
+        special_characters_visible: bool,
+    ) -> Vec<Span<'static>> {
         let Self::Search {
             current,
             entries,
@@ -1093,7 +1130,11 @@ impl ScreenMode {
         let message = hex_format.apply(&ANSI::remove_encoding(line.message));
 
         if matcher.is_empty() {
-            return vec![Span::styled(message, disable_style)];
+            return Self::highlight_special_characters(
+                Span::styled(message, disable_style),
+                hex_format,
+                special_characters_visible,
+            );
         }
 
         // Match on the whole (decoded, ANSI-stripped) line so regex anchors like
@@ -1102,7 +1143,11 @@ impl ScreenMode {
         // computed here line up with the navigation entries below.
         let matches = matcher.matches(&message);
         if matches.is_empty() {
-            return vec![Span::styled(message, disable_style)];
+            return Self::highlight_special_characters(
+                Span::styled(message, disable_style),
+                hex_format,
+                special_characters_visible,
+            );
         }
 
         let highlighted_style = Style::default().bg(Color::Reset).fg(Color::Yellow);
@@ -1115,7 +1160,12 @@ impl ScreenMode {
         for (start, len) in matches {
             if start > cursor {
                 let plain = chars[cursor..start].iter().collect::<String>();
-                output.push(Span::styled(plain, disable_style));
+                let plain = Span::styled(plain, disable_style);
+                if special_characters_visible {
+                    output.push(plain);
+                } else {
+                    output.extend(Self::highlight_special_characters(plain, hex_format, false));
+                }
             }
 
             let matched = chars[start..start + len].iter().collect::<String>();
@@ -1127,9 +1177,20 @@ impl ScreenMode {
 
             if is_chosen {
                 let chosen = Span::styled(matched, chosen_style);
-                output.extend(Self::highlight_special_characters(chosen, hex_format));
+                output.extend(Self::highlight_special_characters(
+                    chosen,
+                    hex_format,
+                    special_characters_visible,
+                ));
             } else {
-                output.push(Span::styled(matched, highlighted_style));
+                let matched = Span::styled(matched, highlighted_style);
+                if special_characters_visible {
+                    output.push(matched);
+                } else {
+                    output.extend(Self::highlight_special_characters(
+                        matched, hex_format, false,
+                    ));
+                }
             }
 
             cursor = start + len;
@@ -1137,7 +1198,12 @@ impl ScreenMode {
 
         if cursor < chars.len() {
             let plain = chars[cursor..].iter().collect::<String>();
-            output.push(Span::styled(plain, disable_style));
+            let plain = Span::styled(plain, disable_style);
+            if special_characters_visible {
+                output.push(plain);
+            } else {
+                output.extend(Self::highlight_special_characters(plain, hex_format, false));
+            }
         }
 
         output
@@ -1193,7 +1259,11 @@ impl ScreenMode {
         vec![Span::styled(timestamp, style), Span::raw(" ")]
     }
 
-    fn highlight_special_characters(span: Span, hex_format: HexFormat) -> Vec<Span> {
+    fn highlight_special_characters(
+        span: Span,
+        hex_format: HexFormat,
+        special_characters_visible: bool,
+    ) -> Vec<Span> {
         let mut result = vec![];
 
         let iter = span.content.to_special_char(|string| {
@@ -1229,7 +1299,7 @@ impl ScreenMode {
                 SpecialCharItem::Plain(plain) => {
                     result.push(Span::styled(plain, span.style));
                 }
-                SpecialCharItem::Special(special, _) => {
+                SpecialCharItem::Special(special, _) if special_characters_visible => {
                     result.push(Span::styled(
                         hex_format.apply(&special),
                         span.style.fg(Palette::ascent_fg(
@@ -1238,6 +1308,7 @@ impl ScreenMode {
                         )),
                     ));
                 }
+                SpecialCharItem::Special(_, _) => {}
             }
         }
 
