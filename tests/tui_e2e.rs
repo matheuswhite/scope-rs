@@ -1061,6 +1061,36 @@ fn received_bytes_are_displayed() {
 }
 
 #[test]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "macOS sets baud via the IOSSIOSPEED ioctl, which a PTY rejects with ENOTTY, so scope can't open the virtual serial port; Linux sets baud via termios and works"
+)]
+fn ctrl_h_toggles_special_character_visibility() {
+    let mut tui = Tui::start(&[]);
+    tui.wait_until_ready();
+
+    tui.serial
+        .master
+        .write_all(b"shown\x00hidden\r\n")
+        .expect("write control characters to wire");
+    tui.serial.master.flush().expect("flush wire");
+
+    let visible = tui.wait_for("shown\\x00hidden\\r\\n", SETTLE);
+    assert!(visible.contains(r"[\x]"), "{visible}");
+
+    // Ctrl+H is decoded as 0x08 by the terminal input path.
+    tui.type_text("\x08");
+    let hidden = tui.wait_for("shownhidden", SETTLE);
+    assert!(!hidden.contains("\\x00"), "{hidden}");
+    assert!(!hidden.contains("\\r\\n"), "{hidden}");
+    assert!(hidden.contains("[--]"), "{hidden}");
+
+    tui.type_text("\x08");
+    let visible_again = tui.wait_for("shown\\x00hidden\\r\\n", SETTLE);
+    assert!(visible_again.contains(r"[\x]"), "{visible_again}");
+}
+
+#[test]
 fn custom_shortcut_from_config_remaps_action() {
     // Issue #211: a `[shortcuts]` override both moves an action to a new key and
     // disables the built-in one. Move `record` from Ctrl+R to Ctrl+G. (Ctrl+G is

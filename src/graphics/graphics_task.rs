@@ -115,6 +115,7 @@ pub enum GraphicsCommand {
     ToggleBookmark(ScreenPosition),
     NextBookmark,
     PrevBookmark,
+    ToggleSpecialCharacters,
 }
 
 pub struct SaveStats {
@@ -193,6 +194,7 @@ impl GraphicsTask {
         rect: Rect,
         latency: u64,
         filter_label: &str,
+        special_characters_visible: bool,
     ) {
         let (title, is_connected) = {
             let interface_shared = interface_shared
@@ -266,7 +268,18 @@ impl GraphicsTask {
 
         let block = Block::default()
             .title(format!("[{:03}][{}] {}", history_len, latency, title))
-            .title(Line::from(filter_label.to_string()).right_aligned())
+            .title(
+                Line::from(format!(
+                    "{} [{}]",
+                    filter_label,
+                    if special_characters_visible {
+                        "\\x"
+                    } else {
+                        "--"
+                    }
+                ))
+                .right_aligned(),
+            )
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
             .border_style(Style::default().fg(bar_color));
@@ -301,6 +314,7 @@ impl GraphicsTask {
         frame: &mut Frame,
         is_case_sensitive: bool,
         is_regex: bool,
+        special_characters_visible: bool,
     ) {
         let (text, cursor) = {
             let inputs_shared = inputs_shared
@@ -327,11 +341,16 @@ impl GraphicsTask {
 
         let block = Block::default()
             .title(format!(
-                "[{}][{}][{}/{}] Search Mode",
+                "[{}][{}][{}/{}] Search Mode [{}]",
                 if is_case_sensitive { "Aa" } else { "--" },
                 if is_regex { ".*" } else { "  " },
                 current,
-                total
+                total,
+                if special_characters_visible {
+                    "\\x"
+                } else {
+                    "--"
+                }
             ))
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
@@ -357,6 +376,7 @@ impl GraphicsTask {
         latency: u64,
         search_indexes: Option<(usize, usize)>,
         filter_label: &str,
+        special_characters_visible: bool,
     ) {
         let (input_mode, is_case_sensitive, is_regex) = {
             let inputs_shared = inputs_shared
@@ -377,6 +397,7 @@ impl GraphicsTask {
                 rect,
                 latency,
                 filter_label,
+                special_characters_visible,
             ),
             inputs::inputs_task::InputMode::Search => Self::draw_command_bar_search_mode(
                 inputs_shared,
@@ -385,6 +406,7 @@ impl GraphicsTask {
                 frame,
                 is_case_sensitive,
                 is_regex,
+                special_characters_visible,
             ),
         }
     }
@@ -651,6 +673,9 @@ impl GraphicsTask {
                         private
                             .screen
                             .jump_to_previous_bookmark(&private.buffer, max_main_axis as usize);
+                    }
+                    GraphicsCommand::ToggleSpecialCharacters => {
+                        private.screen.toggle_special_characters();
                     }
                     GraphicsCommand::CopyToClipboard => {
                         if let Err(res) =
@@ -1037,6 +1062,7 @@ impl GraphicsTask {
                             private.latency,
                             private.screen.search_indexes(),
                             &private.message_filter.label(),
+                            private.screen.special_characters_visible(),
                         );
                         Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
                     })
