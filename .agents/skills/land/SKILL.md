@@ -18,21 +18,21 @@ branch, or pull-request preparation as permission to merge.
 
 ## Repository location
 
-This action must operate on the user's primary repository checkout, not on a
-Delta worktree or an agent-specific clone. Resolve the primary checkout before
-running any command and use it as the working directory for every `git`, `gh`,
-`cargo`, and file operation in this workflow:
+This action must operate on the repository checkout selected for the current
+workflow. Do not derive a filesystem path from a Git remote: `origin` normally
+contains an SSH or HTTPS repository URL, not a local checkout path. Resolve
+the current checkout before running any command and use it as the working
+directory for every `git`, `gh`, `cargo`, and file operation in this workflow:
 
 ```sh
-PRIMARY_GIT_DIR="$(git remote get-url origin)"
-PRIMARY_REPO="${PRIMARY_GIT_DIR%/.git}"
-cd "$PRIMARY_REPO"
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+git remote get-url origin >/dev/null
 ```
 
-If the `origin` remote is unavailable, does not identify a local checkout, or
-resolves to an unexpected path, stop and ask the user. Do not silently fall
-back to the current Delta worktree. Verify the resolved repository with
-`git rev-parse --show-toplevel` before continuing.
+If the checkout cannot be resolved or the `origin` remote is unavailable, stop
+and ask the user. The `origin` URL is used for fetch and push operations; it is
+not expected to identify a local directory.
 
 ## Preconditions
 
