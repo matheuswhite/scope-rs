@@ -24,12 +24,12 @@ running any command and use it as the working directory for every `git`, `gh`,
 `cargo`, and file operation in this workflow:
 
 ```sh
-PRIMARY_GIT_DIR="$(git remote get-url local)"
+PRIMARY_GIT_DIR="$(git remote get-url origin)"
 PRIMARY_REPO="${PRIMARY_GIT_DIR%/.git}"
 cd "$PRIMARY_REPO"
 ```
 
-If the `local` remote is unavailable, does not identify a local checkout, or
+If the `origin` remote is unavailable, does not identify a local checkout, or
 resolves to an unexpected path, stop and ask the user. Do not silently fall
 back to the current Delta worktree. Verify the resolved repository with
 `git rev-parse --show-toplevel` before continuing.
