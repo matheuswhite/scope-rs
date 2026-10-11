@@ -16,6 +16,24 @@ Use this workflow only when the user explicitly requests that the current
 change be landed. Do not treat review approval, passing local checks, a pushed
 branch, or pull-request preparation as permission to merge.
 
+## Repository location
+
+This action must operate on the repository checkout selected for the current
+workflow. Do not derive a filesystem path from a Git remote: `origin` normally
+contains an SSH or HTTPS repository URL, not a local checkout path. Resolve
+the current checkout before running any command and use it as the working
+directory for every `git`, `gh`, `cargo`, and file operation in this workflow:
+
+```sh
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+cd "$REPO_ROOT"
+git remote get-url origin >/dev/null
+```
+
+If the checkout cannot be resolved or the `origin` remote is unavailable, stop
+and ask the user. The `origin` URL is used for fetch and push operations; it is
+not expected to identify a local directory.
+
 ## Preconditions
 
 1. Identify the current branch and repository:

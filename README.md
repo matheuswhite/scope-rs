@@ -357,8 +357,10 @@ Rows with a **Config action** name are remappable via the `[shortcuts]` table in
 | `Ctrl`+`F` | Toggle search mode. | `search_toggle` |
 | `Ctrl`+`W` | In search mode: toggle case sensitivity. | `toggle_case` |
 | `Ctrl`+`E` | In search mode: toggle regular-expression matching. | `toggle_regex` |
+| `Ctrl`+`H` | Toggle visibility of special characters. | `toggle_special_characters` |
 | `Tab` | Autocomplete a `@tag` from the tag file (while the pop-up is up); otherwise jump to the next bookmark. | `next_bookmark` |
 | `Shift`+`Tab` | Jump to the previous bookmark. | `prev_bookmark` |
+| `Ctrl`+`P` | Advance the display mode: ASCII → UTF-8 → HEX. | `toggle_display_mode` |
 | `Ctrl`+`S` | Save the whole session to a `.txt` file. | `save` |
 | `Ctrl`+`R` | Start / stop a record session. | `record` |
 | `Ctrl`+`C` | Copy the current selection to the clipboard. | `copy` |
@@ -446,7 +448,7 @@ Besides the session record you save explicitly (`Ctrl+S`, `!record`), scope writ
 
 The `[shortcuts]` table remaps any of the action/navigation keys listed in the [Keyboard & Mouse Shortcuts](#keyboard--mouse-shortcuts) table — the entries with a **Config action** name. Each entry is `action = "Key+Combo"`; there is no CLI flag, so a shortcut resolves as `config.toml` > built-in default, and every action you don't list keeps its default. The valid action names are:
 
-`copy`, `clear`, `save`, `record`, `search_toggle`, `toggle_case`, `toggle_regex`, `page_up`, `page_down`, `jump_start`, `jump_end`, `word_left`, `word_right`, `next_bookmark`, `prev_bookmark`.
+`copy`, `clear`, `save`, `record`, `search_toggle`, `toggle_case`, `toggle_regex`, `toggle_special_characters`, `toggle_display_mode`, `page_up`, `page_down`, `jump_start`, `jump_end`, `word_left`, `word_right`, `next_bookmark`, `prev_bookmark`.
 
 A key combo is zero or more modifiers followed by a key, joined with `+` (case-insensitive): modifiers `Ctrl`, `Alt`, `Shift`; keys are a single character (`c`, `/`, `.`), a named key (`Space`, `Tab`, `Enter`, `Esc`, `Backspace`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`, `Up`, `Down`, `Left`, `Right`) or a function key (`F1`–`F12`). `Shift+Tab` means the "back-tab" key. Examples: `"Ctrl+G"`, `"F2"`, `"Alt+Home"`, `"Ctrl+Alt+End"`.
 

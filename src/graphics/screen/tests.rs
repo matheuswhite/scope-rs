@@ -107,6 +107,15 @@ fn plain_case_insensitive_matches_regardless_of_case() {
 }
 
 #[test]
+fn hex_search_accepts_queries_with_or_without_spaces() {
+    let spaced = SearchMatcher::build("68 65", true, false);
+    let compact = SearchMatcher::build("6865", true, false);
+
+    assert_eq!(spaced.matches_for_display("68 65 6C", true), [(0, 5)]);
+    assert_eq!(compact.matches_for_display("68 65 6C", true), [(0, 5)]);
+}
+
+#[test]
 fn columns_are_character_offsets_not_bytes() {
     // "á" is two bytes but one column; the two "X" matches must land on
     // char columns 1 and 3, not byte offsets 2 and 5.
@@ -606,8 +615,15 @@ fn plain_text_strips_ansi_before_formatting() {
 fn rendered(bytes: &[u8], hex_format: HexFormat) -> Vec<ratatui::text::Span<'static>> {
     let decoder = ScreenDecoder::new(hex_format);
     let line = BufferLine::new_rx(Local::now(), bytes.to_vec()).decode(decoder);
-    let lines =
-        ScreenMode::Normal.to_lines(vec![line], None, &BTreeSet::new(), None, hex_format, true);
+    let lines = ScreenMode::Normal.to_lines(
+        vec![line],
+        None,
+        &BTreeSet::new(),
+        None,
+        hex_format,
+        false,
+        true,
+    );
     lines[0].spans[2..].to_vec()
 }
 
@@ -644,7 +660,7 @@ fn formatted_bytes_keep_the_special_character_highlight() {
 
 #[test]
 fn hidden_special_characters_are_omitted_from_rendering() {
-    let decoder = ScreenDecoder::default();
+    let decoder = ScreenDecoder::ascii(HexFormat::default());
     let line = BufferLine::new_rx(Local::now(), b"a\x00b\r\n".to_vec()).decode(decoder);
     let lines = ScreenMode::Normal.to_lines(
         vec![line],
@@ -653,6 +669,7 @@ fn hidden_special_characters_are_omitted_from_rendering() {
         None,
         HexFormat::default(),
         false,
+        false,
     );
     let drawn = lines[0].spans[2..]
         .iter()
@@ -660,4 +677,24 @@ fn hidden_special_characters_are_omitted_from_rendering() {
         .collect::<String>();
     assert_eq!(drawn, "ab");
     assert_eq!(decoder.plain_text(b"a\x00b\r\n"), "a\\x00b\\r\\n");
+}
+
+#[test]
+fn display_mode_cycles_ascii_utf8_and_hex() {
+    let mut decoder = ScreenDecoder::default();
+
+    assert_eq!(decoder.name(), "UTF-8");
+    assert_eq!(decoder.plain_text(b"hello"), "hello");
+    assert_eq!(decoder.plain_text(b"\x1b[31mhello\x1b[0m"), "hello");
+
+    decoder.toggle_charset();
+    assert_eq!(decoder.name(), "HEX");
+    assert_eq!(decoder.plain_text(b"hello"), "68 65 6C 6C 6F");
+    assert_eq!(
+        decoder.plain_text(b"\x1b[31mhello\x1b[0m"),
+        "68 65 6C 6C 6F"
+    );
+
+    decoder.toggle_charset();
+    assert_eq!(decoder.name(), "ASCII");
 }

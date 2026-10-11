@@ -1,7 +1,7 @@
 use super::Serialize;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
 use crate::graphics::message_filter::MessageFilter;
-use crate::graphics::screen::{HexFormat, Screen, ScreenPosition, SearchHit};
+use crate::graphics::screen::{HexFormat, Screen, ScreenDecoder, ScreenPosition, SearchHit};
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::inputs::inputs_task::InputMode;
 use crate::interfaces::InterfaceShared;
@@ -116,6 +116,7 @@ pub enum GraphicsCommand {
     NextBookmark,
     PrevBookmark,
     ToggleSpecialCharacters,
+    ToggleDisplayMode,
 }
 
 pub struct SaveStats {
@@ -677,6 +678,29 @@ impl GraphicsTask {
                     GraphicsCommand::ToggleSpecialCharacters => {
                         private.screen.toggle_special_characters();
                     }
+                    GraphicsCommand::ToggleDisplayMode => {
+                        let was_searching = private.screen.is_searching();
+                        private.screen.toggle_display_mode();
+                        if was_searching {
+                            let (search_buffer, is_case_sensitive, is_regex) = {
+                                let input_sr = private
+                                    .inputs_shared
+                                    .read()
+                                    .expect("Cannot get input lock for read");
+                                (
+                                    input_sr.search_buffer.clone(),
+                                    input_sr.is_case_sensitive,
+                                    input_sr.is_regex,
+                                )
+                            };
+                            Self::update_search_state(
+                                &mut private,
+                                search_buffer,
+                                is_case_sensitive,
+                                is_regex,
+                            );
+                        }
+                    }
                     GraphicsCommand::CopyToClipboard => {
                         if let Err(res) =
                             Self::handle_copy_to_clipboard(&mut private, &mut copy_blink)
@@ -1163,16 +1187,23 @@ impl GraphicsTask {
     /// Fills the hit list from the displayed buffer under the active matcher.
     fn collect_search_hits(private: &mut GraphicsConnections) {
         let decoder = private.screen.decoder();
+        let hex_display = private.screen.is_hex_display();
         let mode = private.screen.mode_mut();
 
         for message in private.buffer.iter() {
             let line = message.line;
             let line_id = message.id;
-            let message = decoder.plain_text(&message.message);
+            let line_is_hex = message.level.is_none() && hex_display;
+            let line_decoder = if message.level.is_some() {
+                ScreenDecoder::utf8(decoder.hex_format())
+            } else {
+                decoder
+            };
+            let message = line_decoder.plain_text(&message.message);
 
             // Same matcher and same `message` as `search_line`, so the columns
             // recorded here match the highlighted spans exactly (regex or not).
-            for (column, _len) in mode.search_matches(&message) {
+            for (column, _len) in mode.search_matches(&message, line_is_hex) {
                 mode.add_entry(SearchHit {
                     position: BufferPosition { line, column },
                     line_id,

@@ -484,7 +484,7 @@ impl InputsTask {
                     Self::handle_tab_input(private, shared.clone());
                 }
             }
-            KeyCode::Enter if key.modifiers == ACTION_MODIFIER => {
+            KeyCode::Enter if key.modifiers.contains(ACTION_MODIFIER) => {
                 let sr = shared.read().expect("Cannot get input lock for read");
 
                 if matches!(sr.mode, InputMode::Search) {
@@ -731,6 +731,11 @@ impl InputsTask {
                 let _ = private
                     .graphics_cmd_sender
                     .send(GraphicsCommand::ToggleSpecialCharacters);
+            }
+            Action::ToggleDisplayMode => {
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::ToggleDisplayMode);
             }
             Action::WordRight => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
