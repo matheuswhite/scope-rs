@@ -490,11 +490,8 @@ impl Drop for Tui {
 
 #[test]
 fn hex_with_multiple_dollars_sends_correct_bytes() {
-    // Regression for issue #178: `$01 $02` must render as \x01\x02, not \x01$02.
-    let mut tui = Tui::start_with(StartOpts {
-        config_toml: Some("hex_format = \"escaped\"\n"),
-        ..Default::default()
-    });
+    // Regression for issue #178: `$01 $02` must render as `01 02`, not `01 $02`.
+    let mut tui = Tui::start(&[]);
     tui.wait_until_ready();
     tui.type_text("\x10"); // Ctrl+P: switch from the default UTF-8 view to HEX.
     tui.wait_for("HEX", SETTLE);
@@ -502,15 +499,12 @@ fn hex_with_multiple_dollars_sends_correct_bytes() {
     tui.type_text("$01 $02");
     tui.press_enter();
 
-    tui.wait_for("\\x01\\x02\\r\\n", SETTLE);
+    tui.wait_for("01 02 0D 0A", SETTLE);
 }
 
 #[test]
 fn hex_dollars_no_separator_sends_correct_bytes() {
-    let mut tui = Tui::start_with(StartOpts {
-        config_toml: Some("hex_format = \"escaped\"\n"),
-        ..Default::default()
-    });
+    let mut tui = Tui::start(&[]);
     tui.wait_until_ready();
     tui.type_text("\x10"); // Ctrl+P: switch from the default UTF-8 view to HEX.
     tui.wait_for("HEX", SETTLE);
@@ -518,15 +512,12 @@ fn hex_dollars_no_separator_sends_correct_bytes() {
     tui.type_text("$01$02");
     tui.press_enter();
 
-    tui.wait_for("\\x01\\x02\\r\\n", SETTLE);
+    tui.wait_for("01 02 0D 0A", SETTLE);
 }
 
 #[test]
 fn hex_mixed_with_plain_text_renders_correctly() {
-    let mut tui = Tui::start_with(StartOpts {
-        config_toml: Some("hex_format = \"escaped\"\n"),
-        ..Default::default()
-    });
+    let mut tui = Tui::start(&[]);
     tui.wait_until_ready();
     tui.type_text("\x10"); // Ctrl+P: switch from the default UTF-8 view to HEX.
     tui.wait_for("HEX", SETTLE);
@@ -534,7 +525,7 @@ fn hex_mixed_with_plain_text_renders_correctly() {
     tui.type_text("$01 $02 hello");
     tui.press_enter();
 
-    tui.wait_for("\\x01\\x02hello\\r\\n", SETTLE);
+    tui.wait_for("01 02 68 65 6C 6C 6F 0D 0A", SETTLE);
 }
 
 #[test]
