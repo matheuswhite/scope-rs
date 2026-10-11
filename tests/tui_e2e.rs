@@ -497,6 +497,7 @@ fn hex_with_multiple_dollars_sends_correct_bytes() {
     });
     tui.wait_until_ready();
     tui.type_text("\x10"); // Ctrl+P: switch from the default UTF-8 view to HEX.
+    tui.wait_for("HEX", SETTLE);
 
     tui.type_text("$01 $02");
     tui.press_enter();
@@ -512,6 +513,7 @@ fn hex_dollars_no_separator_sends_correct_bytes() {
     });
     tui.wait_until_ready();
     tui.type_text("\x10"); // Ctrl+P: switch from the default UTF-8 view to HEX.
+    tui.wait_for("HEX", SETTLE);
 
     tui.type_text("$01$02");
     tui.press_enter();
@@ -527,6 +529,7 @@ fn hex_mixed_with_plain_text_renders_correctly() {
     });
     tui.wait_until_ready();
     tui.type_text("\x10"); // Ctrl+P: switch from the default UTF-8 view to HEX.
+    tui.wait_for("HEX", SETTLE);
 
     tui.type_text("$01 $02 hello");
     tui.press_enter();
