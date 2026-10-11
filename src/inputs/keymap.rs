@@ -34,6 +34,7 @@ pub enum Action {
     ToggleCase,
     ToggleRegex,
     ToggleSpecialCharacters,
+    ToggleDisplayMode,
     PageUp,
     PageDown,
     JumpStart,
@@ -61,7 +62,7 @@ const JUMP_END: &str = "Alt+PageDown";
 impl Action {
     /// Every action, in a stable order (used for defaults, lookups and the
     /// error listing).
-    pub const ALL: [Action; 16] = [
+    pub const ALL: [Action; 17] = [
         Action::Copy,
         Action::Clear,
         Action::Save,
@@ -70,6 +71,7 @@ impl Action {
         Action::ToggleCase,
         Action::ToggleRegex,
         Action::ToggleSpecialCharacters,
+        Action::ToggleDisplayMode,
         Action::PageUp,
         Action::PageDown,
         Action::JumpStart,
@@ -91,6 +93,7 @@ impl Action {
             Action::ToggleCase => "toggle_case",
             Action::ToggleRegex => "toggle_regex",
             Action::ToggleSpecialCharacters => "toggle_special_characters",
+            Action::ToggleDisplayMode => "toggle_display_mode",
             Action::PageUp => "page_up",
             Action::PageDown => "page_down",
             Action::JumpStart => "jump_start",
@@ -113,6 +116,7 @@ impl Action {
             Action::ToggleCase => "Ctrl+W",
             Action::ToggleRegex => "Ctrl+E",
             Action::ToggleSpecialCharacters => "Ctrl+H",
+            Action::ToggleDisplayMode => "Ctrl+P",
             Action::PageUp => "PageUp",
             Action::PageDown => "PageDown",
             Action::JumpStart => JUMP_START,
@@ -641,6 +645,10 @@ mod tests {
             (
                 ev(KeyCode::Char('h'), KeyModifiers::CONTROL),
                 Action::ToggleSpecialCharacters,
+            ),
+            (
+                ev(KeyCode::Char('p'), KeyModifiers::CONTROL),
+                Action::ToggleDisplayMode,
             ),
             (ev(KeyCode::PageUp, KeyModifiers::NONE), Action::PageUp),
             (ev(KeyCode::PageDown, KeyModifiers::NONE), Action::PageDown),

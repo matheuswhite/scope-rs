@@ -370,6 +370,7 @@ impl Screen {
                 &self.bookmarks,
                 self.current_bookmark,
                 self.decoder.hex_format(),
+                self.decoder.is_hex(),
                 self.special_characters_visible,
             )
             .into_iter()
@@ -467,6 +468,14 @@ impl Screen {
 
     pub fn decoder(&self) -> ScreenDecoder {
         self.decoder
+    }
+
+    pub fn is_hex_display(&self) -> bool {
+        self.decoder.is_hex()
+    }
+
+    pub fn toggle_display_mode(&mut self) {
+        self.decoder.toggle_charset();
     }
 
     fn screen_center_y(&self) -> u16 {
@@ -749,6 +758,55 @@ impl SearchMatcher {
             }
         }
     }
+
+    fn matches_for_display(&self, line: &str, hex_display: bool) -> Vec<(usize, usize)> {
+        if !hex_display || !matches!(self, Self::Plain { .. }) {
+            return self.matches(line);
+        }
+
+        let Self::Plain {
+            needle,
+            is_case_sensitive,
+        } = self
+        else {
+            unreachable!();
+        };
+        let compact = line
+            .chars()
+            .filter(|character| !character.is_ascii_whitespace())
+            .collect::<String>();
+        let compact_needle = needle
+            .chars()
+            .filter(|character| !character.is_ascii_whitespace())
+            .collect::<String>();
+        let compact_matches = Self::Plain {
+            needle: compact_needle,
+            is_case_sensitive: *is_case_sensitive,
+        }
+        .matches(&compact);
+        let display_indices = line
+            .char_indices()
+            .filter(|(_, character)| !character.is_ascii_whitespace())
+            .map(|(index, _)| index)
+            .collect::<Vec<_>>();
+
+        compact_matches
+            .into_iter()
+            .filter_map(|(start, len)| {
+                let display_start = *display_indices.get(start)?;
+                let display_end = if len == 0 {
+                    display_start
+                } else {
+                    let last = *display_indices.get(start + len - 1)?;
+                    last + line[last..].chars().next()?.len_utf8()
+                };
+                Some((
+                    line[..display_start].chars().count(),
+                    line[display_start..display_end].chars().count(),
+                ))
+            })
+            .collect()
+    }
 }
 
 /// One hit of the active search: where it sits in the buffer right now
@@ -848,9 +906,9 @@ impl ScreenMode {
 
     /// Match positions of the active search query within `line`, as
     /// `(char_start, char_len)`. Empty outside Search mode.
-    pub fn search_matches(&self, line: &str) -> Vec<(usize, usize)> {
+    pub fn search_matches(&self, line: &str, hex_display: bool) -> Vec<(usize, usize)> {
         match self {
-            Self::Search { matcher, .. } => matcher.matches(line),
+            Self::Search { matcher, .. } => matcher.matches_for_display(line, hex_display),
             Self::Normal => vec![],
         }
     }
@@ -869,6 +927,7 @@ impl ScreenMode {
         bookmarks: &BTreeSet<u64>,
         current_bookmark: Option<u64>,
         hex_format: HexFormat,
+        hex_display: bool,
         special_characters_visible: bool,
     ) -> Vec<Line<'static>> {
         match self {
@@ -894,6 +953,7 @@ impl ScreenMode {
                         bookmarks,
                         current_bookmark,
                         hex_format,
+                        hex_display,
                         special_characters_visible,
                     )
                 })
@@ -1088,6 +1148,7 @@ impl ScreenMode {
         bookmarks: &BTreeSet<u64>,
         current_bookmark: Option<u64>,
         hex_format: HexFormat,
+        hex_display: bool,
         special_characters_visible: bool,
     ) -> Line<'static> {
         let is_reversed = selection.is_some_and(|sel| sel.is_inside(line.line));
@@ -1100,7 +1161,7 @@ impl ScreenMode {
             is_current_bookmark,
         );
         let line_number = line.line;
-        let content = self.search_line(line, hex_format, special_characters_visible);
+        let content = self.search_line(line, hex_format, hex_display, special_characters_visible);
         let content = Self::reverse_content(content, selection, line_number);
 
         Line::from(timestamp.into_iter().chain(content).collect::<Vec<_>>())
@@ -1110,6 +1171,7 @@ impl ScreenMode {
         &self,
         line: BufferLine<String>,
         hex_format: HexFormat,
+        hex_display: bool,
         special_characters_visible: bool,
     ) -> Vec<Span<'static>> {
         let Self::Search {
@@ -1141,7 +1203,7 @@ impl ScreenMode {
         // `^`, `$` and `\b` behave against the real line boundaries. The same
         // `message` and matcher feed `update_search_state`, so the char columns
         // computed here line up with the navigation entries below.
-        let matches = matcher.matches(&message);
+        let matches = matcher.matches_for_display(&message, hex_display);
         if matches.is_empty() {
             return Self::highlight_special_characters(
                 Span::styled(message, disable_style),
@@ -1320,8 +1382,8 @@ impl ScreenMode {
 enum Charset {
     #[default]
     Ascii,
-    #[allow(unused)]
     Utf8,
+    Hex,
 }
 
 /// Turns a line's bytes into text. A byte with no text form is escaped as
@@ -1346,11 +1408,16 @@ impl ScreenDecoder {
         match self.charset {
             Charset::Ascii => "ASCII",
             Charset::Utf8 => "UTF-8",
+            Charset::Hex => "HEX",
         }
     }
 
     pub fn hex_format(&self) -> HexFormat {
         self.hex_format
+    }
+
+    fn is_hex(&self) -> bool {
+        matches!(self.charset, Charset::Hex)
     }
 
     /// The line as the screen shows it: decoded, ANSI codes stripped and the
@@ -1417,8 +1484,44 @@ impl ScreenDecoder {
                     .replace("\r", "\\r")
                     .replace("\t", "    ")
             }
+            Charset::Hex => strip_ansi(data)
+                .iter()
+                .map(|byte| format!("{byte:02X}"))
+                .collect::<Vec<_>>()
+                .join(" "),
         }
     }
+
+    fn toggle_charset(&mut self) {
+        self.charset = match self.charset {
+            Charset::Ascii => Charset::Utf8,
+            Charset::Utf8 => Charset::Hex,
+            Charset::Hex => Charset::Ascii,
+        };
+    }
+}
+
+fn strip_ansi(data: &[u8]) -> Vec<u8> {
+    let mut result = Vec::with_capacity(data.len());
+    let mut index = 0;
+
+    while index < data.len() {
+        if data[index] == 0x1b && data.get(index + 1) == Some(&b'[') {
+            index += 2;
+            while index < data.len() {
+                let byte = data[index];
+                index += 1;
+                if (0x40..=0x7e).contains(&byte) {
+                    break;
+                }
+            }
+        } else {
+            result.push(data[index]);
+            index += 1;
+        }
+    }
+
+    result
 }
 
 /// How a byte with no text form is displayed (issue #239), chosen by

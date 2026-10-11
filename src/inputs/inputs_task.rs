@@ -732,6 +732,11 @@ impl InputsTask {
                     .graphics_cmd_sender
                     .send(GraphicsCommand::ToggleSpecialCharacters);
             }
+            Action::ToggleDisplayMode => {
+                let _ = private
+                    .graphics_cmd_sender
+                    .send(GraphicsCommand::ToggleDisplayMode);
+            }
             Action::WordRight => {
                 let mut sw = shared.write().expect("Cannot get input lock for write");
 
