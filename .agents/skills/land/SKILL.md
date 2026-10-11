@@ -16,6 +16,24 @@ Use this workflow only when the user explicitly requests that the current
 change be landed. Do not treat review approval, passing local checks, a pushed
 branch, or pull-request preparation as permission to merge.
 
+## Repository location
+
+This action must operate on the user's primary repository checkout, not on a
+Delta worktree or an agent-specific clone. Resolve the primary checkout before
+running any command and use it as the working directory for every `git`, `gh`,
+`cargo`, and file operation in this workflow:
+
+```sh
+PRIMARY_GIT_DIR="$(git remote get-url local)"
+PRIMARY_REPO="${PRIMARY_GIT_DIR%/.git}"
+cd "$PRIMARY_REPO"
+```
+
+If the `local` remote is unavailable, does not identify a local checkout, or
+resolves to an unexpected path, stop and ask the user. Do not silently fall
+back to the current Delta worktree. Verify the resolved repository with
+`git rev-parse --show-toplevel` before continuing.
+
 ## Preconditions
 
 1. Identify the current branch and repository:
