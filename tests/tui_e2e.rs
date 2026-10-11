@@ -491,7 +491,10 @@ impl Drop for Tui {
 #[test]
 fn hex_with_multiple_dollars_sends_correct_bytes() {
     // Regression for issue #178: `$01 $02` must render as \x01\x02, not \x01$02.
-    let mut tui = Tui::start(&[]);
+    let mut tui = Tui::start_with(StartOpts {
+        config_toml: Some("hex_format = \"escaped\"\n"),
+        ..Default::default()
+    });
     tui.wait_until_ready();
 
     tui.type_text("$01 $02");
@@ -502,7 +505,10 @@ fn hex_with_multiple_dollars_sends_correct_bytes() {
 
 #[test]
 fn hex_dollars_no_separator_sends_correct_bytes() {
-    let mut tui = Tui::start(&[]);
+    let mut tui = Tui::start_with(StartOpts {
+        config_toml: Some("hex_format = \"escaped\"\n"),
+        ..Default::default()
+    });
     tui.wait_until_ready();
 
     tui.type_text("$01$02");
@@ -513,7 +519,10 @@ fn hex_dollars_no_separator_sends_correct_bytes() {
 
 #[test]
 fn hex_mixed_with_plain_text_renders_correctly() {
-    let mut tui = Tui::start(&[]);
+    let mut tui = Tui::start_with(StartOpts {
+        config_toml: Some("hex_format = \"escaped\"\n"),
+        ..Default::default()
+    });
     tui.wait_until_ready();
 
     tui.type_text("$01 $02 hello");
