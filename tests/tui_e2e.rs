@@ -1074,6 +1074,8 @@ fn received_bytes_are_displayed() {
 fn ctrl_h_toggles_special_character_visibility() {
     let mut tui = Tui::start(&[]);
     tui.wait_until_ready();
+    tui.type_text("\x10\x10"); // Ctrl+P twice: use ASCII mode for escape assertions.
+    tui.wait_for("ASCII", SETTLE);
 
     tui.serial
         .master
