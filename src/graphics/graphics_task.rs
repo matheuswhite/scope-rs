@@ -1,7 +1,7 @@
 use super::Serialize;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
 use crate::graphics::message_filter::MessageFilter;
-use crate::graphics::screen::{HexFormat, Screen, ScreenPosition, SearchHit};
+use crate::graphics::screen::{HexFormat, Screen, ScreenDecoder, ScreenPosition, SearchHit};
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
 use crate::inputs::inputs_task::InputMode;
 use crate::interfaces::InterfaceShared;
@@ -1193,11 +1193,17 @@ impl GraphicsTask {
         for message in private.buffer.iter() {
             let line = message.line;
             let line_id = message.id;
-            let message = decoder.plain_text(&message.message);
+            let line_is_hex = message.level.is_none() && hex_display;
+            let line_decoder = if message.level.is_some() {
+                ScreenDecoder::utf8(decoder.hex_format())
+            } else {
+                decoder
+            };
+            let message = line_decoder.plain_text(&message.message);
 
             // Same matcher and same `message` as `search_line`, so the columns
             // recorded here match the highlighted spans exactly (regex or not).
-            for (column, _len) in mode.search_matches(&message, hex_display) {
+            for (column, _len) in mode.search_matches(&message, line_is_hex) {
                 mode.add_entry(SearchHit {
                     position: BufferPosition { line, column },
                     line_id,

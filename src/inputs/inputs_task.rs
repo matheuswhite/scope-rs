@@ -484,7 +484,9 @@ impl InputsTask {
                     Self::handle_tab_input(private, shared.clone());
                 }
             }
-            KeyCode::Enter if key.modifiers == ACTION_MODIFIER => {
+            KeyCode::Enter
+                if key.modifiers == ACTION_MODIFIER || key.modifiers == KeyModifiers::SHIFT =>
+            {
                 let sr = shared.read().expect("Cannot get input lock for read");
 
                 if matches!(sr.mode, InputMode::Search) {

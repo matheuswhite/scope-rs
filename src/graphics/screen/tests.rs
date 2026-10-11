@@ -660,7 +660,7 @@ fn formatted_bytes_keep_the_special_character_highlight() {
 
 #[test]
 fn hidden_special_characters_are_omitted_from_rendering() {
-    let decoder = ScreenDecoder::default();
+    let decoder = ScreenDecoder::ascii(HexFormat::default());
     let line = BufferLine::new_rx(Local::now(), b"a\x00b\r\n".to_vec()).decode(decoder);
     let lines = ScreenMode::Normal.to_lines(
         vec![line],
@@ -683,11 +683,9 @@ fn hidden_special_characters_are_omitted_from_rendering() {
 fn display_mode_cycles_ascii_utf8_and_hex() {
     let mut decoder = ScreenDecoder::default();
 
-    assert_eq!(decoder.name(), "ASCII");
-    assert_eq!(decoder.plain_text(b"hello"), "hello");
-
-    decoder.toggle_charset();
     assert_eq!(decoder.name(), "UTF-8");
+    assert_eq!(decoder.plain_text(b"hello"), "hello");
+    assert_eq!(decoder.plain_text(b"\x1b[31mhello\x1b[0m"), "hello");
 
     decoder.toggle_charset();
     assert_eq!(decoder.name(), "HEX");

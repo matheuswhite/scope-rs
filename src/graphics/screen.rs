@@ -352,7 +352,14 @@ impl Screen {
 
         let decoded_lines = buffer
             .get_range(start, end)
-            .map(|buffer_line| buffer_line.decode(self.decoder))
+            .map(|buffer_line| {
+                let decoder = if buffer_line.level.is_some() {
+                    ScreenDecoder::utf8(self.decoder.hex_format())
+                } else {
+                    self.decoder
+                };
+                buffer_line.decode(decoder)
+            })
             .filter(|line| {
                 let Some(level) = line.level else {
                     return true;
@@ -1380,8 +1387,8 @@ impl ScreenMode {
 
 #[derive(Clone, Copy, Default)]
 enum Charset {
-    #[default]
     Ascii,
+    #[default]
     Utf8,
     Hex,
 }
@@ -1400,6 +1407,20 @@ impl ScreenDecoder {
     pub fn new(hex_format: HexFormat) -> Self {
         Self {
             charset: Charset::default(),
+            hex_format,
+        }
+    }
+
+    pub fn utf8(hex_format: HexFormat) -> Self {
+        Self {
+            charset: Charset::Utf8,
+            hex_format,
+        }
+    }
+
+    fn ascii(hex_format: HexFormat) -> Self {
+        Self {
+            charset: Charset::Ascii,
             hex_format,
         }
     }
@@ -1480,6 +1501,7 @@ impl ScreenDecoder {
                 }
 
                 result
+                    .replace('\u{1b}', "\\x1b")
                     .replace("\n", "\\n")
                     .replace("\r", "\\r")
                     .replace("\t", "    ")
