@@ -1418,6 +1418,7 @@ impl ScreenDecoder {
         }
     }
 
+    #[cfg(test)]
     fn ascii(hex_format: HexFormat) -> Self {
         Self {
             charset: Charset::Ascii,
