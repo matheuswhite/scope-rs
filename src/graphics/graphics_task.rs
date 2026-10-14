@@ -35,7 +35,7 @@ use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, BorderType, Borders, Clear, Paragraph},
+    widgets::{Block, BorderType, Borders, Clear, List, ListItem, Paragraph},
 };
 use std::ops::Deref;
 use std::thread::{sleep, yield_now};
@@ -297,7 +297,7 @@ impl GraphicsTask {
             .map(|item| match item {
                 SpecialCharItem::Plain(s) => Span::from(s),
                 SpecialCharItem::Special(s, _column) => {
-                    Span::styled(s, Style::default().fg(Color::Cyan))
+                    Span::styled(s, Style::default().fg(Color::Magenta))
                 }
             })
             .collect::<Vec<_>>();
@@ -369,6 +369,45 @@ impl GraphicsTask {
         frame.set_cursor_position((cursor.0, cursor.1));
     }
 
+    pub fn draw_history_list(inputs_shared: &Shared<InputsShared>, frame: &mut Frame, y: u16) {
+        let (selected, matches) = {
+            let inputs = inputs_shared
+                .read()
+                .expect("Cannot get inputs lock for read");
+            if !inputs.history_mode {
+                return;
+            }
+            (inputs.history_selected, inputs.history_matches.clone())
+        };
+        let height = (matches.len() as u16).min(frame.area().height / 2).max(1) + 2;
+        let width = frame.area().width.saturating_sub(4).min(80);
+        let area = Rect::new(2, y.saturating_sub(height), width, height);
+        let items = matches
+            .iter()
+            .map(|entry| ListItem::new(entry.as_str()))
+            .collect::<Vec<_>>();
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .title("History")
+                    .borders(Borders::ALL)
+                    .border_type(BorderType::Thick)
+                    .border_style(Style::default().fg(Color::White)),
+            )
+            .highlight_style(
+                Style::default()
+                    .fg(Color::White)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+        frame.render_widget(Clear, area);
+        let mut state = ratatui::widgets::ListState::default();
+        if !matches.is_empty() {
+            state.select(Some(selected.min(matches.len() - 1)));
+        }
+        frame.render_stateful_widget(list, area, &mut state);
+    }
+
     pub fn draw_command_bar(
         inputs_shared: &Shared<InputsShared>,
         interface_shared: &Shared<InterfaceShared>,
@@ -417,7 +456,7 @@ impl GraphicsTask {
         frame: &mut Frame,
         command_bar_y: u16,
     ) {
-        let (autocomplete_list, pattern, input_mode, cursor, command, selected) = {
+        let (autocomplete_list, pattern, input_mode, history_mode, cursor, command, selected) = {
             let inputs_shared = inputs_shared
                 .read()
                 .expect("Cannot get inputs lock for read");
@@ -426,13 +465,18 @@ impl GraphicsTask {
                 inputs_shared.tag_list.autocomplete_list(),
                 inputs_shared.tag_list.pattern(),
                 inputs_shared.mode,
+                inputs_shared.history_mode,
                 inputs_shared.cursor,
                 inputs_shared.command_line.clone(),
                 inputs_shared.tag_list.selected(),
             )
         };
 
-        if autocomplete_list.is_empty() || pattern.is_empty() || input_mode != InputMode::Normal {
+        if autocomplete_list.is_empty()
+            || pattern.is_empty()
+            || input_mode != InputMode::Normal
+            || history_mode
+        {
             return;
         }
 
@@ -472,7 +516,7 @@ impl GraphicsTask {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
-            .style(Style::default().fg(Color::Cyan));
+            .style(Style::default().fg(Color::Magenta));
         let inner_width = area_size.0.saturating_sub(2) as usize;
         let skip_chars = pattern.chars().count().saturating_sub(1);
         let mut text = window
@@ -482,7 +526,7 @@ impl GraphicsTask {
                 let suffix = x.as_str().chars().skip(skip_chars).collect::<String>();
 
                 if start + i == selected {
-                    // Highlighted entry: a full-width cyan bar so the current
+                    // Highlighted entry: a full-width magenta bar so the current
                     // selection is unmistakable.
                     let content = format!(" {}{}", pattern, suffix);
                     let pad = inner_width.saturating_sub(content.chars().count());
@@ -490,12 +534,12 @@ impl GraphicsTask {
                         format!("{}{}", content, " ".repeat(pad)),
                         Style::default()
                             .fg(Color::Black)
-                            .bg(Color::Cyan)
+                            .bg(Color::Magenta)
                             .add_modifier(Modifier::BOLD),
                     ))
                 } else {
                     Line::from(vec![
-                        Span::styled(format!(" {}", pattern), Style::default().fg(Color::Cyan)),
+                        Span::styled(format!(" {}", pattern), Style::default().fg(Color::Magenta)),
                         Span::styled(suffix, Style::default().fg(Color::DarkGray)),
                     ])
                 }
@@ -1089,6 +1133,7 @@ impl GraphicsTask {
                             private.screen.special_characters_visible(),
                         );
                         Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
+                        Self::draw_history_list(&private.inputs_shared, f, chunks[1].y);
                     })
                     .expect("Error to draw");
                 continue;

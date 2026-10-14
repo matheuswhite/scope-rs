@@ -167,7 +167,7 @@ Typing `@reset` or `@greeting` on the command bar expands the tag to its value b
 
 #### Command History
 
-You can recall data you sent earlier: press `Up Arrow` and `Down Arrow` to navigate through the history of sent messages. The history is persisted between runs in a `.scope_history` file, so it survives restarts.
+You can recall data you sent earlier: press `Up Arrow` and `Down Arrow` to navigate through the history of sent messages. Press `Ctrl`+`G` to open a searchable history picker, type a fuzzy query, use the arrow keys to select a result, and press `Enter` to put it back in the command bar. The history is persisted between runs in a `.scope_history` file, so it survives restarts.
 
 ![Command history](videos/004_history/video.gif)
 
@@ -363,6 +363,7 @@ Rows with a **Config action** name are remappable via the `[shortcuts]` table in
 | `Ctrl`+`P` | Advance the display mode: ASCII → UTF-8 → HEX. | `toggle_display_mode` |
 | `Ctrl`+`S` | Save the whole session to a `.txt` file. | `save` |
 | `Ctrl`+`R` | Start / stop a record session. | `record` |
+| `Ctrl`+`G` | Open the searchable command-history picker. | `history_search` |
 | `Ctrl`+`C` | Copy the current selection to the clipboard. | `copy` |
 | Terminal paste shortcut | Paste text into the command bar (via bracketed paste). | — |
 | `Ctrl`+`L` | Clear the screen. | `clear` |
@@ -410,7 +411,7 @@ tag_file = "/home/user/.config/scope/tags.yml"
 hex_format = "prefixed_upper"   # how non-printable bytes are shown (0xAA)
 
 [shortcuts]
-record        = "Ctrl+G"   # move record off Ctrl+R
+record        = "Ctrl+R"   # record's default binding
 next_bookmark = "F2"
 prev_bookmark = "F3"
 # every other action keeps its default

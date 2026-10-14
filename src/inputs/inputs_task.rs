@@ -58,6 +58,12 @@ pub struct InputsShared {
     /// and executing a command (or an empty `Enter`, or `Esc`) sets it back.
     /// Always `false` in the TUI.
     pub raw: bool,
+    /// Ctrl+G command-history picker state.
+    pub history_mode: bool,
+    pub history_query: String,
+    pub history_cursor: usize,
+    pub history_selected: usize,
+    pub history_matches: Vec<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
@@ -134,6 +140,14 @@ impl InputsTask {
         // at the end of this condition, before `shared` is moved.
         if shared.read().expect("Cannot get input lock for read").raw {
             return Self::handle_raw_key_input(private, shared, key);
+        }
+
+        if shared
+            .read()
+            .expect("Cannot get input lock for read")
+            .history_mode
+        {
+            return Self::handle_history_key_input(private, shared, key);
         }
 
         // Remappable actions (see `keymap`) resolve first. A matched action
@@ -589,6 +603,76 @@ impl InputsTask {
         LoopStatus::Continue
     }
 
+    fn handle_history_key_input(
+        private: &mut InputsConnections,
+        shared: Arc<RwLock<InputsShared>>,
+        key: KeyEvent,
+    ) -> LoopStatus {
+        let mut sw = shared.write().expect("Cannot get input lock for write");
+        match key.code {
+            KeyCode::Esc => sw.history_mode = false,
+            KeyCode::Enter => {
+                if let Some(entry) = sw.history_matches.get(sw.history_selected) {
+                    sw.command_line = entry.clone();
+                    sw.cursor = sw.command_line.chars().count();
+                }
+                sw.history_mode = false;
+                Self::update_tag_list(&mut sw, private);
+            }
+            KeyCode::Up => sw.history_selected = sw.history_selected.saturating_sub(1),
+            KeyCode::Down => {
+                if !sw.history_matches.is_empty() {
+                    sw.history_selected =
+                        (sw.history_selected + 1).min(sw.history_matches.len() - 1);
+                }
+            }
+            KeyCode::Left => {
+                sw.history_cursor = sw.history_cursor.saturating_sub(1);
+                sw.cursor = sw.history_cursor;
+            }
+            KeyCode::Right => {
+                sw.history_cursor = (sw.history_cursor + 1).min(sw.history_query.chars().count());
+                sw.cursor = sw.history_cursor;
+            }
+            KeyCode::Home => {
+                sw.history_cursor = 0;
+                sw.cursor = 0;
+            }
+            KeyCode::End => {
+                sw.history_cursor = sw.history_query.chars().count();
+                sw.cursor = sw.history_cursor;
+            }
+            KeyCode::Backspace => {
+                if sw.history_cursor > 0 {
+                    sw.history_cursor -= 1;
+                    sw.cursor = sw.history_cursor;
+                    let cursor = sw.history_cursor;
+                    sw.command_line =
+                        Self::replace_range_chars(&sw.command_line, cursor..cursor + 1, "");
+                    sw.history_query = sw.command_line.clone();
+                    sw.history_matches = private.history.search(&sw.command_line);
+                    sw.history_selected = sw
+                        .history_selected
+                        .min(sw.history_matches.len().saturating_sub(1));
+                }
+            }
+            KeyCode::Char(c) if Self::char_is_literal_text(key.modifiers) => {
+                let cursor = sw.history_cursor;
+                sw.command_line =
+                    Self::replace_range_chars(&sw.command_line, cursor..cursor, &c.to_string());
+                sw.history_cursor += 1;
+                sw.cursor = sw.history_cursor;
+                sw.history_query = sw.command_line.clone();
+                sw.history_matches = private.history.search(&sw.command_line);
+                sw.history_selected = sw
+                    .history_selected
+                    .min(sw.history_matches.len().saturating_sub(1));
+            }
+            _ => {}
+        }
+        LoopStatus::Continue
+    }
+
     /// Headless raw passthrough: encode the keystroke and send it straight to
     /// the wire, with no command-bar buffering. `Ctrl+K` is the one exception —
     /// it leaves raw mode and opens the scope command bar (`InputMode::Normal`),
@@ -661,6 +745,15 @@ impl InputsTask {
                 let _ = private
                     .graphics_cmd_sender
                     .send(GraphicsCommand::RecordData);
+            }
+            Action::HistorySearch => {
+                let mut sw = shared.write().expect("Cannot get inputs lock for write");
+                sw.history_mode = true;
+                sw.history_query = sw.command_line.clone();
+                sw.history_cursor = sw.history_query.chars().count();
+                sw.cursor = sw.history_cursor;
+                sw.history_matches = private.history.search(&sw.history_query);
+                sw.history_selected = 0;
             }
             Action::PageUp => {
                 let _ = private.graphics_cmd_sender.send(GraphicsCommand::PageUp);
