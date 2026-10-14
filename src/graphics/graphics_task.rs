@@ -396,7 +396,7 @@ impl GraphicsTask {
             )
             .highlight_style(
                 Style::default()
-                    .fg(Color::White)
+                    .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("▶ ");

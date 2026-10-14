@@ -749,6 +749,7 @@ impl InputsTask {
             Action::HistorySearch => {
                 let mut sw = shared.write().expect("Cannot get inputs lock for write");
                 sw.history_mode = true;
+                sw.current_hint = None;
                 sw.history_query = sw.command_line.clone();
                 sw.history_cursor = sw.history_query.chars().count();
                 sw.cursor = sw.history_cursor;
