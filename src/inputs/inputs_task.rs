@@ -611,7 +611,7 @@ impl InputsTask {
         let mut sw = shared.write().expect("Cannot get input lock for write");
         match key.code {
             KeyCode::Esc => sw.history_mode = false,
-            KeyCode::Enter => {
+            KeyCode::Enter | KeyCode::Tab => {
                 if let Some(entry) = sw.history_matches.get(sw.history_selected) {
                     sw.command_line = entry.clone();
                     sw.cursor = sw.command_line.chars().count();

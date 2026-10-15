@@ -369,22 +369,62 @@ impl GraphicsTask {
         frame.set_cursor_position((cursor.0, cursor.1));
     }
 
+    fn history_item(entry: &str, query: &str) -> Line<'static> {
+        let entry_chars = entry.chars().collect::<Vec<_>>();
+        let query_chars = query.to_ascii_lowercase().chars().collect::<Vec<_>>();
+        let lower_entry = entry.to_ascii_lowercase().chars().collect::<Vec<_>>();
+        let mut matching = vec![false; entry_chars.len()];
+        let mut next = 0;
+        for query_char in query_chars {
+            let Some(offset) = lower_entry[next..]
+                .iter()
+                .position(|entry_char| *entry_char == query_char)
+            else {
+                break;
+            };
+            let index = next + offset;
+            matching[index] = true;
+            next = index + 1;
+        }
+
+        Line::from(
+            entry_chars
+                .into_iter()
+                .enumerate()
+                .map(|(index, character)| {
+                    Span::styled(
+                        character.to_string(),
+                        Style::default().fg(if matching[index] {
+                            Color::Yellow
+                        } else {
+                            Color::White
+                        }),
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
     pub fn draw_history_list(inputs_shared: &Shared<InputsShared>, frame: &mut Frame, y: u16) {
-        let (selected, matches) = {
+        let (query, selected, matches) = {
             let inputs = inputs_shared
                 .read()
                 .expect("Cannot get inputs lock for read");
             if !inputs.history_mode {
                 return;
             }
-            (inputs.history_selected, inputs.history_matches.clone())
+            (
+                inputs.history_query.clone(),
+                inputs.history_selected,
+                inputs.history_matches.clone(),
+            )
         };
         let height = (matches.len() as u16).min(frame.area().height / 2).max(1) + 2;
         let width = frame.area().width.saturating_sub(4).min(80);
         let area = Rect::new(2, y.saturating_sub(height), width, height);
         let items = matches
             .iter()
-            .map(|entry| ListItem::new(entry.as_str()))
+            .map(|entry| ListItem::new(Self::history_item(entry, &query)))
             .collect::<Vec<_>>();
         let list = List::new(items)
             .block(
@@ -396,7 +436,7 @@ impl GraphicsTask {
             )
             .highlight_style(
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(Color::White)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("▶ ");

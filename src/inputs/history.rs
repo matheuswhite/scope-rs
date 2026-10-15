@@ -70,7 +70,6 @@ pub struct History {
     /// Snapshot of the input before the user started navigating.
     backup: String,
 
-    matcher: Matcher,
     fuzy_entries: Vec<usize>,
 }
 
@@ -80,7 +79,6 @@ impl History {
             entries: Vec::new(),
             index: None,
             backup: String::new(),
-            matcher: Matcher::new(),
             fuzy_entries: Vec::new(),
         }
     }
@@ -114,7 +112,7 @@ impl History {
             None => {
                 self.backup = current_line.to_owned();
 
-                self.fuzy_entries = self.matcher.fuzy_match_idx(&self.entries, &self.backup);
+                self.fuzy_entries = fuzzy_match_indices(&self.entries, &self.backup);
 
                 if self.fuzy_entries.is_empty() {
                     return HistoryNavResult::Empty;
@@ -168,20 +166,10 @@ impl History {
 
     /// Returns entries matching a fuzzy query, ordered by match quality.
     pub fn search(&mut self, query: &str) -> Vec<String> {
-        let query = query.to_ascii_lowercase();
-        let mut matches = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter_map(|(index, entry)| fuzzy_score(entry, &query).map(|score| (score, index)))
-            .collect::<Vec<_>>();
-        matches.sort_by_key(|(score, index)| (*score, std::cmp::Reverse(*index)));
-
         let mut seen = HashSet::new();
-        matches
+        fuzzy_match_indices(&self.entries, query)
             .into_iter()
-            .rev()
-            .filter_map(|(_, index)| {
+            .filter_map(|index| {
                 let entry = &self.entries[index];
                 seen.insert(entry).then(|| entry.clone())
             })
@@ -189,6 +177,16 @@ impl History {
     }
 }
 
+fn fuzzy_match_indices(entries: &[String], query: &str) -> Vec<usize> {
+    let query = query.to_ascii_lowercase();
+    let mut matches = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| fuzzy_score(entry, &query).map(|score| (score, index)))
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|(score, index)| (*score, std::cmp::Reverse(*index)));
+    matches.into_iter().rev().map(|(_, index)| index).collect()
+}
 fn fuzzy_score(entry: &str, query: &str) -> Option<i64> {
     if query.is_empty() {
         return Some(0);
