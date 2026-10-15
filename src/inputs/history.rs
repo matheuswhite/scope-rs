@@ -2,15 +2,20 @@ use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+#[cfg(test)]
 use std::sync::Arc;
 
+#[cfg(test)]
 use nucleo::pattern::{CaseMatching, Normalization};
+#[cfg(test)]
 use nucleo::{Config, Nucleo};
 
+#[cfg(test)]
 struct Matcher {
     matcher: Nucleo<usize>,
 }
 
+#[cfg(test)]
 impl Matcher {
     fn new() -> Self {
         Self {
