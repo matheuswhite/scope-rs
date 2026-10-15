@@ -1101,11 +1101,9 @@ fn ctrl_h_toggles_special_character_visibility() {
 #[test]
 fn custom_shortcut_from_config_remaps_action() {
     // Issue #211: a `[shortcuts]` override both moves an action to a new key and
-    // disables the built-in one. Move `record` from Ctrl+R to Ctrl+G. (Ctrl+G is
-    // 0x07; we avoid Ctrl+J=0x0a / Ctrl+I=0x09, which terminals send as
-    // Enter/Tab.)
+    // disables the built-in one. Move `record` from Ctrl+R to Ctrl+T.
     let mut tui = Tui::start_with(StartOpts {
-        config_toml: Some("[shortcuts]\nrecord = \"Ctrl+G\"\n"),
+        config_toml: Some("[shortcuts]\nrecord = \"Ctrl+T\"\n"),
         ..Default::default()
     });
     tui.wait_until_ready();
@@ -1119,11 +1117,11 @@ fn custom_shortcut_from_config_remaps_action() {
     let screen = tui.wait_for("probe", SETTLE);
     assert!(
         !screen.contains("Recording content on"),
-        "Ctrl+R must be unbound after remapping record to Ctrl+G.\n{screen}"
+        "Ctrl+R must be unbound after remapping record to Ctrl+T.\n{screen}"
     );
 
-    // The new key works: Ctrl+G (0x07) starts a recording.
-    tui.type_text("\x07"); // Ctrl+G
+    // The new key works: Ctrl+T (0x14) starts a recording.
+    tui.type_text("\x14"); // Ctrl+T
     tui.wait_for("Recording content on", SETTLE);
 }
 
