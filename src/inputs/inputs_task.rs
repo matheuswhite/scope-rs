@@ -609,6 +609,12 @@ impl InputsTask {
         key: KeyEvent,
     ) -> LoopStatus {
         let mut sw = shared.write().expect("Cannot get input lock for write");
+        if matches!(key.code, KeyCode::Char('g') | KeyCode::Char('G'))
+            && key.modifiers.contains(KeyModifiers::CONTROL)
+        {
+            sw.history_mode = false;
+            return LoopStatus::Continue;
+        }
         match key.code {
             KeyCode::Esc => sw.history_mode = false,
             KeyCode::Enter | KeyCode::Tab => {
@@ -748,6 +754,9 @@ impl InputsTask {
             }
             Action::HistorySearch => {
                 let mut sw = shared.write().expect("Cannot get inputs lock for write");
+                if sw.mode != InputMode::Normal {
+                    return ActionOutcome::Handled;
+                }
                 sw.history_mode = true;
                 sw.current_hint = None;
                 sw.history_query = sw.command_line.clone();
