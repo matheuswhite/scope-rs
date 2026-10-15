@@ -123,7 +123,11 @@ impl History {
                     return HistoryNavResult::Empty;
                 }
 
-                self.fuzy_entries.len() - 1
+                if self.backup.is_empty() {
+                    self.fuzy_entries.len() - 1
+                } else {
+                    0
+                }
             }
             Some(0) => 0,
             Some(i) => i - 1,
@@ -546,6 +550,19 @@ mod tests {
                 history.search("!rtt").first().map(String::as_str),
                 Some("!rtt connect nrf52833")
             );
+        }
+
+        #[test]
+        fn navigate_up_starts_with_the_best_nonempty_match() {
+            let mut history = History::new();
+            history.push("net dns").unwrap();
+            history.push("network status").unwrap();
+            history.push("send data").unwrap();
+
+            assert!(matches!(
+                history.navigate_up("net dn"),
+                HistoryNavResult::Entry("net dns")
+            ));
         }
 
         #[test]

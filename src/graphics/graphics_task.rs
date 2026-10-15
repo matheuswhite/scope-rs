@@ -394,11 +394,11 @@ impl GraphicsTask {
                 .map(|(index, character)| {
                     Span::styled(
                         character.to_string(),
-                        Style::default().fg(if matching[index] {
-                            Color::Yellow
+                        if matching[index] {
+                            Style::default().fg(Color::Magenta)
                         } else {
-                            Color::White
-                        }),
+                            Style::default()
+                        },
                     )
                 })
                 .collect::<Vec<_>>(),
@@ -436,7 +436,7 @@ impl GraphicsTask {
             )
             .highlight_style(
                 Style::default()
-                    .fg(Color::White)
+                    .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             )
             .highlight_symbol("▶ ");
