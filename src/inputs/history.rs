@@ -1,15 +1,21 @@
+use std::collections::HashSet;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+#[cfg(test)]
 use std::sync::Arc;
 
+#[cfg(test)]
 use nucleo::pattern::{CaseMatching, Normalization};
+#[cfg(test)]
 use nucleo::{Config, Nucleo};
 
+#[cfg(test)]
 struct Matcher {
     matcher: Nucleo<usize>,
 }
 
+#[cfg(test)]
 impl Matcher {
     fn new() -> Self {
         Self {
@@ -69,7 +75,6 @@ pub struct History {
     /// Snapshot of the input before the user started navigating.
     backup: String,
 
-    matcher: Matcher,
     fuzy_entries: Vec<usize>,
 }
 
@@ -79,7 +84,6 @@ impl History {
             entries: Vec::new(),
             index: None,
             backup: String::new(),
-            matcher: Matcher::new(),
             fuzy_entries: Vec::new(),
         }
     }
@@ -113,13 +117,17 @@ impl History {
             None => {
                 self.backup = current_line.to_owned();
 
-                self.fuzy_entries = self.matcher.fuzy_match_idx(&self.entries, &self.backup);
+                self.fuzy_entries = fuzzy_match_indices(&self.entries, &self.backup);
 
                 if self.fuzy_entries.is_empty() {
                     return HistoryNavResult::Empty;
                 }
 
-                self.fuzy_entries.len() - 1
+                if self.backup.is_empty() {
+                    self.fuzy_entries.len() - 1
+                } else {
+                    0
+                }
             }
             Some(0) => 0,
             Some(i) => i - 1,
@@ -164,6 +172,60 @@ impl History {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Returns entries matching a fuzzy query, ordered by match quality.
+    pub fn search(&mut self, query: &str) -> Vec<String> {
+        let mut seen = HashSet::new();
+        fuzzy_match_indices(&self.entries, query)
+            .into_iter()
+            .filter_map(|index| {
+                let entry = &self.entries[index];
+                seen.insert(entry).then(|| entry.clone())
+            })
+            .collect()
+    }
+}
+
+fn fuzzy_match_indices(entries: &[String], query: &str) -> Vec<usize> {
+    let query = query.to_ascii_lowercase();
+    let mut matches = entries
+        .iter()
+        .enumerate()
+        .filter_map(|(index, entry)| fuzzy_score(entry, &query).map(|score| (score, index)))
+        .collect::<Vec<_>>();
+    matches.sort_by_key(|(score, index)| (*score, std::cmp::Reverse(*index)));
+    matches.into_iter().rev().map(|(_, index)| index).collect()
+}
+fn fuzzy_score(entry: &str, query: &str) -> Option<i64> {
+    if query.is_empty() {
+        return Some(0);
+    }
+
+    let entry_lower = entry.to_ascii_lowercase();
+    let query_chars = query.chars().collect::<Vec<_>>();
+    let entry_chars = entry_lower.chars().collect::<Vec<_>>();
+    let mut positions = Vec::with_capacity(query_chars.len());
+    let mut next = 0;
+    for query_char in query_chars {
+        let position = entry_chars[next..]
+            .iter()
+            .position(|entry_char| *entry_char == query_char)?
+            + next;
+        positions.push(position);
+        next = position + 1;
+    }
+
+    let gaps = positions
+        .windows(2)
+        .map(|pair| pair[1] - pair[0] - 1)
+        .sum::<usize>();
+    let contiguous = entry_lower.contains(query);
+    let prefix = entry_lower.starts_with(query);
+    Some(
+        (prefix as i64) * 10_000 + (contiguous as i64) * 1_000
+            - positions[0] as i64 * 10
+            - gaps as i64,
+    )
 }
 
 // ── PersistHistory ────────────────────────────────────────────────────────────
@@ -312,6 +374,13 @@ impl AnyHistory {
         match self {
             AnyHistory::Persist(h) => h.is_empty(),
             AnyHistory::Base(h) => h.is_empty(),
+        }
+    }
+
+    pub fn search(&mut self, query: &str) -> Vec<String> {
+        match self {
+            AnyHistory::Persist(h) => h.inner.search(query),
+            AnyHistory::Base(h) => h.search(query),
         }
     }
 }
@@ -464,6 +533,49 @@ mod tests {
             assert_eq!(haystack[first[0]], "alpha");
             assert_eq!(second.len(), 1);
             assert_eq!(haystack[second[0]], "beta");
+        }
+    }
+
+    mod search {
+        use super::*;
+
+        #[test]
+        fn ranks_prefix_match_before_loose_matches() {
+            let mut history = History::new();
+            history.push("!other command").unwrap();
+            history.push("!rtt connect nrf52833").unwrap();
+            history.push("reconnect target").unwrap();
+
+            assert_eq!(
+                history.search("!rtt").first().map(String::as_str),
+                Some("!rtt connect nrf52833")
+            );
+        }
+
+        #[test]
+        fn navigate_up_starts_with_the_best_nonempty_match() {
+            let mut history = History::new();
+            history.push("net dns").unwrap();
+            history.push("network status").unwrap();
+            history.push("send data").unwrap();
+
+            assert!(matches!(
+                history.navigate_up("net dn"),
+                HistoryNavResult::Entry("net dns")
+            ));
+        }
+
+        #[test]
+        fn removes_duplicate_entries_from_results() {
+            let mut history = History::new();
+            history.push("!rtt connect").unwrap();
+            history.push("!serial connect").unwrap();
+            history.push("!rtt connect").unwrap();
+
+            assert_eq!(
+                history.search("connect"),
+                vec!["!rtt connect", "!serial connect"]
+            );
         }
     }
 

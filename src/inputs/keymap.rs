@@ -30,6 +30,7 @@ pub enum Action {
     Clear,
     Save,
     Record,
+    HistorySearch,
     SearchToggle,
     ToggleCase,
     ToggleRegex,
@@ -62,11 +63,12 @@ const JUMP_END: &str = "Alt+PageDown";
 impl Action {
     /// Every action, in a stable order (used for defaults, lookups and the
     /// error listing).
-    pub const ALL: [Action; 17] = [
+    pub const ALL: [Action; 18] = [
         Action::Copy,
         Action::Clear,
         Action::Save,
         Action::Record,
+        Action::HistorySearch,
         Action::SearchToggle,
         Action::ToggleCase,
         Action::ToggleRegex,
@@ -89,6 +91,7 @@ impl Action {
             Action::Clear => "clear",
             Action::Save => "save",
             Action::Record => "record",
+            Action::HistorySearch => "history_search",
             Action::SearchToggle => "search_toggle",
             Action::ToggleCase => "toggle_case",
             Action::ToggleRegex => "toggle_regex",
@@ -112,6 +115,7 @@ impl Action {
             Action::Clear => "Ctrl+L",
             Action::Save => "Ctrl+S",
             Action::Record => "Ctrl+R",
+            Action::HistorySearch => "Ctrl+G",
             Action::SearchToggle => "Ctrl+F",
             Action::ToggleCase => "Ctrl+W",
             Action::ToggleRegex => "Ctrl+E",
@@ -631,6 +635,10 @@ mod tests {
                 Action::Record,
             ),
             (
+                ev(KeyCode::Char('g'), KeyModifiers::CONTROL),
+                Action::HistorySearch,
+            ),
+            (
                 ev(KeyCode::Char('f'), KeyModifiers::CONTROL),
                 Action::SearchToggle,
             ),
@@ -673,12 +681,12 @@ mod tests {
 
     #[test]
     fn from_config_override_replaces_default() {
-        let km = Keymap::from_config(Some(&map(&[("record", "Ctrl+G")]))).unwrap();
+        let km = Keymap::from_config(Some(&map(&[("record", "Ctrl+T")]))).unwrap();
         assert_eq!(
-            km.action_for(&ev(KeyCode::Char('g'), KeyModifiers::CONTROL)),
+            km.action_for(&ev(KeyCode::Char('t'), KeyModifiers::CONTROL)),
             Some(Action::Record)
         );
-        // The old default no longer triggers record...
+        // Overriding record removes its old binding...
         assert_eq!(
             km.action_for(&ev(KeyCode::Char('r'), KeyModifiers::CONTROL)),
             None
@@ -702,13 +710,13 @@ mod tests {
     #[test]
     fn from_config_full_swap_is_allowed() {
         let km =
-            Keymap::from_config(Some(&map(&[("record", "Ctrl+S"), ("save", "Ctrl+R")]))).unwrap();
+            Keymap::from_config(Some(&map(&[("record", "Ctrl+J"), ("save", "Ctrl+Y")]))).unwrap();
         assert_eq!(
-            km.action_for(&ev(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+            km.action_for(&ev(KeyCode::Char('j'), KeyModifiers::CONTROL)),
             Some(Action::Record)
         );
         assert_eq!(
-            km.action_for(&ev(KeyCode::Char('r'), KeyModifiers::CONTROL)),
+            km.action_for(&ev(KeyCode::Char('y'), KeyModifiers::CONTROL)),
             Some(Action::Save)
         );
     }
