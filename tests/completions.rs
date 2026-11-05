@@ -153,8 +153,9 @@ fn bare_scope_offers_the_whole_cli() {
 /// The acceptance criterion of #236: `scope serial <TAB>` offers the live
 /// ports. The test can't know what is plugged into the machine running it, so
 /// it asks serialport the same question and expects the same answer — every
-/// port, not only the USB ones `scope list` shows. With none at all the
-/// completion falls back to file names, and `complete` runs in an empty dir.
+/// port, not only the USB ones `scope list` shows. On a machine with none (the
+/// CI runners) the answer must be empty too — the path fallback is for a typed
+/// word only, or an empty one would offer `.` and the working directory.
 #[test]
 fn serial_port_offers_the_live_ports() {
     let mut want: Vec<String> = serialport::available_ports()
