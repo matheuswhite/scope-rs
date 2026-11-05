@@ -164,6 +164,9 @@ impl SerialInterface {
         let mut now = Instant::now();
         let mut last_reconnect: Option<Instant> = None;
         let mut transfer: Option<FileTransfer> = None;
+        // Last open failure reported, so the 500ms reconnect loop logs each
+        // distinct error once instead of every attempt (issue #243).
+        let mut last_open_error: Option<String> = None;
 
         'task_loop: loop {
             if let Ok(InterfaceCommand::Serial(cmd)) = cmd_receiver.try_recv() {
@@ -173,21 +176,30 @@ impl SerialInterface {
                         &mut serial,
                         &logger,
                         &plugin_engine_cmd_sender,
+                        &mut last_open_error,
                     ),
-                    SerialCommand::Disconnect => Self::disconnect(
-                        shared.clone(),
-                        &mut serial,
-                        &logger,
-                        &plugin_engine_cmd_sender,
-                    ),
+                    SerialCommand::Disconnect => {
+                        last_open_error = None;
+                        Self::disconnect(
+                            shared.clone(),
+                            &mut serial,
+                            &logger,
+                            &plugin_engine_cmd_sender,
+                        )
+                    }
                     SerialCommand::Exit => break 'task_loop,
-                    SerialCommand::Setup(setup) => Self::setup(
-                        shared.clone(),
-                        setup,
-                        &mut serial,
-                        &logger,
-                        &plugin_engine_cmd_sender,
-                    ),
+                    SerialCommand::Setup(setup) => {
+                        // New settings may fail differently (or the same way,
+                        // which the user should hear about again).
+                        last_open_error = None;
+                        Self::setup(
+                            shared.clone(),
+                            setup,
+                            &mut serial,
+                            &logger,
+                            &plugin_engine_cmd_sender,
+                        )
+                    }
                     SerialCommand::SendFile { path } => {
                         Self::start_file_transfer(&shared, &mut transfer, &path, &logger);
                         None
@@ -240,6 +252,7 @@ impl SerialInterface {
                             &mut serial,
                             &logger,
                             &plugin_engine_cmd_sender,
+                            &mut last_open_error,
                         );
                         Self::set_mode(shared.clone(), new_mode);
                     } else {
@@ -332,6 +345,7 @@ impl SerialInterface {
         serial: &mut Option<SerialPort>,
         logger: &Logger,
         plugin_engine_cmd_sender: &Sender<PluginEngineCommand>,
+        last_open_error: &mut Option<String>,
     ) -> Option<SerialMode> {
         // Snapshot the connection settings and release the lock: opening a port
         // and enumerating devices can block, and on success `connect` takes a
@@ -390,6 +404,7 @@ impl SerialInterface {
         match connect_res {
             Ok(ser) => {
                 *serial = Some(ser);
+                *last_open_error = None;
 
                 // Reconcile the stored USB identity with the device we actually
                 // opened: learn it on the first connection, refresh it if a
@@ -439,13 +454,53 @@ impl SerialInterface {
                 });
                 Some(SerialMode::Connected)
             }
-            Err(_) => {
+            Err(err) => {
                 let _ = serial.take();
+                // Never swallow the reason: a port that lists fine but won't
+                // open (permissions, held by another program, a driver that
+                // rejects the termios settings) used to leave the status bar
+                // red with no explanation at all (issue #243).
+                let message = Self::open_error_message(&port, &err);
+                if last_open_error.as_ref() != Some(&message) {
+                    error!(logger, "{}", message);
+                    *last_open_error = Some(message);
+                }
                 match mode {
                     SerialMode::Reconnecting => None,
                     _ => Some(SerialMode::Reconnecting),
                 }
             }
+        }
+    }
+
+    /// The log line for a failed open of `port`: the OS error plus, for the
+    /// failures with a well-known fix, a hint on what to do about it.
+    fn open_error_message(port: &str, err: &serialport::Error) -> String {
+        let mut message = format!("Cannot open \"{}\": {}", port, err.description);
+        if let Some(hint) = Self::open_error_hint(err) {
+            message.push_str(". ");
+            message.push_str(hint);
+        }
+        message.push_str(". Retrying...");
+        message
+    }
+
+    /// A remedy for open failures whose cause is common and fixable outside
+    /// scope. `serialport` maps EACCES to `PermissionDenied`, but EBUSY only
+    /// survives as its `strerror` text ("Device or resource busy").
+    fn open_error_hint(err: &serialport::Error) -> Option<&'static str> {
+        match err.kind {
+            serialport::ErrorKind::Io(io::ErrorKind::PermissionDenied) => {
+                Some(if cfg!(target_os = "linux") {
+                    "Add your user to the port's group (usually `dialout`: `sudo usermod -aG dialout $USER`) and log in again"
+                } else {
+                    "Check that your user has read/write access to the port"
+                })
+            }
+            _ if err.description.to_lowercase().contains("busy") => Some(
+                "Another program is using the port (on Linux, ModemManager often grabs /dev/ttyACM*)",
+            ),
+            _ => None,
         }
     }
 
@@ -737,6 +792,50 @@ mod tests {
 
         assert_eq!(wire, data, "every byte reaches the wire, in order");
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn open_error_message_reports_port_and_os_error() {
+        let err = serialport::Error::new(
+            serialport::ErrorKind::Unknown,
+            "Settings did not apply correctly",
+        );
+        assert_eq!(
+            SerialInterface::open_error_message("/dev/ttyACM0", &err),
+            "Cannot open \"/dev/ttyACM0\": Settings did not apply correctly. Retrying..."
+        );
+    }
+
+    #[test]
+    fn open_error_hint_for_permission_denied() {
+        let err = serialport::Error::new(
+            serialport::ErrorKind::Io(io::ErrorKind::PermissionDenied),
+            "Permission denied",
+        );
+        let message = SerialInterface::open_error_message("/dev/ttyACM0", &err);
+        assert!(message.starts_with("Cannot open \"/dev/ttyACM0\": Permission denied. "));
+        #[cfg(target_os = "linux")]
+        assert!(message.contains("dialout"));
+        assert!(message.ends_with(". Retrying..."));
+    }
+
+    #[test]
+    fn open_error_hint_for_busy_port() {
+        // EBUSY reaches us as `Unknown` + its strerror text.
+        let err = serialport::Error::new(serialport::ErrorKind::Unknown, "Device or resource busy");
+        assert!(
+            SerialInterface::open_error_hint(&err)
+                .is_some_and(|hint| hint.contains("Another program"))
+        );
+    }
+
+    #[test]
+    fn open_error_hint_absent_for_missing_port() {
+        let err = serialport::Error::new(
+            serialport::ErrorKind::Io(io::ErrorKind::NotFound),
+            "No such file or directory",
+        );
+        assert_eq!(SerialInterface::open_error_hint(&err), None);
     }
 
     fn usb(vid: u16, pid: u16, serial: Option<&str>) -> UsbPortInfo {
