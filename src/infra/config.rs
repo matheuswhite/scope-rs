@@ -12,6 +12,7 @@
 //! silently do nothing.
 
 use crate::graphics::screen::HexFormat;
+use crate::graphics::theme::Theme;
 use serde::Deserialize;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -51,6 +52,14 @@ pub struct Config {
     /// precedence is config.toml > built-in default (everything saved).
     #[serde(default)]
     pub history: Option<HistoryConfig>,
+    /// Optional `[theme]` table (plus its `[theme.icons]` sub-table): colors by
+    /// role, the glyphs, and the background — `reset`, the default, keeps the
+    /// terminal's own, transparency included (issue #68). There is no CLI flag;
+    /// an omitted key keeps the built-in look. Parsed straight into the
+    /// renderer's [`Theme`], so an unknown role or bad color gets a located
+    /// error; icon widths are checked afterwards by `Theme::validate`.
+    #[serde(default)]
+    pub theme: Option<Theme>,
 }
 
 /// The `[history]` table. Each key covers one file that is written
@@ -224,6 +233,35 @@ mod tests {
                 "{name} missing from: {err}"
             );
         }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn parses_the_theme_tables() {
+        let path = temp_path("theme");
+        std::fs::write(
+            &path,
+            "[theme]\nbackground = \"black\"\n\n[theme.icons]\nhighlight = \"> \"\n",
+        )
+        .unwrap();
+
+        let theme = Config::load_from(&path).unwrap().theme.unwrap();
+        assert_eq!(theme.background, ratatui::style::Color::Black);
+        assert_eq!(theme.icons.highlight, "> ");
+        assert_eq!(theme.connected, Theme::default().connected);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn rejects_a_bad_theme_color_with_its_location() {
+        let path = temp_path("theme_bad");
+        std::fs::write(&path, "[theme]\nsearch = \"nope\"\n").unwrap();
+
+        let err = Config::load_from(&path).unwrap_err();
+        assert!(err.contains("invalid color `nope`"), "{err}");
+        assert!(err.contains("line 2"), "{err}");
 
         let _ = std::fs::remove_file(&path);
     }
