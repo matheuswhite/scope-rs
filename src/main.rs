@@ -18,7 +18,7 @@ use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::aot::{Shell, generate};
 use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
 use graphics::screen::HexFormat;
-use graphics::theme;
+use graphics::theme::{self, Theme};
 use infra::config::{Autosave, Config};
 use infra::logger::Logger;
 use infra::mpmc::Channel;
@@ -548,9 +548,10 @@ fn main() -> Result<(), String> {
         let autosave = Autosave::from_config(config.history.as_ref());
         // And `hex_format`; an unknown name was already rejected by `Config::load`.
         let hex_format = config.hex_format.unwrap_or_default();
-        // And `[theme]` (issue #68). Installed before the picker below, which
-        // renders with it too; a bad icon width joins the `[ERR]` funnel.
-        theme::install(config.theme.unwrap_or_default().validate()?);
+        // And the theme (issue #68), from its own `theme.toml` next to
+        // `config.toml`. Installed before the picker below, which renders with
+        // it too; a malformed file or bad icon width joins the `[ERR]` funnel.
+        theme::install(Theme::load()?);
         let name = cli
             .name
             .as_deref()
