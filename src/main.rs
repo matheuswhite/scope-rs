@@ -2,6 +2,7 @@
 
 extern crate core;
 
+mod completion;
 mod graphics;
 mod infra;
 mod inputs;
@@ -14,8 +15,9 @@ use crate::infra::tags::TagList;
 use crate::interfaces::rtt_if::{ControlBlock, RttCommand, RttConnections, RttSetup};
 use crate::interfaces::serial_if::SerialCommand;
 use crate::interfaces::{InterfaceCommand, InterfaceTask, InterfaceType};
-use clap::{CommandFactory, Parser, Subcommand};
-use clap_complete::aot::{Shell, generate};
+use clap::{CommandFactory, Parser, Subcommand, ValueHint};
+use clap_complete::aot::Shell;
+use clap_complete::{ArgValueCandidates, ArgValueCompleter, CompleteEnv};
 use graphics::graphics_task::{GraphicsConnections, GraphicsTask};
 use graphics::screen::HexFormat;
 use infra::config::{Autosave, Config};
@@ -58,7 +60,7 @@ struct Cli {
     /// Path to the YAML file whose entries resolve `@name` tags typed in the
     /// command bar. Falls back to `tag_file` in config.toml, then to `tags.yml`.
     /// Used verbatim: `~` and environment variables are not expanded.
-    #[clap(short, long)]
+    #[clap(short, long, value_hint = ValueHint::FilePath)]
     tag_file: Option<PathBuf>,
     /// Polling latency in microseconds, clamped to 0..=100000. Defaults to 100;
     /// 0 yields the thread instead of sleeping.
@@ -81,8 +83,10 @@ pub enum Commands {
     Serial {
         /// Serial port to open, e.g. /dev/ttyUSB0 or COM3. Run `scope list` to
         /// see what is available.
+        #[clap(add = ArgValueCompleter::new(completion::serial_ports))]
         port: Option<String>,
         /// Baud rate to open the port at, e.g. 115200.
+        #[clap(add = ArgValueCandidates::new(completion::baud_rates))]
         baudrate: Option<u32>,
     },
     /// List the available serial ports.
@@ -103,13 +107,14 @@ pub enum Commands {
     /// interactively.
     Rtt {
         /// Target chip name as probe-rs spells it, e.g. STM32F303.
+        #[clap(add = ArgValueCompleter::new(completion::rtt_targets))]
         target: Option<String>,
         /// RTT channel to attach to. Defaults to 0.
         channel_num: Option<usize>,
         /// Firmware ELF to read the `_SEGGER_RTT` symbol from, so the control
         /// block is found without scanning the target. Re-read on every
         /// attach, so re-flashing a build that moved the block just works.
-        #[clap(long, value_name = "PATH")]
+        #[clap(long, value_name = "PATH", value_hint = ValueHint::FilePath)]
         elf: Option<PathBuf>,
         /// Address of the RTT control block, e.g. 0x20200410. Skips scanning
         /// (and the ELF) entirely; use it when the placement is unusual and no
@@ -118,12 +123,15 @@ pub enum Commands {
                conflicts_with = "elf")]
         addr: Option<u64>,
         /// Probe clock in kHz. Defaults to 4000.
-        #[clap(long, value_name = "KHZ")]
+        #[clap(long, value_name = "KHZ",
+               add = ArgValueCandidates::new(completion::probe_speeds))]
         speed: Option<u32>,
     },
     /// Print a shell completion script for `scope` to stdout.
     ///
-    /// Install it once so that `scope se<TAB>` completes to `scope serial`:
+    /// Install it once so that `scope se<TAB>` completes to `scope serial` and
+    /// `scope serial <TAB>` offers the serial ports plugged in right now (the
+    /// script asks `scope` itself on every Tab, so it never goes stale):
     ///
     ///   bash        scope completions bash > ~/.local/share/bash-completion/completions/scope
     ///               (macOS: write it to a file and `source` that from ~/.bash_profile)
@@ -506,6 +514,16 @@ fn main() -> Result<(), String> {
     ctrlc::set_handler(|| { /* Do nothing on user ctrl+c */ })
         .expect("Error setting Ctrl-C handler");
 
+    // A Tab press: the registration script runs `SCOPE_COMPLETE=<shell> scope --
+    // <words>`, and this answers it and exits. It has to come first — before
+    // `Cli::parse()`, which would reject the half-typed line, and before any
+    // setup, since it runs on every Tab. Without the variable it is a no-op.
+    CompleteEnv::with_factory(Cli::command)
+        .var(completion::COMPLETE_VAR)
+        .bin(completion::BIN)
+        .completer(completion::BIN)
+        .complete();
+
     let cli = Cli::parse();
 
     // Emitting a completion script is pure output, and the shell evaluates it on
@@ -513,15 +531,9 @@ fn main() -> Result<(), String> {
     // returns straight away: no `config.toml` (a typo there would break the
     // user's prompt, not just scope), no keymap, no picker, and crucially not
     // the `See you later ^^` epilogue, which the shell would try to run.
-    // Emitting a completion script is pure output, and the shell evaluates it on
-    // every start-up — so it is handled before the fallible setup below and
-    // returns straight away: no `config.toml` (a typo there would break the
-    // user's prompt, not just scope), no keymap, no picker, and crucially not
-    // the `See you later ^^` epilogue, which the shell would try to run.
     if let Commands::Completions { shell } = &cli.command {
-        let mut cmd = Cli::command();
-        generate(*shell, &mut cmd, "scope", &mut stdout());
-        return Ok(());
+        return completion::write_registration(*shell, &mut stdout())
+            .map_err(|err| format!("Cannot write the {shell} completion script: {err}"));
     }
 
     let latency = cli.latency.unwrap_or(100).clamp(0, 100_000);

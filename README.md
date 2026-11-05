@@ -68,7 +68,18 @@ cargo build --release
 
 ### Shell completions
 
-`scope completions <SHELL>` prints a native completion script to stdout, so that `scope se` + <kbd>Tab</kbd> completes to `scope serial` using your shell's own completion engine. `bash`, `zsh`, `fish`, `powershell` and `elvish` are supported. No installer sets this up for you — install it once:
+`scope completions <SHELL>` prints a completion script to stdout, so that <kbd>Tab</kbd> completes scope's commands, flags *and values* in your shell. The script asks `scope` itself on every <kbd>Tab</kbd>, so the values come from the live system:
+
+| You type | <kbd>Tab</kbd> offers |
+|----------|-----------------------|
+| `scope se` | `serial` |
+| `scope serial ` | the serial ports present right now (every kind, not only the USB ones `scope list` shows — `COM3` on Windows); a path when none matches, e.g. a socat PTY |
+| `scope serial /dev/ttyUSB0 ` | the common baud rates (`9600` … `921600`) |
+| `scope rtt STM32F3` | the matching probe-rs chip names |
+| `scope rtt <TARGET> --speed ` | the common probe clocks (kHz) |
+| `--tag-file `, `--elf ` | file names |
+
+`bash`, `zsh`, `fish`, `powershell` and `elvish` are supported. No installer sets this up for you — install it once:
 
 - **bash (Linux)** — drop it in the user completion directory (needs the `bash-completion` package):
   ```shell
@@ -105,6 +116,8 @@ cargo build --release
   `$PROFILE` is `Documents\PowerShell\Microsoft.PowerShell_profile.ps1` on PowerShell 7 and `Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1` on Windows PowerShell 5.1, which also defaults to a `Restricted` execution policy that blocks profile scripts entirely — allow them once with `Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser`. `cmd.exe` has no completion engine and is not supported.
 
 Restart your shell afterwards (zsh: or re-run `compinit`). `scope completions --help` prints the same commands, so you don't need this page on the machine you are installing on.
+
+**Upgrading from 0.6.x:** the script scope 0.6 generated was static — it completes commands and flags, but not ports or chip names. Re-run the same `scope completions <SHELL> > …` line you used to install it (the file name and location are unchanged) and restart your shell.
 
 ## Quickstart
 
@@ -516,7 +529,7 @@ Load a plugin with `!plugin load <file>` (and `!plugin reload <file>` / `!plugin
 
 **My `tag_file` / config path isn't found.** Path values are used verbatim: `~` and environment variables are **not** expanded. Use an absolute path (for example `/home/user/.config/scope/tags.yml`).
 
-**<kbd>Tab</kbd> completion doesn't work.** Completions are not installed automatically — run `scope completions <SHELL>` as described in [Shell completions](#shell-completions), then start a new shell. Two mistakes fail silently: on zsh, `fpath` must be extended *before* `compinit` runs (oh-my-zsh calls `compinit` for you, so the `fpath=(~/.zfunc $fpath)` line has to come above the `oh-my-zsh.sh` source); on macOS bash, the `source` line has to be in `~/.bash_profile`, since Terminal starts a login shell that never reads `~/.bashrc`.
+**<kbd>Tab</kbd> completion doesn't work.** Completions are not installed automatically — run `scope completions <SHELL>` as described in [Shell completions](#shell-completions), then start a new shell. Two mistakes fail silently: on zsh, `fpath` must be extended *before* `compinit` runs (oh-my-zsh calls `compinit` for you, so the `fpath=(~/.zfunc $fpath)` line has to come above the `oh-my-zsh.sh` source); on macOS bash, the `source` line has to be in `~/.bash_profile`, since Terminal starts a login shell that never reads `~/.bashrc`. If commands complete but `scope serial <TAB>` offers file names instead of ports, the script is the static one from scope 0.6 — regenerate it (see *Upgrading from 0.6.x* in [Shell completions](#shell-completions)).
 
 ## Project Goals
 

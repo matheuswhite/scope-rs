@@ -45,8 +45,10 @@ serde = { version = "1.0", features = ["derive"] }
 serde_yaml = "0.9"
 toml = "0.8"
 rand = "0.8.6"
-# 4.5.20 is the floor `clap_complete` requires.
-clap = { version = "4.5.20", features = ["derive"] }
+# 4.5.20 is the floor `clap_complete` requires. Held to 4.5.x (`~`) because
+# `clap_complete/unstable-dynamic` turns on `clap/unstable-ext`, which is exempt
+# from clap's semver guarantees — see `clap_complete` below.
+clap = { version = "~4.5.20", features = ["derive"] }
 mlua = { version = "0.9.6", features = ["lua54", "vendored", "async", "send"] }
 anyhow = "1.0.79"
 dirs = "5"
@@ -56,10 +58,14 @@ lipsum = "0.9.1"
 arboard = "3.6.1"
 probe-rs = "0.31.0"
 nucleo = "0.5.0"
-# Generates the native shell completion scripts `scope completions <SHELL>`
-# prints (issue #231). Static (ahead-of-time) generation only — the dynamic
-# completion API is behind a semver-exempt feature flag.
-clap_complete = "4.6.8"
+# Shell completion (issues #231, #236). `scope completions <SHELL>` prints the
+# *dynamic* registration script, so Tab asks the binary itself and can offer
+# live serial ports and probe-rs targets (`src/completion.rs`). That API lives
+# behind `unstable-dynamic`, which is excluded from clap's semver guarantees, so
+# the version is pinned exactly: a `cargo install` without `--locked` must not
+# pick up a release that changed it. Bump deliberately, then rerun
+# `cargo test --test completions`.
+clap_complete = { version = "=4.6.8", features = ["unstable-dynamic"] }
 # Reads the `_SEGGER_RTT` symbol out of an ELF for `scope rtt --elf` (issue
 # #248), so the control block is found without scanning. Read-only ELF support
 # is all we need, and it is already in the tree as a probe-rs dependency.

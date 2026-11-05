@@ -43,13 +43,14 @@ pub enum Outcome<T> {
 
 /// Baud rates offered in the list, plus a trailing "Custom…" entry at index
 /// `COMMON_BAUDS.len()`.
-const COMMON_BAUDS: [u32; 8] = [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
+pub(crate) const COMMON_BAUDS: [u32; 8] =
+    [9600, 19200, 38400, 57600, 115200, 230400, 460800, 921600];
 /// 115200 — by far the most common default, pre-selected when none was given.
 const DEFAULT_BAUD_INDEX: usize = 4;
 
 /// Probe clocks offered in the RTT list, plus a trailing "Custom…" entry at
 /// index `COMMON_SPEEDS.len()`.
-const COMMON_SPEEDS: [u32; 8] = [100, 500, 1000, 2000, 4000, 8000, 12000, 20000];
+pub(crate) const COMMON_SPEEDS: [u32; 8] = [100, 500, 1000, 2000, 4000, 8000, 12000, 20000];
 /// 4000 kHz — what `scope rtt` used before the speed was configurable.
 const DEFAULT_SPEED_INDEX: usize = 4;
 
