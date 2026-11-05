@@ -74,14 +74,23 @@ fi
 "#;
 
 /// `scope serial <TAB>`: the live serial ports starting with `current`, or —
-/// when none does — the file names it could be completing, so a path to a port
-/// the OS doesn't enumerate (a socat PTY, say) still completes.
+/// when none does and something has been typed — the file names it could be
+/// completing, so a path to a port the OS doesn't enumerate (a socat PTY, say)
+/// still completes.
 pub fn serial_ports(current: &OsStr) -> Vec<CompletionCandidate> {
     let ports = port_candidates(serialport::available_ports().unwrap_or_default(), current);
-    if ports.is_empty() {
+    if ports.is_empty() && falls_back_to_paths(current) {
         return PathCompleter::any().complete(current);
     }
     ports
+}
+
+/// Whether an unmatched port name is completed as a path. Not for an empty
+/// word: on a machine with no ports, `scope serial <TAB>` would otherwise offer
+/// `.` and whatever lives in the working directory, none of which is a port.
+/// Once something is typed (`/dev/pts/`, `./`) it is presumably a path.
+fn falls_back_to_paths(current: &OsStr) -> bool {
+    !current.is_empty()
 }
 
 /// The pure half of [`serial_ports`]: `ports` filtered by the `current` prefix,
@@ -242,6 +251,12 @@ mod tests {
         let got = port_candidates(ports, OsStr::new(""));
         let helps: Vec<_> = got.iter().map(help).collect();
         assert_eq!(helps, ["FT232R", "FTDI", "USB"]);
+    }
+
+    #[test]
+    fn only_a_typed_word_falls_back_to_paths() {
+        assert!(!falls_back_to_paths(OsStr::new("")));
+        assert!(falls_back_to_paths(OsStr::new("/dev/pts/")));
     }
 
     #[test]
