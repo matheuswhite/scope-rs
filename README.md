@@ -403,7 +403,7 @@ Global options (given before the command):
 
 ## Configuration File
 
-The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It supports the `capacity`, `tag_file` and `hex_format` fields and the optional `[shortcuts]`, `[history]` and `[theme]` tables:
+The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It supports the `capacity`, `tag_file` and `hex_format` fields and the optional `[shortcuts]` and `[history]` tables (colors and icons have their own file, see [Theme](#theme)):
 
 ```toml
 capacity = 5000
@@ -445,18 +445,30 @@ Besides the session record you save explicitly (`Ctrl+S`, `!record`), scope writ
 | `save_commands` | `<data_dir>/scope/.scope_history` (e.g. `~/.local/share/scope/.scope_history`) | The command-bar history is neither loaded nor written; `Up`/`Down` still recall what you typed during the current run. |
 | `save_backup` | `<config_dir>/scope/backup/<session>.txt.bkp` | The session (RX, TX and logs) is no longer mirrored for crash recovery, so anything you didn't save explicitly is lost when scope exits. |
 
-### Theme
+### Custom shortcuts
 
-The `[theme]` table recolors the interface and its `[theme.icons]` sub-table swaps the glyphs it draws. Every key is optional and the defaults are scope's usual look; there is no CLI flag, so the theme resolves as `config.toml` > built-in default.
+The `[shortcuts]` table remaps any of the action/navigation keys listed in the [Keyboard & Mouse Shortcuts](#keyboard--mouse-shortcuts) table — the entries with a **Config action** name. Each entry is `action = "Key+Combo"`; there is no CLI flag, so a shortcut resolves as `config.toml` > built-in default, and every action you don't list keeps its default. The valid action names are:
+
+`copy`, `clear`, `save`, `record`, `search_toggle`, `toggle_case`, `toggle_regex`, `toggle_special_characters`, `toggle_display_mode`, `page_up`, `page_down`, `jump_start`, `jump_end`, `word_left`, `word_right`, `next_bookmark`, `prev_bookmark`.
+
+A key combo is zero or more modifiers followed by a key, joined with `+` (case-insensitive): modifiers `Ctrl`, `Alt`, `Shift`; keys are a single character (`c`, `/`, `.`), a named key (`Space`, `Tab`, `Enter`, `Esc`, `Backspace`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`, `Up`, `Down`, `Left`, `Right`) or a function key (`F1`–`F12`). `Shift+Tab` means the "back-tab" key. Examples: `"Ctrl+G"`, `"F2"`, `"Alt+Home"`, `"Ctrl+Alt+End"`.
+
+Modifiers are **logical** and translated to what your terminal actually delivers, so a config file is portable: `Ctrl+Left` keeps working on macOS (where the terminal sends it as `Alt+Left`), and the `jump_start` / `jump_end` defaults are `Ctrl+PageUp` / `Ctrl+PageDown` on Windows but `Alt+PageUp` / `Alt+PageDown` elsewhere. An unknown action name, an unparseable combo, a binding onto a fixed key (e.g. `Enter`, an arrow, a bare character, or the headless `Ctrl+K` / `Ctrl+Q`), or two actions bound to the same key are all reported as errors on startup.
+
+> **Note:** terminals send `Ctrl+I`, `Ctrl+J`, and `Ctrl+M` as `Tab`, `Enter`, and `Enter` respectively, so those three combos can't be used as shortcuts — they parse without error but the keystroke never reaches the app as `Ctrl+<letter>`. Pick another key (e.g. `Ctrl+G`).
+
+## Theme
+
+Colors, icons and the background live in their own optional `theme.toml`, next to `config.toml` in your platform config directory (for example `~/.config/scope/theme.toml` on Linux), so a theme can be swapped or shared without touching the rest of your configuration. Colors are top-level keys and icons go in an `[icons]` table. Every key is optional and the defaults are scope's usual look; there is no CLI flag, so the theme resolves as `theme.toml` > built-in default, and a missing file just means the default theme.
 
 ```toml
-[theme]
+# ~/.config/scope/theme.toml
 background = "#1e1e2e"   # paint the whole window instead of using the terminal's own
 connected  = "light_blue"
 accent     = "light_cyan"
 hint       = "244"
 
-[theme.icons]
+[icons]
 highlight   = "> "
 recording   = "REC"
 scroll_up   = "^"
@@ -488,19 +500,7 @@ Text drawn on a colored background (log lines, the selected bookmark or search m
 
 **Icons:** `highlight` (marks the selected list entry, default `"▶ "`), `recording` (in the output title while recording, `"◉"`), `scroll_up` / `scroll_down` (scrollbar arrows, `"▲"` / `"▼"`) and `cursor` (the picker's text cursor, `"▏"`). Use ASCII ones if your font lacks these glyphs. `scroll_up`, `scroll_down` and `cursor` must be exactly one cell wide.
 
-An unknown key, an invalid color (the error shows its line and the accepted forms) or a wrongly-sized icon is reported as an error on startup.
-
-### Custom shortcuts
-
-The `[shortcuts]` table remaps any of the action/navigation keys listed in the [Keyboard & Mouse Shortcuts](#keyboard--mouse-shortcuts) table — the entries with a **Config action** name. Each entry is `action = "Key+Combo"`; there is no CLI flag, so a shortcut resolves as `config.toml` > built-in default, and every action you don't list keeps its default. The valid action names are:
-
-`copy`, `clear`, `save`, `record`, `search_toggle`, `toggle_case`, `toggle_regex`, `toggle_special_characters`, `toggle_display_mode`, `page_up`, `page_down`, `jump_start`, `jump_end`, `word_left`, `word_right`, `next_bookmark`, `prev_bookmark`.
-
-A key combo is zero or more modifiers followed by a key, joined with `+` (case-insensitive): modifiers `Ctrl`, `Alt`, `Shift`; keys are a single character (`c`, `/`, `.`), a named key (`Space`, `Tab`, `Enter`, `Esc`, `Backspace`, `Delete`, `Insert`, `Home`, `End`, `PageUp`, `PageDown`, `Up`, `Down`, `Left`, `Right`) or a function key (`F1`–`F12`). `Shift+Tab` means the "back-tab" key. Examples: `"Ctrl+G"`, `"F2"`, `"Alt+Home"`, `"Ctrl+Alt+End"`.
-
-Modifiers are **logical** and translated to what your terminal actually delivers, so a config file is portable: `Ctrl+Left` keeps working on macOS (where the terminal sends it as `Alt+Left`), and the `jump_start` / `jump_end` defaults are `Ctrl+PageUp` / `Ctrl+PageDown` on Windows but `Alt+PageUp` / `Alt+PageDown` elsewhere. An unknown action name, an unparseable combo, a binding onto a fixed key (e.g. `Enter`, an arrow, a bare character, or the headless `Ctrl+K` / `Ctrl+Q`), or two actions bound to the same key are all reported as errors on startup.
-
-> **Note:** terminals send `Ctrl+I`, `Ctrl+J`, and `Ctrl+M` as `Tab`, `Enter`, and `Enter` respectively, so those three combos can't be used as shortcuts — they parse without error but the keystroke never reaches the app as `Ctrl+<letter>`. Pick another key (e.g. `Ctrl+G`).
+An unknown key, an invalid color (the error shows the file, its line and the accepted forms) or a wrongly-sized icon is reported as an error on startup.
 
 ## Plugins
 

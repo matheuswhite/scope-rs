@@ -1,7 +1,12 @@
 //! User theming (issue #68): the colors, icons and background the TUI draws
-//! with, overridable from the optional `[theme]` / `[theme.icons]` tables of
-//! `config.toml`. There is no CLI flag, so precedence is config.toml > built-in
-//! default, and every default reproduces the look scope had before theming.
+//! with, overridable from an optional `theme.toml` in the user's config
+//! directory, next to `config.toml` (`~/.config/scope/theme.toml` on Linux).
+//! Colors are top-level keys, icons go in an `[icons]` table. The theme has a
+//! file of its own so it can be swapped or shared without touching the rest
+//! of the configuration. There is no CLI flag, so precedence is theme.toml >
+//! built-in default, and every default reproduces the look scope had before
+//! theming. A missing file is the default theme; a malformed one is fatal,
+//! exactly like `config.toml`.
 //!
 //! Colors are given by role (what the color *means* — `connected`, `search`,
 //! `hint`…) rather than by widget, so one key recolors every place that role
@@ -22,14 +27,18 @@
 //! global read beats threading a parameter through all of their signatures.
 //! Anything that runs without an installed theme (unit tests) gets the default.
 
+use crate::infra::config;
 use ratatui::buffer::Buffer;
 use ratatui::style::Color;
 use ratatui::text::Span;
 use serde::{Deserialize, Deserializer};
+use std::path::Path;
 use std::str::FromStr;
 use std::sync::OnceLock;
 
 static THEME: OnceLock<Theme> = OnceLock::new();
+
+const THEME_FILE_NAME: &str = "theme.toml";
 
 /// The installed theme, or the built-in default when none was installed.
 pub fn theme() -> &'static Theme {
@@ -62,7 +71,7 @@ fn fill_background(buffer: &mut Buffer, background: Color) {
     }
 }
 
-/// Every color and icon the TUI uses. Field names are the `[theme]` keys.
+/// Every color and icon the TUI uses. Field names are the `theme.toml` keys.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Theme {
@@ -133,7 +142,7 @@ pub struct Theme {
     /// Background of a debug log line.
     #[serde(deserialize_with = "color")]
     pub log_debug: Color,
-    /// The `[theme.icons]` table.
+    /// The `[icons]` table.
     pub icons: Icons,
 }
 
@@ -167,7 +176,7 @@ impl Default for Theme {
 }
 
 /// The glyphs the TUI draws, e.g. to swap them for ASCII on a terminal font
-/// without the Unicode ones. Field names are the `[theme.icons]` keys.
+/// without the Unicode ones. Field names are the `[icons]` keys.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Icons {
@@ -196,6 +205,21 @@ impl Default for Icons {
 }
 
 impl Theme {
+    /// Load and validate `<config_dir>/scope/theme.toml`, falling back to the
+    /// default theme when the file is absent or the config dir is unknown.
+    pub fn load() -> Result<Self, String> {
+        match config::config_file_path(THEME_FILE_NAME) {
+            Some(path) => Self::load_from(&path),
+            None => Ok(Self::default()),
+        }
+    }
+
+    fn load_from(path: &Path) -> Result<Self, String> {
+        config::load_toml::<Self>(path, "theme")?
+            .validate()
+            .map_err(|err| format!("Invalid theme file at {}: {err}", path.display()))
+    }
+
     /// Reject what the TOML parser cannot: an icon drawn into a single cell
     /// that is not exactly one cell wide would shift (or be clipped out of)
     /// the layout around it.
@@ -208,8 +232,8 @@ impl Theme {
             let width = Span::raw(icon.as_str()).width();
             if width != 1 {
                 return Err(format!(
-                    "Invalid icon `theme.icons.{key} = {icon:?}`: it must be exactly one \
-                     cell wide, but it is {width}"
+                    "icon `icons.{key} = {icon:?}` must be exactly one cell wide, but it \
+                     is {width}"
                 ));
             }
         }
@@ -304,7 +328,7 @@ mod tests {
         for (key, value) in [("scroll_up", "^^"), ("scroll_down", ""), ("cursor", "宽")] {
             let theme = parse(&format!("[icons]\n{key} = {value:?}\n")).unwrap();
             let err = theme.validate().unwrap_err();
-            assert!(err.contains(&format!("theme.icons.{key}")), "{err}");
+            assert!(err.contains(&format!("icons.{key}")), "{err}");
         }
     }
 
@@ -313,6 +337,64 @@ mod tests {
         let theme = parse("[icons]\nhighlight = \"\"\nrecording = \"REC\"\n").unwrap();
 
         assert!(theme.validate().is_ok());
+    }
+
+    fn temp_path(suffix: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("scope_theme_{}_{}", std::process::id(), suffix));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join(THEME_FILE_NAME)
+    }
+
+    #[test]
+    fn a_missing_file_is_the_default_theme() {
+        let path = temp_path("missing");
+        let _ = std::fs::remove_file(&path);
+
+        assert_eq!(Theme::load_from(&path).unwrap(), Theme::default());
+    }
+
+    #[test]
+    fn loads_colors_and_icons_from_the_file() {
+        let path = temp_path("full");
+        std::fs::write(
+            &path,
+            "background = \"black\"\n\n[icons]\nhighlight = \"> \"\n",
+        )
+        .unwrap();
+
+        let theme = Theme::load_from(&path).unwrap();
+        assert_eq!(theme.background, Color::Black);
+        assert_eq!(theme.icons.highlight, "> ");
+        assert_eq!(theme.connected, Theme::default().connected);
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_malformed_file_names_the_theme_file_and_line() {
+        let path = temp_path("bad");
+        std::fs::write(&path, "\nsearch = \"nope\"\n").unwrap();
+
+        let err = Theme::load_from(&path).unwrap_err();
+        assert!(err.contains("Cannot parse theme file at"), "{err}");
+        assert!(err.contains(THEME_FILE_NAME), "{err}");
+        assert!(err.contains("line 2"), "{err}");
+        assert!(err.contains("invalid color `nope`"), "{err}");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_bad_icon_width_names_the_theme_file() {
+        let path = temp_path("icon");
+        std::fs::write(&path, "[icons]\ncursor = \"||\"\n").unwrap();
+
+        let err = Theme::load_from(&path).unwrap_err();
+        assert!(err.contains("Invalid theme file at"), "{err}");
+        assert!(err.contains("icons.cursor"), "{err}");
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

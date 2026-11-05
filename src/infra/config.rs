@@ -12,8 +12,8 @@
 //! silently do nothing.
 
 use crate::graphics::screen::HexFormat;
-use crate::graphics::theme::Theme;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -52,14 +52,6 @@ pub struct Config {
     /// precedence is config.toml > built-in default (everything saved).
     #[serde(default)]
     pub history: Option<HistoryConfig>,
-    /// Optional `[theme]` table (plus its `[theme.icons]` sub-table): colors by
-    /// role, the glyphs, and the background — `reset`, the default, keeps the
-    /// terminal's own, transparency included (issue #68). There is no CLI flag;
-    /// an omitted key keeps the built-in look. Parsed straight into the
-    /// renderer's [`Theme`], so an unknown role or bad color gets a located
-    /// error; icon widths are checked afterwards by `Theme::validate`.
-    #[serde(default)]
-    pub theme: Option<Theme>,
 }
 
 /// The `[history]` table. Each key covers one file that is written
@@ -98,7 +90,7 @@ impl Config {
     /// The config file location: `<config_dir>/scope/config.toml`, or `None`
     /// when the platform config directory can't be resolved.
     fn path() -> Option<PathBuf> {
-        dirs::config_dir().map(|dir| dir.join("scope").join(CONFIG_FILE_NAME))
+        config_file_path(CONFIG_FILE_NAME)
     }
 
     /// Load the user config, falling back to all-default when the file is absent
@@ -113,23 +105,36 @@ impl Config {
     /// Read and parse the config at `path`. A missing file yields the defaults;
     /// an unreadable or malformed file is an error.
     fn load_from(path: &Path) -> Result<Self, String> {
-        let contents = match std::fs::read_to_string(path) {
-            Ok(contents) => contents,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
-            }
-            Err(err) => {
-                return Err(format!(
-                    "Cannot read config file at {}: {}",
-                    path.display(),
-                    err
-                ));
-            }
-        };
-
-        toml::from_str(&contents)
-            .map_err(|err| format!("Cannot parse config file at {}: {}", path.display(), err))
+        load_toml(path, "config")
     }
+}
+
+/// `<config_dir>/scope/<file_name>`, or `None` when the platform config
+/// directory can't be resolved. Shared by `config.toml` and `theme.toml`.
+pub fn config_file_path(file_name: &str) -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("scope").join(file_name))
+}
+
+/// Read and parse the TOML file at `path` into `T`. A missing file yields
+/// `T::default()`; an unreadable or malformed one is an error naming the file
+/// (`what` is the file's role in the message, e.g. "config" or "theme").
+pub fn load_toml<T: DeserializeOwned + Default>(path: &Path, what: &str) -> Result<T, String> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(T::default());
+        }
+        Err(err) => {
+            return Err(format!(
+                "Cannot read {what} file at {}: {}",
+                path.display(),
+                err
+            ));
+        }
+    };
+
+    toml::from_str(&contents)
+        .map_err(|err| format!("Cannot parse {what} file at {}: {}", path.display(), err))
 }
 
 #[cfg(test)]
@@ -238,30 +243,13 @@ mod tests {
     }
 
     #[test]
-    fn parses_the_theme_tables() {
-        let path = temp_path("theme");
-        std::fs::write(
-            &path,
-            "[theme]\nbackground = \"black\"\n\n[theme.icons]\nhighlight = \"> \"\n",
-        )
-        .unwrap();
-
-        let theme = Config::load_from(&path).unwrap().theme.unwrap();
-        assert_eq!(theme.background, ratatui::style::Color::Black);
-        assert_eq!(theme.icons.highlight, "> ");
-        assert_eq!(theme.connected, Theme::default().connected);
-
-        let _ = std::fs::remove_file(&path);
-    }
-
-    #[test]
-    fn rejects_a_bad_theme_color_with_its_location() {
-        let path = temp_path("theme_bad");
-        std::fs::write(&path, "[theme]\nsearch = \"nope\"\n").unwrap();
+    fn a_theme_table_is_no_longer_accepted() {
+        // The theme lives in its own `theme.toml` (issue #68).
+        let path = temp_path("theme_moved");
+        std::fs::write(&path, "[theme]\nbackground = \"black\"\n").unwrap();
 
         let err = Config::load_from(&path).unwrap_err();
-        assert!(err.contains("invalid color `nope`"), "{err}");
-        assert!(err.contains("line 2"), "{err}");
+        assert!(err.contains("unknown field `theme`"), "{err}");
 
         let _ = std::fs::remove_file(&path);
     }
