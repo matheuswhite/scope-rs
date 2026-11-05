@@ -1,8 +1,10 @@
 use super::Serialize;
 use crate::graphics::buffer::{Buffer, BufferLine, BufferPosition};
 use crate::graphics::message_filter::MessageFilter;
+use crate::graphics::palette::Palette;
 use crate::graphics::screen::{HexFormat, Screen, ScreenDecoder, ScreenPosition, SearchHit};
 use crate::graphics::special_char::{SpecialCharItem, ToSpecialChar};
+use crate::graphics::theme::{self, theme};
 use crate::inputs::inputs_task::InputMode;
 use crate::interfaces::InterfaceShared;
 use crate::interfaces::rtt_if::RttMode;
@@ -254,9 +256,9 @@ impl GraphicsTask {
 
         let cursor = (rect.x + cursor + 2, rect.y + 1);
         let bar_color = if is_connected {
-            Color::Green
+            theme().connected
         } else {
-            Color::Red
+            theme().disconnected
         };
 
         let latency = if latency >= 1_000 {
@@ -288,7 +290,7 @@ impl GraphicsTask {
         let hint_is_some = current_hint.is_some();
         let hint = Span::styled(
             current_hint.map(|s| format!(" {}", s)).unwrap_or_default(),
-            Style::default().fg(Color::DarkGray),
+            Style::default().fg(theme().hint),
         );
         let hint = Line::from(hint);
 
@@ -297,7 +299,7 @@ impl GraphicsTask {
             .map(|item| match item {
                 SpecialCharItem::Plain(s) => Span::from(s),
                 SpecialCharItem::Special(s, _column) => {
-                    Span::styled(s, Style::default().fg(Color::Magenta))
+                    Span::styled(s, Style::default().fg(theme().accent))
                 }
             })
             .collect::<Vec<_>>();
@@ -355,13 +357,13 @@ impl GraphicsTask {
             ))
             .borders(Borders::ALL)
             .border_type(BorderType::Double)
-            .border_style(Style::default().fg(Color::Yellow));
+            .border_style(Style::default().fg(theme().search));
 
         let paragraph = Paragraph::new(Span::from(" ".to_string() + &text))
             .style(Style::default().fg(if search_total == 0 {
-                Color::Red
+                theme().no_match
             } else {
-                Color::Reset
+                theme().text
             }))
             .block(block);
 
@@ -395,7 +397,7 @@ impl GraphicsTask {
                     Span::styled(
                         character.to_string(),
                         if matching[index] {
-                            Style::default().fg(Color::Magenta)
+                            Style::default().fg(theme().accent)
                         } else {
                             Style::default()
                         },
@@ -432,14 +434,14 @@ impl GraphicsTask {
                     .title("History")
                     .borders(Borders::ALL)
                     .border_type(BorderType::Thick)
-                    .border_style(Style::default().fg(Color::White)),
+                    .border_style(Style::default().fg(theme().border)),
             )
             .highlight_style(
                 Style::default()
-                    .fg(Color::Yellow)
+                    .fg(theme().search)
                     .add_modifier(Modifier::BOLD),
             )
-            .highlight_symbol("▶ ");
+            .highlight_symbol(theme().icons.highlight.as_str());
         frame.render_widget(Clear, area);
         let mut state = ratatui::widgets::ListState::default();
         if !matches.is_empty() {
@@ -556,7 +558,7 @@ impl GraphicsTask {
         let block = Block::default()
             .borders(Borders::ALL)
             .border_type(BorderType::Thick)
-            .style(Style::default().fg(Color::Magenta));
+            .style(Style::default().fg(theme().accent));
         let inner_width = area_size.0.saturating_sub(2) as usize;
         let skip_chars = pattern.chars().count().saturating_sub(1);
         let mut text = window
@@ -573,14 +575,14 @@ impl GraphicsTask {
                     Line::from(Span::styled(
                         format!("{}{}", content, " ".repeat(pad)),
                         Style::default()
-                            .fg(Color::Black)
-                            .bg(Color::Magenta)
+                            .fg(Palette::fg(theme().accent))
+                            .bg(theme().accent)
                             .add_modifier(Modifier::BOLD),
                     ))
                 } else {
                     Line::from(vec![
-                        Span::styled(format!(" {}", pattern), Style::default().fg(Color::Magenta)),
-                        Span::styled(suffix, Style::default().fg(Color::DarkGray)),
+                        Span::styled(format!(" {}", pattern), Style::default().fg(theme().accent)),
+                        Span::styled(suffix, Style::default().fg(theme().hint)),
                     ])
                 }
             })
@@ -588,7 +590,7 @@ impl GraphicsTask {
         if has_more_below {
             text.push(Line::from(Span::styled(
                 " ...",
-                Style::default().fg(Color::DarkGray),
+                Style::default().fg(theme().hint),
             )));
         }
         let paragraph = Paragraph::new(text).block(block);
@@ -684,7 +686,12 @@ impl GraphicsTask {
         let backend = CrosstermBackend::new(stdout);
         let mut terminal = Terminal::new(backend).expect("Cannot create terminal backend");
         let mut save_blink = Blink::new(Duration::from_millis(200), 2, Color::Reset, Color::Black);
-        let mut copy_blink = Blink::new(Duration::from_millis(150), 2, Color::Green, Color::Black);
+        let mut copy_blink = Blink::new(
+            Duration::from_millis(150),
+            2,
+            theme().connected,
+            Color::Black,
+        );
         let mut new_messages = vec![];
         let mut need_redraw = true;
         // The terminal can be cleared from outside the app (e.g. Cmd+K in Zed's
@@ -1174,6 +1181,7 @@ impl GraphicsTask {
                         );
                         Self::draw_autocomplete_list(&private.inputs_shared, f, chunks[1].y);
                         Self::draw_history_list(&private.inputs_shared, f, chunks[1].y);
+                        theme::paint_background(f.buffer_mut());
                     })
                     .expect("Error to draw");
                 continue;

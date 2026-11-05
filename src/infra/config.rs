@@ -13,6 +13,7 @@
 
 use crate::graphics::screen::HexFormat;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -89,7 +90,7 @@ impl Config {
     /// The config file location: `<config_dir>/scope/config.toml`, or `None`
     /// when the platform config directory can't be resolved.
     fn path() -> Option<PathBuf> {
-        dirs::config_dir().map(|dir| dir.join("scope").join(CONFIG_FILE_NAME))
+        config_file_path(CONFIG_FILE_NAME)
     }
 
     /// Load the user config, falling back to all-default when the file is absent
@@ -104,23 +105,36 @@ impl Config {
     /// Read and parse the config at `path`. A missing file yields the defaults;
     /// an unreadable or malformed file is an error.
     fn load_from(path: &Path) -> Result<Self, String> {
-        let contents = match std::fs::read_to_string(path) {
-            Ok(contents) => contents,
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
-            }
-            Err(err) => {
-                return Err(format!(
-                    "Cannot read config file at {}: {}",
-                    path.display(),
-                    err
-                ));
-            }
-        };
-
-        toml::from_str(&contents)
-            .map_err(|err| format!("Cannot parse config file at {}: {}", path.display(), err))
+        load_toml(path, "config")
     }
+}
+
+/// `<config_dir>/scope/<file_name>`, or `None` when the platform config
+/// directory can't be resolved. Shared by `config.toml` and `theme.toml`.
+pub fn config_file_path(file_name: &str) -> Option<PathBuf> {
+    dirs::config_dir().map(|dir| dir.join("scope").join(file_name))
+}
+
+/// Read and parse the TOML file at `path` into `T`. A missing file yields
+/// `T::default()`; an unreadable or malformed one is an error naming the file
+/// (`what` is the file's role in the message, e.g. "config" or "theme").
+pub fn load_toml<T: DeserializeOwned + Default>(path: &Path, what: &str) -> Result<T, String> {
+    let contents = match std::fs::read_to_string(path) {
+        Ok(contents) => contents,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(T::default());
+        }
+        Err(err) => {
+            return Err(format!(
+                "Cannot read {what} file at {}: {}",
+                path.display(),
+                err
+            ));
+        }
+    };
+
+    toml::from_str(&contents)
+        .map_err(|err| format!("Cannot parse {what} file at {}: {}", path.display(), err))
 }
 
 #[cfg(test)]
@@ -224,6 +238,18 @@ mod tests {
                 "{name} missing from: {err}"
             );
         }
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn a_theme_table_is_no_longer_accepted() {
+        // The theme lives in its own `theme.toml` (issue #68).
+        let path = temp_path("theme_moved");
+        std::fs::write(&path, "[theme]\nbackground = \"black\"\n").unwrap();
+
+        let err = Config::load_from(&path).unwrap_err();
+        assert!(err.contains("unknown field `theme`"), "{err}");
 
         let _ = std::fs::remove_file(&path);
     }

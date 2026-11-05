@@ -7,6 +7,7 @@ pub mod palette;
 pub mod screen;
 pub mod selection;
 pub mod special_char;
+pub mod theme;
 
 pub trait Serialize {
     fn serialize(&self) -> String;
