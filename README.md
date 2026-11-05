@@ -181,7 +181,7 @@ Use `!send_file <path>` to stream the contents of a file to the target over the 
 
 #### Colorful Output
 
-`Scope` colors the command bar to signal the status of the serial connection: red when disconnected, green when connected. The content read and written is colored too — received data follows the ANSI terminal color standard.
+`Scope` colors the command bar to signal the status of the serial connection: red when disconnected, green when connected. The content read and written is colored too — received data follows the ANSI terminal color standard. All of these colors (and the background) can be changed with a [theme](#theme).
 
 ![Read ANSI color gif](videos/006_ansi/video.gif)
 
@@ -403,7 +403,7 @@ Global options (given before the command):
 
 ## Configuration File
 
-The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It supports the `capacity`, `tag_file` and `hex_format` fields and the optional `[shortcuts]` and `[history]` tables:
+The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It supports the `capacity`, `tag_file` and `hex_format` fields and the optional `[shortcuts]`, `[history]` and `[theme]` tables:
 
 ```toml
 capacity = 5000
@@ -444,6 +444,51 @@ Besides the session record you save explicitly (`Ctrl+S`, `!record`), scope writ
 |---|---|---|
 | `save_commands` | `<data_dir>/scope/.scope_history` (e.g. `~/.local/share/scope/.scope_history`) | The command-bar history is neither loaded nor written; `Up`/`Down` still recall what you typed during the current run. |
 | `save_backup` | `<config_dir>/scope/backup/<session>.txt.bkp` | The session (RX, TX and logs) is no longer mirrored for crash recovery, so anything you didn't save explicitly is lost when scope exits. |
+
+### Theme
+
+The `[theme]` table recolors the interface and its `[theme.icons]` sub-table swaps the glyphs it draws. Every key is optional and the defaults are scope's usual look; there is no CLI flag, so the theme resolves as `config.toml` > built-in default.
+
+```toml
+[theme]
+background = "#1e1e2e"   # paint the whole window instead of using the terminal's own
+connected  = "light_blue"
+accent     = "light_cyan"
+hint       = "244"
+
+[theme.icons]
+highlight   = "> "
+recording   = "REC"
+scroll_up   = "^"
+scroll_down = "v"
+```
+
+A color is a name (`reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, `white`), a hex `"#rrggbb"`, or an ANSI-256 index `"0"`–`"255"`. Colors are set by **role**, so one key changes every place that role appears:
+
+| Key | Default | Used for |
+|---|---|---|
+| `background` | `reset` | Background of the whole window (see below). |
+| `text` | `reset` | Received data. |
+| `tx_text` / `tx_background` | `black` / `white` | Sent data. |
+| `border` | `white` | Output border in normal mode; the history pop-up. |
+| `connected` / `disconnected` | `green` / `red` | Command-bar border by connection state; `connected` also flashes on copy. |
+| `recording` | `red` | Output border while recording. |
+| `search` | `yellow` | Search mode borders and match highlights. |
+| `no_match` | `red` | The search query when nothing matches. |
+| `accent` | `magenta` | Special characters and `@tags` in the command bar, the tag autocomplete, matched letters in the history search. |
+| `hint` | `dark_gray` | Timestamps, hints, the scrollbar track, lines outside a search match. |
+| `selection` | `white` | Background of a selected line's timestamp. |
+| `bookmark` | `yellow` | Bookmarked timestamps. |
+| `picker` / `picker_error` | `yellow` / `red` | The port/target picker of [Icon mode](#icon-mode) and its errors. |
+| `log_error`, `log_warning`, `log_success`, `log_info`, `log_debug` | `red`, `yellow`, `light_green`, `cyan`, `dark_gray` | Background of each log level (also in headless mode). |
+
+Text drawn on a colored background (log lines, the selected bookmark or search match, the autocomplete bar) picks black or white automatically for contrast, so `#rrggbb` values stay readable.
+
+**Transparency.** A terminal program can't change the window's opacity, only whether it paints a background. With the default `background = "reset"` scope paints none, so your terminal's own background — including any transparency or blur — shows through. Set it to any color to give scope an opaque background of its own.
+
+**Icons:** `highlight` (marks the selected list entry, default `"▶ "`), `recording` (in the output title while recording, `"◉"`), `scroll_up` / `scroll_down` (scrollbar arrows, `"▲"` / `"▼"`) and `cursor` (the picker's text cursor, `"▏"`). Use ASCII ones if your font lacks these glyphs. `scroll_up`, `scroll_down` and `cursor` must be exactly one cell wide.
+
+An unknown key, an invalid color (the error shows its line and the accepted forms) or a wrongly-sized icon is reported as an error on startup.
 
 ### Custom shortcuts
 
