@@ -453,6 +453,23 @@ impl Tui {
         self.wait_for("115200bps", READY);
     }
 
+    /// [`Self::wait_until_ready`], plus — for tests that count the lines in the
+    /// scrollback — the start-up logs having landed. On Linux the PTY-backed
+    /// port connects and logs `Connected at "…"` asynchronously, typically just
+    /// after the first render: i.e. in the middle of whatever burst a test types
+    /// right after `wait_until_ready`. A test that fills a `capacity = 100`
+    /// history and then expects exactly its own 100 lines would find one of
+    /// them evicted by that log, and the history shifted by a line — which is
+    /// how both #218 tests flaked on the Ubuntu runner (L035 instead of L034 at
+    /// the top of a page, 98 search hits instead of 99). On macOS the port
+    /// never connects (see `wait_until_ready`), so there is nothing to wait for.
+    fn wait_until_settled(&self) {
+        self.wait_until_ready();
+        if cfg!(target_os = "linux") {
+            self.wait_for("Connected at", READY);
+        }
+    }
+
     /// Headless counterpart of [`Self::wait_until_ready`]: press `Ctrl+K` until
     /// the command-bar prompt shows up. Headless draws nothing until then, so
     /// there is no banner to wait for, and a key typed before the app enables
@@ -579,7 +596,7 @@ fn a_frozen_viewport_keeps_its_lines_while_the_buffer_rotates() {
         config_toml: Some("capacity = 100\n"),
         ..Default::default()
     });
-    tui.wait_until_ready();
+    tui.wait_until_settled();
 
     // Fill the scrollback exactly to capacity, so the next line evicts.
     for i in 1..=100 {
@@ -638,7 +655,7 @@ fn a_search_hit_stays_put_while_the_buffer_rotates_under_it() {
         installed_plugins: &[("latecomer", LATECOMER)],
         ..Default::default()
     });
-    tui.wait_until_ready();
+    tui.wait_until_settled();
     tui.wait_for("latecomer", SETTLE);
 
     // Fill the scrollback to capacity: the start-up logs are pushed out, so the
