@@ -21,6 +21,8 @@
 //! the Inputs task (which only ever produces bytes onto the `tx` bus).
 
 use crate::graphics::graphics_task::GraphicsCommand;
+use crate::graphics::palette::Palette;
+use crate::graphics::theme::theme;
 use crate::infra::{
     logger::{LogLevel, LogMessage},
     messages::TimedBytes,
@@ -30,6 +32,7 @@ use crate::infra::{
 };
 use crate::inputs::inputs_task::InputsShared;
 use crossterm::terminal::{disable_raw_mode, enable_raw_mode};
+use ratatui::style::Color;
 use std::io::{self, Write};
 use std::sync::{
     Arc, RwLock,
@@ -177,11 +180,17 @@ fn run_headless(
             if prompt_dirty {
                 // `> ` occupies columns 1-2 (1-based), so the first typed
                 // character sits at column 3; place the cursor at `3 + cursor`.
-                // The prompt never blanks — it blinks between inverted (black on
-                // yellow, same SGR as the `Warning` log) and plain yellow text
+                // The prompt never blanks — it blinks between inverted (the theme's
+                // `Warning` log colors, black on yellow by default) and plain text
+                // in that color
                 // on the default background, so it stays readable while drawing
                 // the eye and standing out from raw device output.
-                let sgr = if inverted { "\x1b[30;43m" } else { "\x1b[33m" };
+                let prompt = theme().log_warning;
+                let sgr = if inverted {
+                    colors_sgr(Palette::fg(prompt), prompt)
+                } else {
+                    format!("\x1b[{}m", Palette::sgr_fg(prompt))
+                };
                 let _ = write!(
                     out,
                     "\r\x1b[2K{}> {}\x1b[0m\r\x1b[{}G",
@@ -227,15 +236,22 @@ fn level_visible(level: LogLevel, threshold: LogLevel) -> bool {
 }
 
 /// The ANSI SGR prefix reproducing the TUI's `LogLevel`→background mapping
-/// (`screen.rs::log_line` + `Palette::fg`), reset with `\x1b[0m`.
-fn log_sgr(level: LogLevel) -> &'static str {
-    match level {
-        LogLevel::Error => "\x1b[97;41m",    // white on red
-        LogLevel::Warning => "\x1b[30;43m",  // black on yellow
-        LogLevel::Success => "\x1b[30;102m", // black on bright green
-        LogLevel::Info => "\x1b[30;46m",     // black on cyan
-        LogLevel::Debug => "\x1b[30;100m",   // black on bright black
-    }
+/// (`screen.rs::log_line` + `Palette::fg`, both from the theme), reset with
+/// `\x1b[0m`. The default theme yields the historical sequences, e.g.
+/// `\x1b[97;41m` (white on red) for an error.
+fn log_sgr(level: LogLevel) -> String {
+    let bg = match level {
+        LogLevel::Error => theme().log_error,
+        LogLevel::Warning => theme().log_warning,
+        LogLevel::Success => theme().log_success,
+        LogLevel::Info => theme().log_info,
+        LogLevel::Debug => theme().log_debug,
+    };
+    colors_sgr(Palette::fg(bg), bg)
+}
+
+fn colors_sgr(fg: Color, bg: Color) -> String {
+    format!("\x1b[{};{}m", Palette::sgr_fg(fg), Palette::sgr_bg(bg))
 }
 
 fn write_log(out: &mut impl Write, log: &LogMessage) {
@@ -248,4 +264,18 @@ fn hold_log(held: &mut Vec<u8>, log: &LogMessage) {
     held.extend_from_slice(log_sgr(log.level).as_bytes());
     held.extend_from_slice(log.message.as_bytes());
     held.extend_from_slice(b"\x1b[0m\r\n");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn default_theme_keeps_the_historical_log_sequences() {
+        assert_eq!(log_sgr(LogLevel::Error), "\x1b[97;41m");
+        assert_eq!(log_sgr(LogLevel::Warning), "\x1b[30;43m");
+        assert_eq!(log_sgr(LogLevel::Success), "\x1b[30;102m");
+        assert_eq!(log_sgr(LogLevel::Info), "\x1b[30;46m");
+        assert_eq!(log_sgr(LogLevel::Debug), "\x1b[30;100m");
+    }
 }

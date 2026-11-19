@@ -6,6 +6,7 @@ use crate::{
         palette::Palette,
         selection::{Selection, SelectionPosition},
         special_char::{SpecialCharItem, ToSpecialChar},
+        theme::theme,
     },
     infra::{ByteFormat, LogLevel},
 };
@@ -296,7 +297,7 @@ impl Screen {
 
     fn border_color(&self, save_stats: &SaveStats) -> Color {
         if save_stats.is_recording() {
-            Color::Red
+            theme().recording
         } else if save_stats.is_saving() {
             save_stats.save_color()
         } else {
@@ -307,9 +308,9 @@ impl Screen {
     fn build_block(&self, buffer: &Buffer, save_stats: &SaveStats) -> Block<'_> {
         let file_size = ByteFormat::from(save_stats.file_size());
         let record_indicator = if save_stats.is_recording() {
-            " ◉"
+            format!(" {}", theme().icons.recording)
         } else {
-            ""
+            String::new()
         };
 
         let border_color = self.border_color(save_stats);
@@ -419,10 +420,10 @@ impl Screen {
             .viewport_content_length(visible_height);
 
         let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
-            .begin_symbol(Some("▲"))
-            .end_symbol(Some("▼"))
+            .begin_symbol(Some(theme().icons.scroll_up.as_str()))
+            .end_symbol(Some(theme().icons.scroll_down.as_str()))
             .thumb_style(Style::default().fg(self.border_color(save_stats)))
-            .track_style(Style::default().fg(Color::DarkGray));
+            .track_style(Style::default().fg(theme().hint));
 
         /* inset vertically so the arrows fall inside the block's borders */
         let area = self.size.inner(Margin {
@@ -922,8 +923,8 @@ impl ScreenMode {
 
     fn color(&self) -> Color {
         match self {
-            Self::Normal => Color::White,
-            Self::Search { .. } => Color::Yellow,
+            Self::Normal => theme().border,
+            Self::Search { .. } => theme().search,
         }
     }
 
@@ -1193,7 +1194,7 @@ impl ScreenMode {
             );
         };
 
-        let disable_style = Style::default().bg(Color::Reset).fg(Color::DarkGray);
+        let disable_style = Style::default().bg(Color::Reset).fg(theme().hint);
         // `ScreenDecoder::plain_text` of the line, from its already-decoded
         // message.
         let message = hex_format.apply(&ANSI::remove_encoding(line.message));
@@ -1219,8 +1220,10 @@ impl ScreenMode {
             );
         }
 
-        let highlighted_style = Style::default().bg(Color::Reset).fg(Color::Yellow);
-        let chosen_style = Style::default().bg(Color::Yellow).fg(Color::Black);
+        let highlighted_style = Style::default().bg(Color::Reset).fg(theme().search);
+        let chosen_style = Style::default()
+            .bg(theme().search)
+            .fg(Palette::fg(theme().search));
 
         let chars = message.chars().collect::<Vec<_>>();
         let mut output = vec![];
@@ -1279,23 +1282,25 @@ impl ScreenMode {
     }
 
     fn rx_line(&self, line: BufferLine<String>) -> Span<'static> {
-        let style = Style::default().bg(Color::Reset).fg(Color::Reset);
+        let style = Style::default().bg(Color::Reset).fg(theme().text);
         Span::styled(line.message, style)
     }
 
     fn tx_line(&self, line: BufferLine<String>) -> Span<'static> {
-        let style = Style::default().bg(Color::White).fg(Color::Black);
+        let style = Style::default()
+            .bg(theme().tx_background)
+            .fg(theme().tx_text);
         Span::styled(line.message, style)
     }
 
     fn log_line(&self, line: BufferLine<String>) -> Span<'static> {
         let level = line.level.unwrap();
         let bg = match level {
-            LogLevel::Error => Color::Red,
-            LogLevel::Warning => Color::Yellow,
-            LogLevel::Success => Color::LightGreen,
-            LogLevel::Info => Color::Cyan,
-            LogLevel::Debug => Color::DarkGray,
+            LogLevel::Error => theme().log_error,
+            LogLevel::Warning => theme().log_warning,
+            LogLevel::Success => theme().log_success,
+            LogLevel::Info => theme().log_info,
+            LogLevel::Debug => theme().log_debug,
         };
         let fg = Palette::fg(bg);
         let style = Style::default().bg(bg).fg(fg);
@@ -1316,13 +1321,15 @@ impl ScreenMode {
         // normal background. Both win over the transient selection highlight, so
         // a bookmark stays marked even while a selection is dragged across it.
         let style = if is_current_bookmark {
-            Style::default().bg(Color::Yellow).fg(Color::Black)
+            Style::default()
+                .bg(theme().bookmark)
+                .fg(Palette::fg(theme().bookmark))
         } else if is_bookmarked {
-            Style::default().fg(Color::Yellow)
+            Style::default().fg(theme().bookmark)
         } else if is_reversed {
-            Style::default().bg(Color::White).fg(Color::DarkGray)
+            Style::default().bg(theme().selection).fg(theme().hint)
         } else {
-            Style::default().fg(Color::DarkGray)
+            Style::default().fg(theme().hint)
         };
 
         vec![Span::styled(timestamp, style), Span::raw(" ")]

@@ -181,7 +181,7 @@ Use `!send_file <path>` to stream the contents of a file to the target over the 
 
 #### Colorful Output
 
-`Scope` colors the command bar to signal the status of the serial connection: red when disconnected, green when connected. The content read and written is colored too — received data follows the ANSI terminal color standard.
+`Scope` colors the command bar to signal the status of the serial connection: red when disconnected, green when connected. The content read and written is colored too — received data follows the ANSI terminal color standard. All of these colors (and the background) can be changed with a [theme](#theme).
 
 ![Read ANSI color gif](videos/006_ansi/video.gif)
 
@@ -403,7 +403,7 @@ Global options (given before the command):
 
 ## Configuration File
 
-The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It supports the `capacity`, `tag_file` and `hex_format` fields and the optional `[shortcuts]` and `[history]` tables:
+The options above can also be set in an optional `config.toml` placed in your platform config directory under `scope/` (for example `~/.config/scope/config.toml` on Linux). It supports the `capacity`, `tag_file` and `hex_format` fields and the optional `[shortcuts]` and `[history]` tables (colors and icons have their own file, see [Theme](#theme)):
 
 ```toml
 capacity = 5000
@@ -456,6 +456,51 @@ A key combo is zero or more modifiers followed by a key, joined with `+` (case-i
 Modifiers are **logical** and translated to what your terminal actually delivers, so a config file is portable: `Ctrl+Left` keeps working on macOS (where the terminal sends it as `Alt+Left`), and the `jump_start` / `jump_end` defaults are `Ctrl+PageUp` / `Ctrl+PageDown` on Windows but `Alt+PageUp` / `Alt+PageDown` elsewhere. An unknown action name, an unparseable combo, a binding onto a fixed key (e.g. `Enter`, an arrow, a bare character, or the headless `Ctrl+K` / `Ctrl+Q`), or two actions bound to the same key are all reported as errors on startup.
 
 > **Note:** terminals send `Ctrl+I`, `Ctrl+J`, and `Ctrl+M` as `Tab`, `Enter`, and `Enter` respectively, so those three combos can't be used as shortcuts — they parse without error but the keystroke never reaches the app as `Ctrl+<letter>`. Pick another key (e.g. `Ctrl+G`).
+
+## Theme
+
+Colors, icons and the background live in their own optional `theme.toml`, next to `config.toml` in your platform config directory (for example `~/.config/scope/theme.toml` on Linux), so a theme can be swapped or shared without touching the rest of your configuration. Colors are top-level keys and icons go in an `[icons]` table. Every key is optional and the defaults are scope's usual look; there is no CLI flag, so the theme resolves as `theme.toml` > built-in default, and a missing file just means the default theme.
+
+```toml
+# ~/.config/scope/theme.toml
+background = "#1e1e2e"   # paint the whole window instead of using the terminal's own
+connected  = "light_blue"
+accent     = "light_cyan"
+hint       = "244"
+
+[icons]
+highlight   = "> "
+recording   = "REC"
+scroll_up   = "^"
+scroll_down = "v"
+```
+
+A color is a name (`reset`, `black`, `red`, `green`, `yellow`, `blue`, `magenta`, `cyan`, `gray`, `dark_gray`, `light_red`, `light_green`, `light_yellow`, `light_blue`, `light_magenta`, `light_cyan`, `white`), a hex `"#rrggbb"`, or an ANSI-256 index `"0"`–`"255"`. Colors are set by **role**, so one key changes every place that role appears:
+
+| Key | Default | Used for |
+|---|---|---|
+| `background` | `reset` | Background of the whole window (see below). |
+| `text` | `reset` | Received data. |
+| `tx_text` / `tx_background` | `black` / `white` | Sent data. |
+| `border` | `white` | Output border in normal mode; the history pop-up. |
+| `connected` / `disconnected` | `green` / `red` | Command-bar border by connection state; `connected` also flashes on copy. |
+| `recording` | `red` | Output border while recording. |
+| `search` | `yellow` | Search mode borders and match highlights. |
+| `no_match` | `red` | The search query when nothing matches. |
+| `accent` | `magenta` | Special characters and `@tags` in the command bar, the tag autocomplete, matched letters in the history search. |
+| `hint` | `dark_gray` | Timestamps, hints, the scrollbar track, lines outside a search match. |
+| `selection` | `white` | Background of a selected line's timestamp. |
+| `bookmark` | `yellow` | Bookmarked timestamps. |
+| `picker` / `picker_error` | `yellow` / `red` | The port/target picker of [Icon mode](#icon-mode) and its errors. |
+| `log_error`, `log_warning`, `log_success`, `log_info`, `log_debug` | `red`, `yellow`, `light_green`, `cyan`, `dark_gray` | Background of each log level (also in headless mode). |
+
+Text drawn on a colored background (log lines, the selected bookmark or search match, the autocomplete bar) picks black or white automatically for contrast, so `#rrggbb` values stay readable.
+
+**Transparency.** A terminal program can't change the window's opacity, only whether it paints a background. With the default `background = "reset"` scope paints none, so your terminal's own background — including any transparency or blur — shows through. Set it to any color to give scope an opaque background of its own.
+
+**Icons:** `highlight` (marks the selected list entry, default `"▶ "`), `recording` (in the output title while recording, `"◉"`), `scroll_up` / `scroll_down` (scrollbar arrows, `"▲"` / `"▼"`) and `cursor` (the picker's text cursor, `"▏"`). Use ASCII ones if your font lacks these glyphs. `scroll_up`, `scroll_down` and `cursor` must be exactly one cell wide.
+
+An unknown key, an invalid color (the error shows the file, its line and the accepted forms) or a wrongly-sized icon is reported as an error on startup.
 
 ## Plugins
 

@@ -20,12 +20,14 @@ use ratatui::{
     Frame, Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
-    style::{Color, Modifier, Style},
+    style::{Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
 };
 use std::io::{self, Stdout};
 
+use crate::graphics::palette::Palette;
+use crate::graphics::theme::{self, theme};
 use crate::interfaces::rtt_if::{ControlBlock, RttSetup};
 use crate::list::usb_ports;
 use std::path::PathBuf;
@@ -177,7 +179,10 @@ impl Tui {
 
     fn draw(&mut self, render: impl FnOnce(&mut Frame)) -> Result<(), String> {
         self.terminal
-            .draw(render)
+            .draw(|f| {
+                render(f);
+                theme::paint_background(f.buffer_mut());
+            })
             .map(|_| ())
             .map_err(|e| format!("Cannot draw picker: {e}"))
     }
@@ -598,11 +603,11 @@ fn box_with_hint(f: &mut Frame, title: &str, hint: &str, height: u16) -> Rect {
     f.render_widget(Clear, area);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
+        .border_style(Style::default().fg(theme().picker))
         .title(Span::styled(
             title,
             Style::default()
-                .fg(Color::Yellow)
+                .fg(theme().picker)
                 .add_modifier(Modifier::BOLD),
         ));
     let inner = block.inner(area);
@@ -612,7 +617,7 @@ fn box_with_hint(f: &mut Frame, title: &str, hint: &str, height: u16) -> Rect {
         .constraints([Constraint::Min(1), Constraint::Length(1)])
         .split(inner);
     f.render_widget(
-        Paragraph::new(Span::styled(hint, Style::default().fg(Color::DarkGray)))
+        Paragraph::new(Span::styled(hint, Style::default().fg(theme().hint)))
             .alignment(Alignment::Center),
         rows[1],
     );
@@ -621,8 +626,8 @@ fn box_with_hint(f: &mut Frame, title: &str, hint: &str, height: u16) -> Rect {
 
 fn highlight_style() -> Style {
     Style::default()
-        .fg(Color::Black)
-        .bg(Color::Yellow)
+        .fg(Palette::fg(theme().picker))
+        .bg(theme().picker)
         .add_modifier(Modifier::BOLD)
 }
 
@@ -637,7 +642,7 @@ fn render_port_list(f: &mut Frame, ports: &[(String, String)], idx: usize) {
     if ports.is_empty() {
         f.render_widget(
             Paragraph::new("No serial ports found. Plug a device and press 'r'.")
-                .style(Style::default().fg(Color::Red))
+                .style(Style::default().fg(theme().picker_error))
                 .alignment(Alignment::Center),
             content,
         );
@@ -650,7 +655,7 @@ fn render_port_list(f: &mut Frame, ports: &[(String, String)], idx: usize) {
         .collect();
     let list = List::new(items)
         .highlight_style(highlight_style())
-        .highlight_symbol("▶ ");
+        .highlight_symbol(theme().icons.highlight.as_str());
     let mut state = ListState::default();
     state.select(Some(idx));
     f.render_stateful_widget(list, content, &mut state);
@@ -671,7 +676,7 @@ fn render_baud_list(f: &mut Frame, port: &str, idx: usize) {
     items.push(ListItem::new("Custom…"));
     let list = List::new(items)
         .highlight_style(highlight_style())
-        .highlight_symbol("▶ ");
+        .highlight_symbol(theme().icons.highlight.as_str());
     let mut state = ListState::default();
     state.select(Some(idx));
     f.render_stateful_widget(list, content, &mut state);
@@ -722,7 +727,7 @@ fn render_control_block_list(f: &mut Frame, target: &str, idx: usize) {
 fn render_list(f: &mut Frame, area: Rect, items: Vec<ListItem>, idx: usize) {
     let list = List::new(items)
         .highlight_style(highlight_style())
-        .highlight_symbol("▶ ");
+        .highlight_symbol(theme().icons.highlight.as_str());
     let mut state = ListState::default();
     state.select(Some(idx));
     f.render_stateful_widget(list, area, &mut state);
@@ -731,9 +736,12 @@ fn render_list(f: &mut Frame, area: Rect, items: Vec<ListItem>, idx: usize) {
 fn render_text_prompt(f: &mut Frame, title: &str, label: &str, buf: &str, hint: &str) {
     let content = box_with_hint(f, title, hint, 5);
     let line = Line::from(vec![
-        Span::styled(format!("{label}: "), Style::default().fg(Color::Yellow)),
+        Span::styled(format!("{label}: "), Style::default().fg(theme().picker)),
         Span::raw(buf.to_string()),
-        Span::styled("▏", Style::default().fg(Color::Yellow)),
+        Span::styled(
+            theme().icons.cursor.as_str(),
+            Style::default().fg(theme().picker),
+        ),
     ]);
     f.render_widget(Paragraph::new(line), content);
 }
