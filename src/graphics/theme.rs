@@ -416,4 +416,17 @@ mod tests {
 
         assert!(buffer.content.iter().all(|c| c.bg == Color::Reset));
     }
+
+    #[test]
+    fn repainting_the_same_background_sends_nothing_after_the_first_frame() {
+        let area = Rect::new(0, 0, 4, 2);
+        let blank = Buffer::empty(area);
+        let mut first = Buffer::empty(area);
+        fill_background(&mut first, Color::Blue);
+        let mut second = Buffer::empty(area);
+        fill_background(&mut second, Color::Blue);
+
+        assert_eq!(blank.diff(&first).len(), first.content.len());
+        assert!(first.diff(&second).is_empty());
+    }
 }
