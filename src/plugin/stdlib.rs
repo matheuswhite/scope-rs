@@ -266,7 +266,24 @@ mod tests {
             load_plugin([[ return { config = { default_timeout = "200" } } ]])
 
             local ok, err = pcall(drive, function() scope.serial.send_and_wait("AT") end)
-            assert(not ok and err:find("the timeout must be a number of milliseconds"), err)
+            assert(not ok and err:find("the timeout must be a whole number of milliseconds"), err)
+
+            ok, err = pcall(drive, function() scope.serial.send_and_wait("AT", "OK", 0.5) end)
+            assert(not ok and err:find("the timeout must be a whole number of milliseconds"), err)
+            ok, err = pcall(drive, function() scope.serial.send_and_wait("AT", "OK", math.huge) end)
+            assert(not ok and err:find("the timeout must be a whole number of milliseconds"), err)
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_rejects_an_ignore_msg_that_is_not_a_list_of_strings() {
+        run(r#"
+            for _, ignore_msg in ipairs({ "uart.*", { "uart.*", 1 } }) do
+                load_plugin("return {}").config.ignore_msg = ignore_msg
+
+                local ok, err = pcall(drive, function() scope.serial.send_and_wait("AT") end)
+                assert(not ok and err:find("config.ignore_msg must be a list of string patterns"), err)
+            end
         "#);
     }
 
@@ -500,6 +517,9 @@ mod tests {
             expect_eq(cops.act, { raw = "7", value = 7 })
             expect_eq(#cops.params, 4)
 
+            expect_eq(scope.codec.at.decode('+COPS: 0,0,"TIM",1').act.value, 1)
+            expect_eq(scope.codec.at.decode('+COPS: 0,0,"TIM",10').act.value, 10)
+
             local unregistered = scope.codec.at.decode("+COPS: 0")
             expect_eq({ unregistered.mode.value, unregistered.format }, { 0, nil })
         "#);
@@ -509,7 +529,7 @@ mod tests {
     fn decode_rejects_out_of_range_values() {
         run(r#"
             expect_eq({ scope.codec.at.decode('+COPS: 3,0,"TIM",7') }, { nil, "+COPS: invalid mode 3" })
-            expect_eq({ scope.codec.at.decode('+COPS: 0,0,"TIM",10') }, { nil, "+COPS: invalid act 10" })
+            expect_eq({ scope.codec.at.decode('+COPS: 0,0,"TIM",14') }, { nil, "+COPS: invalid act 14" })
             expect_eq({ scope.codec.at.decode("+CSQ: 32,99") }, { nil, "+CSQ: invalid rssi 32" })
             expect_eq({ scope.codec.at.decode("+CSQ: 20") }, { nil, "+CSQ: missing ber" })
             expect_eq({ scope.codec.at.decode("+CPIN: BUSY") }, { nil, "+CPIN: invalid code BUSY" })

@@ -37,9 +37,8 @@ local function range(min, max)
     end
 end
 
-local function is_act(value)
-    return value == 0 or (value >= 2 and value <= 9) or (value >= 11 and value <= 13)
-end
+-- 3GPP TS 27.007 <AcT>: 0 (GSM) to 13 (E-UTRA-NR dual connectivity).
+local is_act = range(0, 13)
 
 local function is_rssi(value)
     return (value >= 0 and value <= 31) or value == 99

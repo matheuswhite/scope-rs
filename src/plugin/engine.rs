@@ -2,7 +2,7 @@ use super::{
     Plugin, PluginUnloadMode, RecvData,
     bridge::{PluginEngineGate, PluginMethodCallGate},
     installed::Installed,
-    line_waiter::{LineWaiter, WaitOutcome, WaitResult},
+    line_waiter::{LineWaiter, WaitQueue},
     messages::{self, PluginExternalRequest, PluginMethodMessage, PluginResponse},
     rx_lines::RxLines,
     stdlib::{self, STDLIB},
@@ -173,9 +173,9 @@ impl PluginEngine {
     ) {
         let mut plugin_list: HashMap<Arc<String>, Plugin> = HashMap::new();
         let mut engine_gate = PluginEngineGate::new(32);
-        let mut interface_recv_reqs = vec![];
-        let mut rtt_read_reqs = vec![];
-        let mut waits: Vec<PendingWait> = vec![];
+        let mut interface_recv_reqs: Vec<PluginMethodMessage<PluginExternalRequest>> = vec![];
+        let mut rtt_read_reqs: Vec<PluginMethodMessage<PluginExternalRequest>> = vec![];
+        let mut waits: WaitQueue<u64> = WaitQueue::default();
         let mut running_suites: HashMap<Arc<String>, u64> = HashMap::new();
         let mut rx_lines = RxLines::default();
         let hooks = RecvHooks::of(&private.interface_type);
@@ -485,10 +485,16 @@ impl PluginEngine {
                         let Some(plugin) = plugin_list.get_mut(&selection.plugin) else {
                             continue 'plugin_engine_loop;
                         };
-                        if let Some(method_id) = plugin
+                        match plugin
                             .spawn_test_suite(engine_gate.new_method_call_gate(), selection.tests)
                         {
-                            running_suites.insert(selection.plugin, method_id);
+                            Some(method_id) => {
+                                running_suites.insert(selection.plugin, method_id);
+                            }
+                            None => error!(
+                                private.logger,
+                                "Plugin \"{}\" is being unloaded", selection.plugin
+                            ),
                         }
                     }
                     PluginEngineCommand::RttReadResult {
@@ -510,26 +516,200 @@ impl PluginEngine {
                             )
                             .collect::<Vec<_>>();
 
-                        for PluginMethodMessage {
-                            plugin_name,
-                            method_id,
-                            ..
-                        } in rtt_read_reqs_filtered
-                        {
+                        for PluginMethodMessage { method_id, .. } in rtt_read_reqs_filtered {
                             let rsp = PluginResponse::RttRead {
                                 err: err.clone(),
                                 data: data.clone(),
                             };
 
-                            let _ = engine_gate.sender.send(PluginMethodMessage {
-                                plugin_name,
-                                method_id,
-                                data: rsp,
-                            });
+                            engine_gate.respond(method_id, rsp);
                         }
                     }
                 }
             }
+
+            // Drain the bus: headless publishes one message per received byte,
+            // and taking a single one per pass would let the line hook fall
+            // behind the wire.
+            while let Ok(rx_msg) = private.rx.try_recv() {
+                // Deprecated: gets the message in whatever shape the interface
+                // published it, which differs between the TUI and headless.
+                for plugin in plugin_list.values_mut() {
+                    let data = RecvData {
+                        bytes: rx_msg.message.clone(),
+                        as_string: plugin.recv_as_string(),
+                    };
+                    plugin.spawn_method_call(
+                        engine_gate.new_method_call_gate(),
+                        hooks.legacy,
+                        data,
+                        false,
+                    );
+                }
+
+                // The two hooks below see the same stream in both modes. They
+                // are only spawned for plugins that define them: the byte hook
+                // runs once per received byte, and an undefined hook would
+                // still cost a task per call.
+                for plugin in plugin_list.values_mut() {
+                    if !plugin.defines(hooks.byte) {
+                        continue;
+                    }
+                    for &byte in rx_msg.message.iter() {
+                        plugin.spawn_method_call(
+                            engine_gate.new_method_call_gate(),
+                            hooks.byte,
+                            byte,
+                            false,
+                        );
+                    }
+                }
+
+                let framed = rx_lines.push(&rx_msg.message);
+                if framed.dropped > 0 {
+                    warning!(
+                        private.logger,
+                        "Dropped {} received bytes without a line break; {} only gets complete lines",
+                        framed.dropped,
+                        hooks.line
+                    );
+                }
+                for plugin in plugin_list.values_mut() {
+                    if !plugin.defines(hooks.line) {
+                        continue;
+                    }
+                    let as_string = plugin.recv_as_string();
+                    for line in framed.lines.iter() {
+                        plugin.spawn_method_call(
+                            engine_gate.new_method_call_gate(),
+                            hooks.line,
+                            RecvData {
+                                bytes: line.clone(),
+                                as_string,
+                            },
+                            false,
+                        );
+                    }
+                }
+
+                for line in framed.lines.iter() {
+                    if let Some((method_id, result)) = waits.feed(line) {
+                        engine_gate.respond(method_id, PluginResponse::SendAndWait(result));
+                    }
+                }
+
+                for interface_recv_req in interface_recv_reqs.drain(..) {
+                    let method_id = interface_recv_req.method_id;
+
+                    let rsp = match private.interface_type {
+                        InterfaceType::Serial => PluginResponse::SerialRecv {
+                            err: "".to_string(),
+                            message: rx_msg.message.clone(),
+                        },
+                        InterfaceType::Rtt => PluginResponse::RttRecv {
+                            err: "".to_string(),
+                            message: rx_msg.message.clone(),
+                        },
+                    };
+
+                    engine_gate.respond(method_id, rsp);
+                }
+            }
+
+            interface_recv_reqs.retain(
+                |PluginMethodMessage {
+                     data, method_id, ..
+                 }| {
+                    match data {
+                        PluginExternalRequest::RttRecv { timeout } => {
+                            let InterfaceType::Rtt = private.interface_type else {
+                                engine_gate.respond(*method_id, PluginResponse::RttRecv {
+                                        err: "wrong interface".to_string(),
+                                        message: vec![],
+                                    });
+                                return false;
+                            };
+
+                            if let Some(t) = timeout
+                                && Instant::now() >= *t
+                            {
+                                engine_gate.respond(*method_id, PluginResponse::RttRecv {
+                                        err: "timeout".to_string(),
+                                        message: vec![],
+                                    });
+
+                                return false;
+                            }
+
+                            true
+                        }
+                        PluginExternalRequest::SerialRecv { timeout } => {
+                            let InterfaceType::Serial = private.interface_type else {
+                                let rsp = PluginResponse::SerialRecv {
+                                    err: "wrong interface".to_string(),
+                                    message: vec![],
+                                };
+                                engine_gate.respond(*method_id, rsp);
+                                return false;
+                            };
+
+                            if let Some(t) = timeout
+                                && Instant::now() >= *t
+                            {
+                                engine_gate.respond(*method_id, PluginResponse::SerialRecv {
+                                        err: "timeout".to_string(),
+                                        message: vec![],
+                                    });
+
+                                return false;
+                            }
+
+                            true
+                        }
+                        _ => unreachable!("Only recv requests should be in interface_recv_reqs. This is a bug. Please, report it."),
+                    }
+                },
+            );
+
+            rtt_read_reqs.retain(
+                |PluginMethodMessage {
+                     method_id, data, ..
+                 }| {
+                    let PluginExternalRequest::RttRead { timeout, .. } = data else {
+                        unreachable!("RttRead requests should be the only ones in rtt_read_reqs. This is a bug. Please, report it.");
+                    };
+
+                    let InterfaceType::Rtt = private.interface_type else {
+                        engine_gate.respond(*method_id, PluginResponse::RttRead {
+                                err: "wrong interface".to_string(),
+                                data: vec![],
+                            });
+                        return false;
+                    };
+
+                    if let Some(t) = timeout
+                        && Instant::now() >= *t
+                    {
+                        engine_gate.respond(*method_id, PluginResponse::RttRead {
+                                err: "timeout".to_string(),
+                                data: vec![],
+                            });
+
+                        return false;
+                    }
+
+                    true
+                },
+            );
+
+            if let Some(method_id) = waits.expire(Instant::now()) {
+                engine_gate.respond(
+                    method_id,
+                    PluginResponse::SendAndWait(Err("timeout".to_string())),
+                );
+            }
+
+            send_next_wait(&mut waits, &private);
 
             while let Ok(PluginMethodMessage {
                 plugin_name,
@@ -537,15 +717,30 @@ impl PluginEngine {
                 data,
             }) = engine_gate.receiver.try_recv()
             {
-                if matches!(data, PluginExternalRequest::Finish { .. })
-                    && running_suites.get(&plugin_name) == Some(&method_id)
-                {
-                    running_suites.remove(&plugin_name);
+                let finished = matches!(data, PluginExternalRequest::Finish { .. });
+                if finished {
+                    engine_gate.finished(method_id);
+                    if running_suites.get(&plugin_name) == Some(&method_id) {
+                        running_suites.remove(&plugin_name);
+                    }
                 }
 
-                let Some(plugin) = plugin_list.remove(&plugin_name) else {
+                if !plugin_list
+                    .get(&plugin_name)
+                    .is_some_and(|plugin| plugin.owns(method_id))
+                {
+                    if !finished {
+                        engine_gate.respond(method_id, PluginResponse::Unloaded);
+                    }
                     continue;
-                };
+                }
+
+                let mut plugin = plugin_list
+                    .remove(&plugin_name)
+                    .expect("the plugin owning the call was just found");
+                if finished {
+                    plugin.finished(method_id);
+                }
 
                 let rsp = match data {
                     super::messages::PluginExternalRequest::SerialInfo => {
@@ -760,12 +955,8 @@ impl PluginEngine {
                         } else {
                             match LineWaiter::new(&spec) {
                                 Ok(waiter) => {
-                                    private.transmit(message);
-                                    waits.push(PendingWait {
-                                        plugin_name: plugin_name.clone(),
-                                        method_id,
-                                        waiter,
-                                    });
+                                    waits.push(method_id, message, waiter);
+                                    send_next_wait(&mut waits, &private);
                                     None
                                 }
                                 Err(err) => Some(PluginResponse::SendAndWait(Err(err))),
@@ -791,6 +982,20 @@ impl PluginEngine {
                     }
                     messages::PluginExternalRequest::Finish { fn_name } => {
                         if fn_name.as_str() == "on_unload" {
+                            let calls = plugin.calls().clone();
+                            for method_id in waits.cancel(|method_id| calls.contains(method_id)) {
+                                engine_gate.respond(method_id, PluginResponse::Unloaded);
+                            }
+                            for reqs in [&mut interface_recv_reqs, &mut rtt_read_reqs] {
+                                reqs.retain(|req| {
+                                    if !calls.contains(&req.method_id) {
+                                        return true;
+                                    }
+                                    engine_gate.respond(req.method_id, PluginResponse::Unloaded);
+                                    false
+                                });
+                            }
+
                             if let PluginUnloadMode::Reload = plugin.unload_mode() {
                                 match Self::load_plugin(
                                     engine_gate.new_method_call_gate(),
@@ -830,12 +1035,10 @@ impl PluginEngine {
                     continue;
                 };
 
-                let _ = engine_gate.sender.send(PluginMethodMessage {
-                    plugin_name,
-                    method_id,
-                    data: rsp,
-                });
+                engine_gate.respond(method_id, rsp);
             }
+
+            send_next_wait(&mut waits, &private);
 
             if let Ok(tx_msg) = private.tx_consumer.try_recv() {
                 for plugin in plugin_list.values_mut() {
@@ -849,238 +1052,6 @@ impl PluginEngine {
                         tx_msg.message.clone(),
                         false,
                     );
-                }
-            }
-
-            interface_recv_reqs.retain(
-                |PluginMethodMessage {
-                     data,
-                     plugin_name,
-                     method_id,
-                 }| {
-                    match data {
-                        PluginExternalRequest::RttRecv { timeout } => {
-                            let InterfaceType::Rtt = private.interface_type else {
-                                let _ = engine_gate.sender.send(PluginMethodMessage {
-                                    plugin_name: plugin_name.clone(),
-                                    method_id: *method_id,
-                                    data: PluginResponse::RttRecv {
-                                        err: "wrong interface".to_string(),
-                                        message: vec![],
-                                    },
-                                });
-                                return false;
-                            };
-
-                            if let Some(t) = timeout
-                                && Instant::now() >= *t
-                            {
-                                let _ = engine_gate.sender.send(PluginMethodMessage {
-                                    plugin_name: plugin_name.clone(),
-                                    method_id: *method_id,
-                                    data: PluginResponse::RttRecv {
-                                        err: "timeout".to_string(),
-                                        message: vec![],
-                                    },
-                                });
-
-                                return false;
-                            }
-
-                            true
-                        }
-                        PluginExternalRequest::SerialRecv { timeout } => {
-                            let InterfaceType::Serial = private.interface_type else {
-                                let rsp = PluginResponse::SerialRecv {
-                                    err: "wrong interface".to_string(),
-                                    message: vec![],
-                                };
-                                let _ = engine_gate.sender.send(PluginMethodMessage {
-                                    plugin_name: plugin_name.clone(),
-                                    method_id: *method_id,
-                                    data: rsp,
-                                });
-                                return false;
-                            };
-
-                            if let Some(t) = timeout
-                                && Instant::now() >= *t
-                            {
-                                let _ = engine_gate.sender.send(PluginMethodMessage {
-                                    plugin_name: plugin_name.clone(),
-                                    method_id: *method_id,
-                                    data: PluginResponse::SerialRecv {
-                                        err: "timeout".to_string(),
-                                        message: vec![],
-                                    },
-                                });
-
-                                return false;
-                            }
-
-                            true
-                        }
-                        _ => unreachable!("Only recv requests should be in interface_recv_reqs. This is a bug. Please, report it."),
-                    }
-                },
-            );
-
-            rtt_read_reqs.retain(
-                |PluginMethodMessage {
-                     plugin_name,
-                     method_id,
-                     data,
-                     ..
-                 }| {
-                    let PluginExternalRequest::RttRead { timeout, .. } = data else {
-                        unreachable!("RttRead requests should be the only ones in rtt_read_reqs. This is a bug. Please, report it.");
-                    };
-
-                    let InterfaceType::Rtt = private.interface_type else {
-                        let _ = engine_gate.sender.send(PluginMethodMessage {
-                            plugin_name: plugin_name.clone(),
-                            method_id: *method_id,
-                            data: PluginResponse::RttRead {
-                                err: "wrong interface".to_string(),
-                                data: vec![],
-                            },
-                        });
-                        return false;
-                    };
-
-                    if let Some(t) = timeout
-                        && Instant::now() >= *t
-                    {
-                        let _ = engine_gate.sender.send(PluginMethodMessage {
-                            plugin_name: plugin_name.clone(),
-                            method_id: *method_id,
-                            data: PluginResponse::RttRead {
-                                err: "timeout".to_string(),
-                                data: vec![],
-                            },
-                        });
-
-                        return false;
-                    }
-
-                    true
-                },
-            );
-
-            let now = Instant::now();
-            waits.retain(|wait| {
-                if !wait.waiter.expired(now) {
-                    return true;
-                }
-
-                wait.respond(&engine_gate, Err("timeout".to_string()));
-                false
-            });
-
-            // Drain the bus: headless publishes one message per received byte,
-            // and taking a single one per pass would let the line hook fall
-            // behind the wire.
-            while let Ok(rx_msg) = private.rx.try_recv() {
-                // Deprecated: gets the message in whatever shape the interface
-                // published it, which differs between the TUI and headless.
-                for plugin in plugin_list.values_mut() {
-                    let data = RecvData {
-                        bytes: rx_msg.message.clone(),
-                        as_string: plugin.recv_as_string(),
-                    };
-                    plugin.spawn_method_call(
-                        engine_gate.new_method_call_gate(),
-                        hooks.legacy,
-                        data,
-                        false,
-                    );
-                }
-
-                // The two hooks below see the same stream in both modes. They
-                // are only spawned for plugins that define them: the byte hook
-                // runs once per received byte, and an undefined hook would
-                // still cost a task per call.
-                for plugin in plugin_list.values_mut() {
-                    if !plugin.defines(hooks.byte) {
-                        continue;
-                    }
-                    for &byte in rx_msg.message.iter() {
-                        plugin.spawn_method_call(
-                            engine_gate.new_method_call_gate(),
-                            hooks.byte,
-                            byte,
-                            false,
-                        );
-                    }
-                }
-
-                let framed = rx_lines.push(&rx_msg.message);
-                if framed.dropped > 0 {
-                    warning!(
-                        private.logger,
-                        "Dropped {} received bytes without a line break; {} only gets complete lines",
-                        framed.dropped,
-                        hooks.line
-                    );
-                }
-                for plugin in plugin_list.values_mut() {
-                    if !plugin.defines(hooks.line) {
-                        continue;
-                    }
-                    let as_string = plugin.recv_as_string();
-                    for line in framed.lines.iter() {
-                        plugin.spawn_method_call(
-                            engine_gate.new_method_call_gate(),
-                            hooks.line,
-                            RecvData {
-                                bytes: line.clone(),
-                                as_string,
-                            },
-                            false,
-                        );
-                    }
-                }
-
-                for line in framed.lines.iter() {
-                    waits.retain_mut(|wait| {
-                        let Some(outcome) = wait.waiter.feed(line) else {
-                            return true;
-                        };
-
-                        let result = match outcome {
-                            WaitOutcome::Matched { lines, matched } => Ok((lines, matched)),
-                            WaitOutcome::Failed { line } => {
-                                Err(String::from_utf8_lossy(&line).into_owned())
-                            }
-                        };
-                        wait.respond(&engine_gate, result);
-                        false
-                    });
-                }
-
-                for interface_recv_req in interface_recv_reqs.drain(..) {
-                    let PluginMethodMessage {
-                        plugin_name,
-                        method_id,
-                        ..
-                    } = interface_recv_req;
-
-                    let rsp = match private.interface_type {
-                        InterfaceType::Serial => PluginResponse::SerialRecv {
-                            err: "".to_string(),
-                            message: rx_msg.message.clone(),
-                        },
-                        InterfaceType::Rtt => PluginResponse::RttRecv {
-                            err: "".to_string(),
-                            message: rx_msg.message.clone(),
-                        },
-                    };
-
-                    let _ = engine_gate.sender.send(PluginMethodMessage {
-                        plugin_name,
-                        method_id,
-                        data: rsp,
-                    });
                 }
             }
 
@@ -1198,20 +1169,10 @@ impl PluginEngine {
     }
 }
 
-/// A `send_and_wait` call still waiting for its expected line.
-struct PendingWait {
-    plugin_name: Arc<String>,
-    method_id: u64,
-    waiter: LineWaiter,
-}
-
-impl PendingWait {
-    fn respond(&self, gate: &PluginEngineGate, result: WaitResult) {
-        let _ = gate.sender.send(PluginMethodMessage {
-            plugin_name: self.plugin_name.clone(),
-            method_id: self.method_id,
-            data: PluginResponse::SendAndWait(result),
-        });
+/// Sends the `send_and_wait` message whose turn has come, if any.
+fn send_next_wait(waits: &mut WaitQueue<u64>, private: &PluginEngineConnections) {
+    if let Some(message) = waits.next_to_send(Instant::now()) {
+        private.transmit(message);
     }
 }
 
@@ -1300,7 +1261,12 @@ impl PluginEngineConnections {
 #[cfg(test)]
 mod tests {
     use super::{PluginEngine, PluginEngineCommand, PluginEngineConnections, STDLIB, stage_plugin};
-    use crate::infra::{logger::Logger, messages::TimedBytes, mpmc::Channel, task::Shared};
+    use crate::infra::{
+        logger::{LogMessage, Logger},
+        messages::TimedBytes,
+        mpmc::{Channel, Consumer, Producer},
+        task::Shared,
+    };
     use crate::interfaces::{
         InterfaceShared, InterfaceType,
         serial_if::{SerialSetup, SerialShared},
@@ -1453,94 +1419,253 @@ return M
             b"modem at AT+COPS?\r\n" => {
                 Some(b"uart:~$ modem at AT+COPS?\r\n\r\n+COPS: 0,0,\"TIMBrasil\",7\r\n\r\nOK\r\n")
             }
+            b"modem at AT+CGATT?\r\n" => Some(b"uart:~$ modem at AT+CGATT?\r\n+CGATT: 1\r\nOK\r\n"),
             b"modem at AT+CSQ\r\n" => Some(b"uart:~$ modem at AT+CSQ\r\n+CME ERROR: 10\r\n"),
             _ => None,
         }
     }
 
-    #[test]
-    fn a_test_suite_talks_to_the_device_through_send_and_wait() {
-        let tmp = TempDir::new("suite");
-        let source = tmp.path().join("modem.lua");
-        fs::write(&source, MODEM_PLUGIN).unwrap();
+    /// The plugin engine on a temporary plugins directory, with a fake modem
+    /// answering on the RX bus what the engine sends on the TX bus.
+    struct Rig {
+        tmp: TempDir,
+        sender: mpsc::Sender<PluginEngineCommand>,
+        engine: Option<PluginEngine>,
+        wire: Consumer<Arc<TimedBytes>>,
+        device: Producer<Arc<TimedBytes>>,
+        logs: mpsc::Receiver<LogMessage>,
+        seen: Vec<String>,
+        sent: Vec<Vec<u8>>,
+    }
 
-        let mut tx = Channel::default();
-        let wire = tx.new_consumer();
-        let engine_tx = tx.new_consumer();
-        let tx = Arc::new(tx);
-        let mut rx = Channel::default();
-        let engine_rx = rx.new_consumer();
-        let device = Arc::new(rx).new_producer();
+    impl Rig {
+        fn new(tag: &str) -> Self {
+            let tmp = TempDir::new(tag);
+            let mut tx = Channel::default();
+            let wire = tx.new_consumer();
+            let engine_tx = tx.new_consumer();
+            let tx = Arc::new(tx);
+            let mut rx = Channel::default();
+            let engine_rx = rx.new_consumer();
+            let device = Arc::new(rx).new_producer();
 
-        let (logger, logs) = Logger::new("test".to_string());
-        let (interface_sender, _interface_receiver) = mpsc::channel();
-        let (sender, receiver) = mpsc::channel();
-        let engine = PluginEngine::spawn_plugin_engine(
-            PluginEngineConnections::new(
-                logger,
-                tx.new_producer(),
-                engine_tx,
-                engine_rx,
-                Shared::new(InterfaceShared::Serial(SerialShared::new(
-                    SerialSetup::default(),
-                ))),
-                100,
-                InterfaceType::Serial,
-                interface_sender,
-                tmp.path().join("plugins"),
-            ),
-            sender.clone(),
-            receiver,
-        );
+            let (logger, logs) = Logger::new("test".to_string());
+            let (interface_sender, _) = mpsc::channel();
+            let (sender, receiver) = mpsc::channel();
+            let engine = PluginEngine::spawn_plugin_engine(
+                PluginEngineConnections::new(
+                    logger,
+                    tx.new_producer(),
+                    engine_tx,
+                    engine_rx,
+                    Shared::new(InterfaceShared::Serial(SerialShared::new(
+                        SerialSetup::default(),
+                    ))),
+                    100,
+                    InterfaceType::Serial,
+                    interface_sender,
+                    tmp.path().join("plugins"),
+                ),
+                sender.clone(),
+                receiver,
+            );
 
-        let mut seen = vec![];
-        let mut wait_for = |text: &str| {
+            Self {
+                tmp,
+                sender,
+                engine: Some(engine),
+                wire,
+                device,
+                logs,
+                seen: vec![],
+                sent: vec![],
+            }
+        }
+
+        fn load(&mut self, name: &str, code: &str) {
+            let source = self.tmp.path().join(format!("{name}.lua"));
+            fs::write(&source, code).unwrap();
+            self.send(PluginEngineCommand::LoadPlugin {
+                filepath: source.to_str().unwrap().to_string(),
+            });
+            self.wait_for_log(&format!("Plugin \"{name}\" loaded"));
+        }
+
+        fn send(&self, command: PluginEngineCommand) {
+            self.sender.send(command).unwrap();
+        }
+
+        fn test(&self, args: &[&str]) {
+            self.send(PluginEngineCommand::RunTests {
+                args: args.iter().map(|arg| arg.to_string()).collect(),
+            });
+        }
+
+        fn wait_until(&mut self, what: &str, done: impl Fn(&Self) -> bool) {
             let deadline = Instant::now() + Duration::from_secs(10);
-            while !seen.iter().any(|line: &String| line.contains(text)) {
-                assert!(Instant::now() < deadline, "no \"{text}\" in {seen:#?}");
-                while let Ok(command) = wire.try_recv() {
+            while !done(self) {
+                assert!(
+                    Instant::now() < deadline,
+                    "no {what} in {:#?}\nsent: {:?}",
+                    self.seen,
+                    self.sent
+                );
+                while let Ok(command) = self.wire.try_recv() {
                     if let Some(reply) = modem_reply(&command.message) {
-                        device.produce(Arc::new(TimedBytes {
+                        self.device.produce(Arc::new(TimedBytes {
                             timestamp: Local::now(),
                             message: reply.to_vec(),
                         }));
                     }
+                    self.sent.push(command.message.clone());
                 }
-                seen.extend(logs.try_iter().map(|log| log.message));
+                self.seen
+                    .extend(self.logs.try_iter().map(|log| log.message));
                 std::thread::sleep(Duration::from_millis(1));
             }
-        };
+        }
 
-        sender
-            .send(PluginEngineCommand::LoadPlugin {
-                filepath: source.to_str().unwrap().to_string(),
-            })
-            .unwrap();
-        wait_for("Plugin \"modem\" loaded");
+        fn wait_for_log(&mut self, text: &str) {
+            self.wait_until(&format!("\"{text}\""), |rig| {
+                rig.seen.iter().any(|line| line.contains(text))
+            });
+        }
 
-        sender
-            .send(PluginEngineCommand::RunTests {
-                args: vec!["modem".to_string()],
-            })
-            .unwrap();
-        wait_for("passed");
+        fn report(&self, source: &str) -> Vec<&String> {
+            self.seen
+                .iter()
+                .filter(|line| line.starts_with(source))
+                .collect()
+        }
+    }
 
-        sender.send(PluginEngineCommand::Exit).unwrap();
-        engine.join();
+    impl Drop for Rig {
+        fn drop(&mut self) {
+            if let Some(engine) = self.engine.take() {
+                let _ = self.sender.send(PluginEngineCommand::Exit);
+                engine.join();
+            }
+        }
+    }
 
-        let report = seen
-            .iter()
-            .filter(|line| line.starts_with("[modem:test]"))
-            .collect::<Vec<_>>();
+    #[test]
+    fn a_test_suite_talks_to_the_device_through_send_and_wait() {
+        let mut rig = Rig::new("suite");
+        rig.load("modem", MODEM_PLUGIN);
+
+        rig.test(&["modem"]);
+        rig.wait_for_log("passed");
+
         assert_eq!(
-            report,
+            rig.report("[modem:test]"),
             [
                 "[modem:test] [1/3] cops: pass",
                 "[modem:test] [2/3] error: pass",
                 "[modem:test] [3/3] timeout: pass",
                 "[modem:test] 3 passed, 0 failed, 0 skipped",
             ],
-            "{seen:#?}"
+            "{:#?}",
+            rig.seen
+        );
+    }
+
+    const SILENT_PLUGIN: &str = r#"
+local serial = require("scope").serial
+
+local M = {}
+
+function M.test_silent()
+    serial.send_and_wait("AT+SILENT", "OK", 60000)
+end
+
+return M
+"#;
+
+    #[test]
+    fn unloading_a_plugin_mid_suite_lets_its_tests_run_again() {
+        let mut rig = Rig::new("unload-mid-suite");
+        let silent = b"modem at AT+SILENT\r\n".to_vec();
+        let sent_silent = |rig: &Rig| rig.sent.iter().filter(|sent| **sent == silent).count();
+
+        rig.load(
+            "modem",
+            &SILENT_PLUGIN.replace(
+                "local M = {}",
+                "local M = { config = { send_prefix = \"modem at\" } }",
+            ),
+        );
+        rig.test(&["modem"]);
+        rig.wait_until("AT+SILENT on the wire", |rig| sent_silent(rig) == 1);
+
+        rig.send(PluginEngineCommand::UnloadPlugin {
+            plugin_name: "modem".to_string(),
+        });
+        rig.wait_for_log("[modem:test] Stopped: the plugin was unloaded");
+
+        rig.load(
+            "modem",
+            &SILENT_PLUGIN.replace(
+                "local M = {}",
+                "local M = { config = { send_prefix = \"modem at\" } }",
+            ),
+        );
+        rig.test(&["modem"]);
+        rig.wait_until("AT+SILENT on the wire again", |rig| sent_silent(rig) == 2);
+
+        assert!(
+            !rig.seen.iter().any(|line| line.contains("already running")),
+            "{:#?}",
+            rig.seen
+        );
+    }
+
+    const CGATT_PLUGIN: &str = r#"
+local scope = require("scope")
+local test = scope.test
+
+local M = { config = { send_prefix = "modem at", ignore_msg = { "uart.*" } } }
+
+function M.test_cgatt()
+    local lines = scope.serial.send_and_wait("AT+CGATT?")
+    test.assert_eq(lines, { "+CGATT: 1" })
+end
+
+return M
+"#;
+
+    #[test]
+    fn send_and_wait_calls_of_two_plugins_take_turns() {
+        let mut rig = Rig::new("two-plugins");
+        rig.load("cgatt", CGATT_PLUGIN);
+        rig.load("modem", MODEM_PLUGIN);
+
+        rig.test(&["cgatt"]);
+        rig.test(&["modem", "cops"]);
+        rig.wait_until("both summaries", |rig| {
+            rig.seen
+                .iter()
+                .filter(|line| line.contains(" passed, "))
+                .count()
+                == 2
+        });
+
+        assert_eq!(
+            rig.report("[cgatt:test]"),
+            [
+                "[cgatt:test] [1/1] cgatt: pass",
+                "[cgatt:test] 1 passed, 0 failed, 0 skipped",
+            ],
+            "{:#?}",
+            rig.seen
+        );
+        assert_eq!(
+            rig.report("[modem:test]"),
+            [
+                "[modem:test] [1/1] cops: pass",
+                "[modem:test] 1 passed, 0 failed, 0 skipped",
+            ],
+            "{:#?}",
+            rig.seen
         );
     }
 }

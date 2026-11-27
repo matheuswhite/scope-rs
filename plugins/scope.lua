@@ -169,13 +169,18 @@ local function send_and_wait(interface, msg, expected, timeout_ms)
     if type(opts.expected) ~= "string" then
         error(fn_name .. ": the expected message must be a string pattern", 3)
     end
-    if type(opts.timeout_ms) ~= "number" or opts.timeout_ms < 0 then
-        error(fn_name .. ": the timeout must be a number of milliseconds", 3)
+    local timeout = opts.timeout_ms
+    if type(timeout) ~= "number" or timeout < 0 or timeout ~= math.floor(timeout) or timeout >= 2 ^ 53 then
+        error(fn_name .. ": the timeout must be a whole number of milliseconds", 3)
     end
     if opts.error_pattern ~= nil and type(opts.error_pattern) ~= "string" then
         error(fn_name .. ": config.error_pattern must be a string pattern", 3)
     end
-    if type(opts.ignore) ~= "table" then
+    local ignore_is_list = type(opts.ignore) == "table"
+    for _, pattern in ipairs(ignore_is_list and opts.ignore or {}) do
+        ignore_is_list = ignore_is_list and type(pattern) == "string"
+    end
+    if not ignore_is_list then
         error(fn_name .. ": config.ignore_msg must be a list of string patterns", 3)
     end
 

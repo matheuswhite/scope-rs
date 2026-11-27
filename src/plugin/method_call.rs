@@ -12,11 +12,7 @@ use super::{
 };
 use mlua::{Function, IntoLuaMulti, Lua, Table, Thread, Value};
 use regex::Regex;
-use std::{
-    hash::{DefaultHasher, Hash, Hasher},
-    rc::Rc,
-    sync::Arc,
-};
+use std::{rc::Rc, sync::Arc};
 
 /// How the coroutine running a method call enters the plugin.
 #[derive(Clone, Copy)]
@@ -32,7 +28,6 @@ pub enum Entry {
 pub struct PluginMethodCallArgs<T> {
     pub plugin_name: Arc<String>,
     pub fn_name: String,
-    pub index: u128,
     pub lua: Rc<Lua>,
     pub initial_args: T,
     pub gate: PluginMethodCallGate,
@@ -50,23 +45,17 @@ pub struct PluginMethodCall {
 }
 
 impl PluginMethodCall {
-    pub fn spawn<T: for<'a> IntoLuaMulti<'a> + 'static>(args: PluginMethodCallArgs<T>) -> u64 {
+    pub fn spawn<T: for<'a> IntoLuaMulti<'a> + 'static>(args: PluginMethodCallArgs<T>) {
         let PluginMethodCallArgs {
             plugin_name,
             fn_name,
-            index,
             lua,
             initial_args,
             gate,
             logger,
             entry,
         } = args;
-        let mut hasher = DefaultHasher::new();
-        plugin_name.hash(&mut hasher);
-        fn_name.hash(&mut hasher);
-        index.hash(&mut hasher);
-
-        let id = hasher.finish();
+        let id = gate.id;
 
         let fn_name = Arc::new(fn_name);
 
@@ -92,8 +81,6 @@ impl PluginMethodCall {
                 })
                 .await;
         });
-
-        id
     }
 
     async fn call_fn<'a>(
@@ -172,24 +159,11 @@ impl PluginMethodCall {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                'rsp_loop: loop {
-                    let PluginMethodMessage {
-                        plugin_name: _plugin_name,
-                        method_id,
-                        data,
-                    } = self
-                        .gate
-                        .receiver
-                        .recv()
-                        .await
-                        .map_err(|err| err.to_string())?;
-
-                    if method_id != self.id {
-                        continue 'rsp_loop;
-                    }
-
-                    break 'rsp_loop data;
-                }
+                self.gate
+                    .receiver
+                    .recv()
+                    .await
+                    .ok_or_else(|| "Stopped: the plugin engine has exited".to_string())?
             }
         };
 
@@ -261,6 +235,9 @@ impl PluginMethodCall {
         let table = lua.create_table().map_err(|err| err.to_string())?;
 
         match rsp {
+            PluginResponse::Unloaded => {
+                return Err("Stopped: the plugin was unloaded".to_string());
+            }
             PluginResponse::Log
             | PluginResponse::SerialSend
             | PluginResponse::RttSend

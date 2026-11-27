@@ -948,6 +948,8 @@ Sends `msg` and waits for the device to answer with a line matching `expected`. 
     - `matched`: the expected line itself.
 - On timeout, or when a line matches `config.error_pattern`, it returns `nil` and the reason: `"timeout"` or the error line.
 
+Only one `send_and_wait` is on the wire at a time, whichever plugin calls it: a call made while another one waits is sent once that one ends, and its timeout starts when it is sent. A reply therefore always answers the call that sent its command.
+
 The patterns are regular expressions (the same syntax as [Regex](#regex)) that must match the **whole** line: `"OK"` matches `OK`, but not `+CPBR: 1,"BOOK"`. Write `.*` to match part of a line, e.g. `"\\+CME ERROR: .*"`.
 
 ```lua

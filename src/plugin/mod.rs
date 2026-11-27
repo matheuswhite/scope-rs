@@ -15,6 +15,7 @@ use crate::plugin::method_call::PluginMethodCallArgs;
 use bridge::PluginMethodCallGate;
 use method_call::{Entry, PluginMethodCall};
 use mlua::{Function, IntoLua, IntoLuaMulti, Lua, LuaOptions, Table, Value};
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -24,7 +25,8 @@ pub struct Plugin {
     filepath: PathBuf,
     lua: Rc<Lua>,
     log_level: LogLevel,
-    index: u128,
+    /// The method calls this instance started that have not finished yet.
+    calls: HashSet<u64>,
     unload_mode: PluginUnloadMode,
     logger: Logger,
 }
@@ -39,9 +41,9 @@ pub enum PluginUnloadMode {
 impl Plugin {
     /// `source_filepath` is where the plugin came from — it is stored as the
     /// plugin's identity and re-read on reload. `load_filepath` is where the
-    /// code is actually read from and whose directory is added to Lua's
+    /// code is actually read from and whose directory comes first in Lua's
     /// `package.path` (so `require("scope")` resolves against the `scope.lua`
-    /// sitting next to it). They differ when the engine copies the plugin into
+    /// sitting next to it, not one in the working directory). They differ when the engine copies the plugin into
     /// the known plugins directory before loading it.
     pub fn new(
         name: Arc<String>,
@@ -53,12 +55,19 @@ impl Plugin {
             .map_err(|err| err.to_string())?;
         let plugin_dir = load_filepath.parent().unwrap_or(Path::new("/"));
         let code = std::fs::read_to_string(&load_filepath).map_err(|err| err.to_string())?;
-        lua.load(format!(
-            "package.path = package.path .. ';{}/?.lua'",
-            plugin_dir.to_str().unwrap_or("")
-        ))
-        .exec()
-        .map_err(|err| err.to_string())?;
+        {
+            let package: Table = lua
+                .globals()
+                .get("package")
+                .map_err(|err| err.to_string())?;
+            let path: String = package.get("path").map_err(|err| err.to_string())?;
+            package
+                .set(
+                    "path",
+                    format!("{}/?.lua;{}", plugin_dir.to_string_lossy(), path),
+                )
+                .map_err(|err| err.to_string())?;
+        }
         let plugin_table: Table = lua.load(code).eval().map_err(|err| err.to_string())?;
         lua.globals()
             .set("M", plugin_table)
@@ -71,7 +80,7 @@ impl Plugin {
             name,
             filepath: source_filepath,
             lua: Rc::new(lua),
-            index: 0,
+            calls: HashSet::new(),
             log_level: LogLevel::Info,
             unload_mode: PluginUnloadMode::None,
             logger,
@@ -141,6 +150,20 @@ impl Plugin {
         self.filepath
     }
 
+    /// Whether the method call `method_id` was started by this instance and
+    /// still runs.
+    pub fn owns(&self, method_id: u64) -> bool {
+        self.calls.contains(&method_id)
+    }
+
+    pub fn finished(&mut self, method_id: u64) {
+        self.calls.remove(&method_id);
+    }
+
+    pub fn calls(&self) -> &HashSet<u64> {
+        &self.calls
+    }
+
     pub fn spawn_method_call(
         &mut self,
         gate: PluginMethodCallGate,
@@ -178,18 +201,17 @@ impl Plugin {
             return None;
         }
 
-        let id = PluginMethodCall::spawn(PluginMethodCallArgs {
+        let id = gate.id;
+        PluginMethodCall::spawn(PluginMethodCallArgs {
             plugin_name: self.name.clone(),
             fn_name: fn_name.to_string(),
-            index: self.index,
             lua: self.lua.clone(),
             initial_args,
             gate,
             logger: self.logger.clone().with_id(fn_name.to_string()),
             entry,
         });
-
-        self.index = self.index.overflowing_add_signed(1).0;
+        self.calls.insert(id);
 
         Some(id)
     }
@@ -303,6 +325,19 @@ mod tests {
         let plugin = plugin_from("as-string", "return { config = { recv_as_string = true } }");
 
         assert!(plugin.recv_as_string());
+    }
+
+    #[test]
+    fn the_plugin_directory_comes_first_in_the_lua_path() {
+        let plugin = plugin_from("lua-path", "return {}");
+        let package: Table = plugin.lua.globals().get("package").unwrap();
+        let path: String = package.get("path").unwrap();
+        let dir = std::env::temp_dir().join("scope-plugin-test-lua-path");
+
+        assert!(
+            path.starts_with(&format!("{}/?.lua;", dir.to_string_lossy())),
+            "{path}"
+        );
     }
 
     #[test]

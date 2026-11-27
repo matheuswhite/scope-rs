@@ -85,20 +85,48 @@ pub enum PluginInternalRequest {
 #[derive(Clone, Debug)]
 pub enum PluginResponse {
     Log,
-    SerialInfo { port: String, baudrate: u32 },
+    SerialInfo {
+        port: String,
+        baudrate: u32,
+    },
     SerialSend,
-    SerialRecv { err: String, message: Vec<u8> },
-    RttInfo { target: String, channel: usize },
+    SerialRecv {
+        err: String,
+        message: Vec<u8>,
+    },
+    RttInfo {
+        target: String,
+        channel: usize,
+    },
     RttSend,
-    RttRecv { err: String, message: Vec<u8> },
-    RttRead { err: String, data: Vec<u8> },
+    RttRecv {
+        err: String,
+        message: Vec<u8>,
+    },
+    RttRead {
+        err: String,
+        data: Vec<u8>,
+    },
     SendAndWait(WaitResult),
+    /// The plugin instance that made the call is gone; the call must stop.
+    Unloaded,
     SysSleep,
-    ReLiteral { literal: String },
-    ReMatches { pattern: Option<String> },
-    ReMatch { is_match: bool },
-    ShellRun { stdout: String, stderr: String },
-    ShellExist { exist: bool },
+    ReLiteral {
+        literal: String,
+    },
+    ReMatches {
+        pattern: Option<String>,
+    },
+    ReMatch {
+        is_match: bool,
+    },
+    ShellRun {
+        stdout: String,
+        stderr: String,
+    },
+    ShellExist {
+        exist: bool,
+    },
 }
 
 impl PluginRequest {
@@ -136,12 +164,11 @@ impl PluginRequest {
         let expected: String = opts.get("expected").map_err(|err| field("expected", err))?;
         let timeout_ms: Option<u64> = opts
             .get("timeout_ms")
-            .map_err(|err| field("timeout", err))?;
+            .map_err(|err| field("timeout_ms", err))?;
         let error_pattern: Option<String> = opts
             .get("error_pattern")
             .map_err(|err| field("error_pattern", err))?;
-        let ignore: Option<Vec<String>> =
-            opts.get("ignore").map_err(|err| field("ignore_msg", err))?;
+        let ignore: Option<Vec<String>> = opts.get("ignore").map_err(|err| field("ignore", err))?;
 
         Ok(PluginRequest::External(
             PluginExternalRequest::SendAndWait {
@@ -151,7 +178,9 @@ impl PluginRequest {
                     expected,
                     error_pattern,
                     ignore: ignore.unwrap_or_default(),
-                    deadline: Self::deadline_from_timeout_ms(timeout_ms),
+                    timeout: timeout_ms
+                        .filter(|timeout_ms| *timeout_ms != u64::MAX)
+                        .map(Duration::from_millis),
                 },
             },
         ))
