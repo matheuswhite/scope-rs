@@ -1400,7 +1400,7 @@ function M.test_cops()
     local lines, matched = serial.send_and_wait("AT+COPS?")
     test.assert(lines, matched)
     test.assert_eq(matched, "OK")
-    test.assert_eq(at.decode(lines[1]).provider.value, "TIMBrasil")
+    test.assert_eq(at.decode(lines).provider, "TIMBrasil")
 end
 
 function M.test_error()

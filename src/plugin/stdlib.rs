@@ -586,11 +586,11 @@ mod tests {
                     assert(cops)
 
                     test.assert_eq(cops.id, "COPS")
-                    test.assert_opt(cops.mode.value, { 0, 1, 2, 4 })
-                    test.assert_opt(cops.format.value, { 0, 1, 2 })
-                    test.assert_re(cops.format.raw, "\\d+")
-                    test.assert_eq(cops.provider.value, "TIMBrasil")
-                    test.assert_eq(cops.act.value, 7)
+                    test.assert_opt(cops.mode, { 0, 1, 2, 4 })
+                    test.assert_opt(cops.format, { 0, 1, 2 })
+                    test.assert_re(cops.raw.format, "\\d+")
+                    test.assert_eq(cops.provider, "TIMBrasil")
+                    test.assert_eq(cops.act, 7)
                 end
 
                 return M
@@ -623,19 +623,25 @@ mod tests {
     #[test]
     fn decode_reads_a_cops_read_response() {
         run(r#"
-            local cops = scope.codec.at.decode('+COPS: 0,0,"TIMBrasil",7\r\n')
-            expect_eq(cops.id, "COPS")
-            expect_eq(cops.mode, { raw = "0", value = 0 })
-            expect_eq(cops.format, { raw = "0", value = 0 })
-            expect_eq(cops.provider, { raw = '"TIMBrasil"', value = "TIMBrasil" })
-            expect_eq(cops.act, { raw = "7", value = 7 })
-            expect_eq(#cops.params, 4)
+            local at = scope.codec.at
+            local cops = at.decode('+COPS: 0,0,"TIMBrasil",7\r\n')
+            expect_eq(cops, {
+                id = "COPS",
+                mode = 0, format = 0, provider = "TIMBrasil", act = 7,
+                params = { 0, 0, "TIMBrasil", 7 },
+                raw = {
+                    "0", "0", '"TIMBrasil"', "7",
+                    mode = "0", format = "0", provider = '"TIMBrasil"', act = "7",
+                },
+            })
+            expect_eq({ at.text("COPS", "act", cops.act), at.text("COPS", "mode", cops.mode) },
+                { "E-UTRAN", "automatic" })
 
-            expect_eq(scope.codec.at.decode('+COPS: 0,0,"TIM",1').act.value, 1)
-            expect_eq(scope.codec.at.decode('+COPS: 0,0,"TIM",10').act.value, 10)
+            expect_eq(at.decode('+COPS: 0,0,"TIM",1').act, 1)
+            expect_eq(at.decode('+COPS: 0,0,"TIM",10').act, 10)
 
-            local unregistered = scope.codec.at.decode("+COPS: 0")
-            expect_eq({ unregistered.mode.value, unregistered.format }, { 0, nil })
+            local unregistered = at.decode("+COPS: 0")
+            expect_eq({ unregistered.mode, unregistered.format }, { 0, nil })
         "#);
     }
 
@@ -656,14 +662,13 @@ mod tests {
             local at = scope.codec.at
 
             local read = at.decode('+CREG: 2,5,"00C3","0000A1B2",7')
-            expect_eq({ read.n.value, read.stat.value, read.lac.value, read.ci.value, read.act.value },
-                { 2, 5, 0xC3, 0xA1B2, 7 })
+            expect_eq({ read.n, read.stat, read.lac, read.ci, read.act }, { 2, 5, 0xC3, 0xA1B2, 7 })
 
             local urc = at.decode('+CEREG: 1,"1A2B","01A2B3C4",7')
-            expect_eq({ urc.n, urc.stat.value, urc.tac.value, urc.act.value }, { nil, 1, 0x1A2B, 7 })
+            expect_eq({ urc.n, urc.stat, urc.tac, urc.act }, { nil, 1, 0x1A2B, 7 })
 
             local short = at.decode("+CGREG: 0,1")
-            expect_eq({ short.n.value, short.stat.value }, { 0, 1 })
+            expect_eq({ short.n, short.stat, at.text("CGREG", "stat", short.stat) }, { 0, 1, "registered, home" })
         "#);
     }
 
@@ -673,20 +678,16 @@ mod tests {
             local at = scope.codec.at
 
             local csq = at.decode("+CSQ: 99,99")
-            expect_eq({ csq.rssi.value, csq.ber.value }, { 99, 99 })
-            expect_eq(at.decode("+CPIN: SIM PIN").code.value, "SIM PIN")
-            expect_eq(at.decode("+CFUN: 1").fun.value, 1)
-            expect_eq(at.decode("+CGATT: 1").state.value, 1)
-
-            local cgact = at.decode("+CGACT: 1,0")
-            expect_eq({ cgact.cid.value, cgact.state.value }, { 1, 0 })
+            expect_eq({ csq.rssi, csq.ber }, { 99, 99 })
+            expect_eq(at.decode("+CPIN: SIM PIN").code, "SIM PIN")
+            expect_eq(at.decode("+CFUN: 1").fun, 1)
+            expect_eq(at.decode("+CGATT: 1").state, 1)
 
             local cgdcont = at.decode('+CGDCONT: 1,"IPV4V6","apn,with,commas","0.0.0.0",0,0')
-            expect_eq({ cgdcont.cid.value, cgdcont.pdp_type.value, cgdcont.apn.value, cgdcont.h_comp.value },
-                { 1, "IPV4V6", "apn,with,commas", 0 })
+            expect_eq({ cgdcont.cid, cgdcont.pdp_type, cgdcont.apn, cgdcont.h_comp }, { 1, "IPV4V6", "apn,with,commas", 0 })
 
             local cgpaddr = at.decode('+CGPADDR: 1,"10.0.0.2"')
-            expect_eq({ cgpaddr.cid.value, cgpaddr.pdp_addr.value, cgpaddr.pdp_addr_2 }, { 1, "10.0.0.2", nil })
+            expect_eq({ cgpaddr.cid, cgpaddr.pdp_addr, cgpaddr.pdp_addr_2 }, { 1, "10.0.0.2", nil })
         "#);
     }
 
@@ -695,18 +696,93 @@ mod tests {
         run(r#"
             local at = scope.codec.at
 
-            expect_eq(at.decode("OK\r\n"), { id = "OK", params = {} })
+            expect_eq(at.decode("OK\r\n"), { id = "OK", params = {}, raw = {} })
             expect_eq(at.decode("NO CARRIER").id, "NO CARRIER")
-            expect_eq(at.decode("+CME ERROR: 10").err.value, 10)
-            expect_eq(at.decode("+CMS ERROR: SIM busy").err.value, "SIM busy")
+            expect_eq(at.decode("+CME ERROR: 10").err, 10)
+            expect_eq(at.decode("+CMS ERROR: SIM busy").err, "SIM busy")
 
             local qnwinfo = at.decode('+QNWINFO: "FDD LTE","72404","LTE BAND 3",1300')
-            expect_eq(qnwinfo.id, "QNWINFO")
-            expect_eq(qnwinfo.params[2], { raw = '"72404"', value = "72404" })
-            expect_eq(qnwinfo.params[4], { raw = "1300", value = 1300 })
+            expect_eq({ qnwinfo.id, qnwinfo.params, qnwinfo.raw[2] },
+                { "QNWINFO", { "FDD LTE", "72404", "LTE BAND 3", 1300 }, '"72404"' })
 
             expect_eq({ at.decode("uart:~$ modem at AT") }, { nil, "not an AT response: uart:~$ modem at AT" })
             expect_eq(at.decode({ 0x4f, 0x4b }).id, "OK")
+        "#);
+    }
+
+    #[test]
+    fn decode_turns_a_response_into_one_table() {
+        run(r#"
+            local at = scope.codec.at
+
+            local cereg = at.decode({ "+CEREG: 0,1" })
+            expect_eq({ cereg.n, cereg.stat }, { 0, 1 })
+
+            expect_eq(at.decode({ "724041234567890" }, "AT+CIMI").imsi, "724041234567890")
+            expect_eq({ at.decode({}, "AT+CEREG?") }, { nil, "no +CEREG line in the response" })
+            expect_eq({ at.decode({ "+COPS: 9" }) }, { nil, "+COPS: invalid mode 9" })
+
+            local ok, err = pcall(at.decode, { "+COPS: 0" }, "OK")
+            assert(not ok and err:find('cmd must be the AT command sent %(e.g. "AT%+CIMI"%), not OK'), err)
+        "#);
+    }
+
+    #[test]
+    fn decode_indexes_a_one_line_per_entry_response_by_its_key() {
+        run(r#"
+            local at = scope.codec.at
+
+            local contexts = at.decode({
+                '+CGDCONT: 1,"IP","","0.0.0.0",0,0',
+                '+CGDCONT: 3,"IPV4V6","ims","0.0.0.0",0,0',
+            }, "AT+CGDCONT?")
+            expect_eq({ contexts[1].apn, contexts[3].apn, contexts[2] }, { "", "ims", nil })
+
+            local active = at.decode({ "+CGACT: 1,1", "+CGACT: 2,0" })
+            expect_eq({ active[1].state, active[2].state }, { 1, 0 })
+            expect_eq(at.decode({}, "AT+CGACT?"), {})
+        "#);
+    }
+
+    #[test]
+    fn define_declares_vendor_commands_and_their_subcommands() {
+        run(r#"
+            local at = scope.codec.at
+
+            at.define("QNWINFO", {
+                { "act", "str" }, { "oper", "str" }, { "band", "str" }, { "channel", "int" },
+            })
+            at.define('QCFG="roamservice"', { { "setting", "str" }, { "mode", "int", text = { [2] = "auto" } } })
+            at.define('QESIM="list"', {
+                list = true, key = "iccid", unprefixed = true,
+                { "iccid", "str" }, { "state", "int" }, { "nickname", "str" }, { "provider", "str" },
+            })
+
+            local nw = at.decode({ '+QNWINFO: "FDD LTE","72404","LTE BAND 3",1300' })
+            expect_eq({ nw.act, nw.oper, nw.channel }, { "FDD LTE", "72404", 1300 })
+
+            local roam = at.decode({ '+QCFG: "roamservice",2' }, 'AT+QCFG="roamservice"')
+            expect_eq({ roam.setting, roam.mode, at.text('QCFG="roamservice"', "mode", roam.mode) },
+                { "roamservice", 2, "auto" })
+
+            local profiles = at.decode({
+                '"8955000000000000001","1","Work","TIM"',
+                '"8955000000000000002","0","Old","VIVO"',
+            }, 'AT+QESIM="list",1')
+            expect_eq({ profiles["8955000000000000001"].state, profiles["8955000000000000002"].provider },
+                { 1, "VIVO" })
+
+            local ok, err = pcall(at.define, "X", { { "raw", "str" } })
+            assert(not ok and err:find("needs a name other than id, params and raw"), err)
+            ok, err = pcall(at.define, "X", { { "a", "float" } })
+            assert(not ok and err:find("field a needs a kind"), err)
+        "#);
+    }
+
+    #[test]
+    fn esm_cause_describes_a_session_management_cause() {
+        run(r#"
+            expect_eq({ scope.codec.at.esm_cause(27), scope.codec.at.esm_cause(9999) }, { "missing or unknown APN", nil })
         "#);
     }
 

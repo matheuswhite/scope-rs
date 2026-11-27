@@ -1061,10 +1061,10 @@ function M.test_cops()
     local lines, err = serial.send_and_wait("AT+COPS?")
     test.assert(lines, err)
 
-    local cops = at.decode(lines[1])
+    local cops = at.decode(lines)
     test.assert(cops)
-    test.assert_opt(cops.mode.value, { 0, 1, 2, 4 })
-    test.assert_eq(cops.act.value, 7)
+    test.assert_opt(cops.mode, { 0, 1, 2, 4 })
+    test.assert_eq(cops.act, 7)
 end
 
 return M
@@ -1088,16 +1088,32 @@ at.encode_read("+COPS")                -- AT+COPS?
 at.encode_test("+COPS")                -- AT+COPS=?
 ```
 
-`at.decode(line)` takes a response line (string or list of bytes) and returns a table with the command `id` (without the `+`) and its `params`, each as `{ raw = <text as received>, value = <parsed value> }`: quoted parameters become strings, unquoted numbers become integers. On failure it returns `nil` and the reason.
+`at.decode(lines, cmd)` turns a response into Lua tables:
+
+- `lines` is the list of lines `send_and_wait` returned. The result is the response of the command: one table, or for a command that answers one line per entry (`+CGDCONT`, `+CGACT`, `+CGPADDR`), a list indexed by the command's key (`cid`): `contexts[1]` is context 1.
+- `cmd`, the command sent, is optional. It is needed for a response without a `+NAME:` prefix, like the IMSI `AT+CIMI` answers, and to pick the spec of a subcommand (see `at.define`).
+- `lines` can also be a single line (string or list of bytes), decoded into one table.
+
+Each table has the command `id` (without the `+`), a field per parameter holding its value, `params` (every value, by position) and `raw` (each parameter's text as received, by position and by field name). Quoted parameters become strings, unquoted numbers become integers. On failure `decode` returns `nil` and the reason.
 
 ```lua
-local cops = at.decode('+COPS: 0,0,"TIMBrasil",7')
--- cops.id == "COPS"
--- cops.provider.raw == '"TIMBrasil"', cops.provider.value == "TIMBrasil"
--- cops.act.value == 7, cops.params[4].value == 7
+local lines = serial.send_and_wait("AT+COPS?")
+local cops = at.decode(lines)
+-- cops.id == "COPS", cops.provider == "TIMBrasil", cops.act == 7
+-- cops.raw.provider == '"TIMBrasil"', cops.params[4] == 7
+
+lines = serial.send_and_wait("AT+CGDCONT?")
+local contexts = at.decode(lines)
+-- contexts[1].apn == "", contexts[1].pdp_type == "IP"
+
+lines = serial.send_and_wait("AT+CIMI")
+local cimi = at.decode(lines, "AT+CIMI")
+-- cimi.imsi == "724041234567890"
 ```
 
-The commands below are also decoded into named fields, and a value outside the range the standard defines makes `decode` fail. Any other `+NAME: ...` line is decoded into `params` only, and the final result codes (`OK`, `ERROR`, `NO CARRIER`, …) into `{ id = "OK", params = {} }`.
+Keep the lines in a variable, as above: `at.decode(serial.send_and_wait(cmd))` would also pass `send_and_wait`'s second result, the matched line, as `cmd`, which `decode` rejects with an error.
+
+The commands below are decoded into named fields, and a value outside the range the standard defines makes `decode` fail. Any other `+NAME: ...` line is decoded into `params` only, and the final result codes (`OK`, `ERROR`, `NO CARRIER`, …) into `{ id = "OK" }`.
 
 | Response | Fields |
 | --- | --- |
@@ -1108,9 +1124,36 @@ The commands below are also decoded into named fields, and a value outside the r
 | `+CPIN` | `code` |
 | `+CFUN` | `fun` |
 | `+CGATT` | `state` |
-| `+CGACT` | `cid`, `state` |
-| `+CGDCONT` | `cid`, `pdp_type`, `apn`, `pdp_addr`, `d_comp`, `h_comp` |
-| `+CGPADDR` | `cid`, `pdp_addr`, `pdp_addr_2` |
+| `+CGACT` | `cid`, `state` (one per context) |
+| `+CGDCONT` | `cid`, `pdp_type`, `apn`, `pdp_addr`, `d_comp`, `h_comp` (one per context) |
+| `+CGPADDR` | `cid`, `pdp_addr`, `pdp_addr_2` (one per context) |
+| `AT+CIMI` | `imsi` |
 | `+CME ERROR`, `+CMS ERROR` | `err` (a number, or the text in verbose mode) |
 
-`lac`, `tac` and `ci` are hexadecimal strings in the response; their `value` is the number.
+`lac`, `tac` and `ci` are hexadecimal strings in the response; their value is the number.
+
+`at.text(id, field, value)` describes an enumerated value: `at.text("CEREG", "stat", 1)` is `"registered, home"`, `at.text("COPS", "act", 7)` is `"E-UTRAN"`. `at.esm_cause(cause)` describes a session management cause (3GPP TS 24.008 / 24.301), as `+CEER` reports it after a failed data call: `at.esm_cause(27)` is `"missing or unknown APN"`.
+
+`at.define(id, spec)` declares how to decode another command, such as a vendor one. `id` is the name after `AT+`, or the name and its first parameter when the response changes with it (`'QCFG="roamservice"'`, matched against the `cmd` given to `decode`). `spec` lists the fields in order, as `{ name, kind, check, text = { [value] = description } }`, where `kind` is `"int"` (a number, quoted or not), `"str"` (text, quotes removed), `"hex"` (a hexadecimal string, as a number) or `"any"`, and `check` (optional) is a function that returns whether the value is valid. These options apply to the whole response:
+
+| Option | Meaning |
+| --- | --- |
+| `list = true` | The command answers one line per entry: `decode` returns a list. |
+| `key = "<field>"` | Index that list by this field instead of by position. |
+| `unprefixed = true` | The lines carry no `+NAME:` prefix. |
+| `required = <n>` | The first `n` fields must be present. |
+
+```lua
+at.define("QNWINFO", { { "act", "str" }, { "oper", "str" }, { "band", "str" }, { "channel", "int" } })
+at.define('QCFG="roamservice"', { { "setting", "str" }, { "mode", "int" } })
+at.define('QESIM="list"', {
+    list = true,
+    unprefixed = true,
+    { "iccid", "str" }, { "state", "int" }, { "nickname", "str" }, { "provider", "str" },
+})
+
+local cmd = 'AT+QCFG="roamservice"'
+local lines = serial.send_and_wait(cmd)
+local roam = at.decode(lines, cmd)
+-- roam.mode == 2
+```
