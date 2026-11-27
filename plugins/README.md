@@ -12,9 +12,9 @@ Ok, you already know what is a plugin, and now you may be wondering: **What I ca
 
 ## Prerequisites
 
-Plugins rely on two standard libraries — [scope.lua](scope.lua) and [shell.lua](shell.lua) — which provide the `require("scope")` and `require("shell")` modules used throughout this guide.
+Plugins rely on the standard libraries — [scope.lua](scope.lua), [shell.lua](shell.lua) and the codecs in [codec/](codec) — which provide the `require("scope")`, `require("shell")` and `require("codec.at")` modules used throughout this guide.
 
-You don't need to copy them next to your plugin. When you load a plugin, `Scope` copies it into `<config_dir>/scope/plugins/` (e.g. `~/.config/scope/plugins/`) and writes the standard libraries there alongside it, so `require(...)` resolves automatically. Because your plugin is loaded from that directory, `reload` re-copies it from the original path — keep editing the file you loaded and reload as usual. (Both libraries also live in the `plugins` folder of the `Scope` repository if you want to read them.)
+You don't need to copy them next to your plugin. When you load a plugin, `Scope` copies it into `<config_dir>/scope/plugins/` (e.g. `~/.config/scope/plugins/`) and writes the standard libraries there alongside it, so `require(...)` resolves automatically. The standard libraries belong to the `Scope` version you run: a copy that differs from it is **rewritten on every load**, so don't edit them there. Because your plugin is loaded from that directory, `reload` re-copies it from the original path — keep editing the file you loaded and reload as usual. (Both libraries also live in the `plugins` folder of the `Scope` repository if you want to read them.)
 
 ## Getting Started
 
@@ -54,6 +54,8 @@ Two hooks receive what the serial interface reads. Define either or both:
 | --- | --- | --- |
 | `on_serial_recv_line(line)` | once per received line | list of bytes (table of numbers), ending in the `\n` (a `\r` before it is kept too) |
 | `on_serial_recv_byte(byte)` | once per received byte | the byte, as a number (`0`-`255`) |
+
+Set `recv_as_string = true` in the [plugin configuration](#plugin-configuration) to get the line as a Lua string instead (the same applies to `on_serial_recv` and to the data `serial.recv`/`rtt.recv` return); the byte hook always gets a number.
 
 Both behave exactly the same in the TUI and in headless mode (`--headless`). A line is delivered only once its `\n` arrives: text the device leaves without a line break, like a shell prompt, never reaches `on_serial_recv_line` — use `on_serial_recv_byte` to see it as it arrives. A partial line still pending when the port disconnects is discarded, and so is one that grows past 64 KiB without a `\n`.
 
@@ -125,7 +127,7 @@ Waits for the next RTT message.
     - `timeout_ms` (number, optional): how long to wait in milliseconds. If omitted, it waits indefinitely.
 - Returns: `err, data`
     - `err`: `nil` on success, or a string on error (currently the most common value is `"timeout"`).
-    - `data`: list of bytes (table of numbers). On timeout, it is an empty list.
+    - `data`: list of bytes (table of numbers), or a string with `recv_as_string`. On timeout, it is empty.
 
 Important:
 
@@ -902,3 +904,197 @@ The function `os_name` returns the name of running operating system. If the OS i
 The function `sleep_ms` sleeps the current function for **x** milliseconds. Be careful with this function, because it could slow down the plugin execution.
 
 And last but not least, we have the function `parse_args`. This is a helper function to check the input arguments of a custom command. It receives a list of tables. Each table check one argument. There are 2 mandatory fields for each table: `arg` which is the argument name and `ty`, its type. There are 3 possible values for `ty`: `string`, `number` and `boolean`. In addition to these mandatory fields, there are 2 other optional fields: `default` which replace a missing argument, and `validate` that runs to check if the input argument is valid. If it's not valid, so the `lua` assert is called and the command isn't run.
+
+## Plugin configuration
+
+A plugin can tune how `Scope` treats it through a `config` table in the plugin table. Define it with the table, or change its fields later (in `on_load`, in a command, in `setup_suite`…): `Scope` creates `M.config` before calling `on_load`, fills in the defaults for the fields you leave out, and reads each field when it is used.
+
+```lua
+local M = {
+    config = {
+        recv_as_string = true,
+        default_timeout = 500,
+    },
+}
+
+function M.on_load()
+    M.config.error_pattern = "ERROR|\\+CME ERROR: .*"
+end
+```
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `recv_as_string` | `false` | Deliver received data as a Lua string instead of a list of bytes (see [Receiving data](#receiving-data)). |
+| `default_timeout` | `1000` | Milliseconds `send_and_wait` waits when the call gives no timeout. |
+| `default_expected` | `"OK"` | Pattern `send_and_wait` waits for when the call gives none. |
+| `error_pattern` | none | Pattern of a line that makes `send_and_wait` fail at once. |
+| `ignore_msg` | `{}` | Patterns of lines `send_and_wait` drops (e.g. the device echoing the command). |
+| `send_prefix` | none | Text `send_and_wait` puts before each message, followed by a space unless it already ends with one. |
+| `line_ending` | `"\r\n"` | Text `send_and_wait` puts after each message. |
+
+## Sending data
+
+`serial.send(msg)` and `rtt.send(msg)` take either a string or a list of bytes, and send it as is: `serial.send("AT\r\n")` and `serial.send({ 0x41, 0x54, 0x0d, 0x0a })` put the same bytes on the wire.
+
+### serial.send_and_wait(msg, expected, timeout_ms)
+
+Sends `msg` and waits for the device to answer with a line matching `expected`. `rtt.send_and_wait` is the same over RTT.
+
+- `msg`: string or list of bytes. `config.send_prefix` (and a space) is put before it and `config.line_ending` after it.
+- `expected` (optional): pattern of the line that ends the wait; `config.default_expected` (`"OK"`) when omitted.
+- `timeout_ms` (optional): how long to wait; `config.default_timeout` when omitted.
+- Returns: `lines, matched`
+    - `lines`: the lines received between the send and the expected line, as strings without their `\r\n`. Empty lines and lines matching `config.ignore_msg` are left out.
+    - `matched`: the expected line itself.
+- On timeout, or when a line matches `config.error_pattern`, it returns `nil` and the reason: `"timeout"` or the error line.
+
+The patterns are regular expressions (the same syntax as [Regex](#regex)) that must match the **whole** line: `"OK"` matches `OK`, but not `+CPBR: 1,"BOOK"`. Write `.*` to match part of a line, e.g. `"\\+CME ERROR: .*"`.
+
+```lua
+local log = require("scope").log
+local serial = require("scope").serial
+
+local M = {
+    config = {
+        send_prefix = "modem at",
+        ignore_msg = { "uart:~\\$.*" },
+        error_pattern = "ERROR|\\+CME ERROR: .*",
+    },
+}
+
+-- Sends "modem at AT+CSQ\r\n"; on success, lines is { "+CSQ: 20,99" }.
+function M.csq()
+    local lines, err = serial.send_and_wait("AT+CSQ")
+    if lines == nil then
+        log.error("AT+CSQ failed: " .. err)
+    end
+end
+
+return M
+```
+
+## Strings
+
+`fmt.split(str, sep, max)` splits a string (or a list of bytes) at each `sep`, taken literally (not as a pattern), and returns the pieces as multiple values. Empty pieces are kept. `max` (optional) caps the number of pieces: the last one keeps the rest of the string.
+
+```lua
+local fmt = require("scope").fmt
+
+local prefix, args = fmt.split('+COPS: 0,0,"TIM",7', ":", 2)  -- "+COPS", ' 0,0,"TIM",7'
+local fields = { fmt.split("a,,b", ",") }                     -- { "a", "", "b" }
+```
+
+## Tests
+
+Every function of the plugin table whose name starts with `test_` is a test. Run them from the command bar:
+
+| Command | Runs |
+| --- | --- |
+| `!test <plugin>` | every test of the plugin, in the order they are defined |
+| `!test <plugin> <test> ...` | only the tests named |
+| `!test <test> ...` | the tests named, in the loaded plugin that defines them |
+
+A test name may be written with or without the `test_` prefix (`!test cops` and `!test test_cops` are the same). A loaded plugin name wins over a test name; when two loaded plugins define the test, name the plugin. Calling a test as a regular command (`!at test_cops`) still runs the bare function, without the hooks below.
+
+The asserts live in the `test` module of the standard library. A failed assert stops the test, which is reported as failed with the line of the assert:
+
+| Function | Fails when |
+| --- | --- |
+| `test.assert(cond, msg)` | `cond` is `nil` or `false` |
+| `test.assert_eq(actual, expected, msg)` | the values differ (tables are compared by content) |
+| `test.assert_opt(value, options, msg)` | `value` is not one of the list `options` |
+| `test.assert_re(value, pattern, msg)` | `value` does not match the regex `pattern` as a whole |
+| `test.skip(reason)` | always: stops the test and reports it as skipped |
+
+`msg` is optional. A Lua error raised by the test (`error(...)`, Lua's own `assert`, indexing `nil`…) also fails it.
+
+Four optional functions run around the tests:
+
+| Function | Called |
+| --- | --- |
+| `setup_suite()` | once before the tests; what it returns is the *fixture*, passed to every test and hook |
+| `setup_test(name, fixture)` | before each test |
+| `teardown_test(index, total, name, result, fixture)` | after each test; `result` is `"pass"`, `"fail"` or `"skip"` |
+| `teardown_suite(results, fixture)` | once after the tests; `results` has the counts `ok`, `fail`, `skip` and `total`, and `tests`, a list of `{ name, result }` |
+
+`name` is the test name without the `test_` prefix. Without `teardown_test`/`teardown_suite`, `Scope` logs each result and a summary. When `setup_suite` fails (or calls `test.skip`), no test runs: every one is counted as failed (or skipped) and `teardown_suite` is still called. A failing `setup_test` fails its test.
+
+```lua
+local scope = require("scope")
+local at = scope.codec.at
+local log = scope.log
+local serial = scope.serial
+local test = scope.test
+
+local M = {}
+
+function M.setup_suite()
+    M.config.error_pattern = "\\+CME ERROR: .*"
+    M.config.default_timeout = 300
+end
+
+function M.teardown_suite(results)
+    log.info(results.ok .. " passed, " .. results.fail .. " failed, " .. results.skip .. " skipped")
+end
+
+function M.test_at()
+    test.assert(serial.send_and_wait("AT"))
+end
+
+function M.test_cops()
+    local lines, err = serial.send_and_wait("AT+COPS?")
+    test.assert(lines, err)
+
+    local cops = at.decode(lines[1])
+    test.assert(cops)
+    test.assert_opt(cops.mode.value, { 0, 1, 2, 4 })
+    test.assert_eq(cops.act.value, 7)
+end
+
+return M
+```
+
+## Codecs
+
+The `codec` table of the standard library encodes and decodes serial protocols.
+
+### AT commands
+
+`scope.codec.at` (also `require("codec.at")`) handles the AT commands of 3GPP TS 27.007.
+
+`at.encode(cmd, ...)` builds a set or execute command, with `cmd` as written after `AT`: numbers are written as is, strings are quoted, `true`/`false` become `1`/`0` and `nil` leaves the parameter empty (trailing ones are dropped). `at.encode_read(cmd)` and `at.encode_test(cmd)` build the read (`?`) and test (`=?`) forms. No line ending is added: `send_and_wait` adds it.
+
+```lua
+at.encode("+CGDCONT", 1, "IP", "apn")  -- AT+CGDCONT=1,"IP","apn"
+at.encode("+CIMI")                     -- AT+CIMI
+at.encode("E0")                        -- ATE0
+at.encode_read("+COPS")                -- AT+COPS?
+at.encode_test("+COPS")                -- AT+COPS=?
+```
+
+`at.decode(line)` takes a response line (string or list of bytes) and returns a table with the command `id` (without the `+`) and its `params`, each as `{ raw = <text as received>, value = <parsed value> }`: quoted parameters become strings, unquoted numbers become integers. On failure it returns `nil` and the reason.
+
+```lua
+local cops = at.decode('+COPS: 0,0,"TIMBrasil",7')
+-- cops.id == "COPS"
+-- cops.provider.raw == '"TIMBrasil"', cops.provider.value == "TIMBrasil"
+-- cops.act.value == 7, cops.params[4].value == 7
+```
+
+The commands below are also decoded into named fields, and a value outside the range the standard defines makes `decode` fail. Any other `+NAME: ...` line is decoded into `params` only, and the final result codes (`OK`, `ERROR`, `NO CARRIER`, …) into `{ id = "OK", params = {} }`.
+
+| Response | Fields |
+| --- | --- |
+| `+COPS` | `mode`, `format`, `provider`, `act` |
+| `+CREG`, `+CGREG` | `n` (read response only), `stat`, `lac`, `ci`, `act` |
+| `+CEREG` | `n` (read response only), `stat`, `tac`, `ci`, `act` |
+| `+CSQ` | `rssi`, `ber` |
+| `+CPIN` | `code` |
+| `+CFUN` | `fun` |
+| `+CGATT` | `state` |
+| `+CGACT` | `cid`, `state` |
+| `+CGDCONT` | `cid`, `pdp_type`, `apn`, `pdp_addr`, `d_comp`, `h_comp` |
+| `+CGPADDR` | `cid`, `pdp_addr`, `pdp_addr_2` |
+| `+CME ERROR`, `+CMS ERROR` | `err` (a number, or the text in verbose mode) |
+
+`lac`, `tac` and `ci` are hexadecimal strings in the response; their `value` is the number.
