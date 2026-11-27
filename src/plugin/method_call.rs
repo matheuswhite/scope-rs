@@ -12,21 +12,27 @@ use super::{
 };
 use mlua::{Function, IntoLuaMulti, Lua, Table, Thread, Value};
 use regex::Regex;
-use std::{
-    hash::{DefaultHasher, Hash, Hasher},
-    rc::Rc,
-    sync::Arc,
-};
+use std::{rc::Rc, sync::Arc};
+
+/// How the coroutine running a method call enters the plugin.
+#[derive(Clone, Copy)]
+pub enum Entry {
+    /// `M.<fn_name>(args)`
+    Args,
+    /// `M.<fn_name>(table.unpack(args))`
+    Unpack,
+    /// The test runner of `scope.lua`, over the `test_*` names in the args.
+    TestSuite,
+}
 
 pub struct PluginMethodCallArgs<T> {
     pub plugin_name: Arc<String>,
     pub fn_name: String,
-    pub index: u128,
     pub lua: Rc<Lua>,
     pub initial_args: T,
     pub gate: PluginMethodCallGate,
     pub logger: Logger,
-    pub has_unpack: bool,
+    pub entry: Entry,
 }
 
 pub struct PluginMethodCall {
@@ -43,19 +49,13 @@ impl PluginMethodCall {
         let PluginMethodCallArgs {
             plugin_name,
             fn_name,
-            index,
             lua,
             initial_args,
             gate,
             logger,
-            has_unpack,
+            entry,
         } = args;
-        let mut hasher = DefaultHasher::new();
-        plugin_name.hash(&mut hasher);
-        fn_name.hash(&mut hasher);
-        index.hash(&mut hasher);
-
-        let id = hasher.finish();
+        let id = gate.id;
 
         let fn_name = Arc::new(fn_name);
 
@@ -69,7 +69,7 @@ impl PluginMethodCall {
         };
 
         tokio::task::spawn_local(async move {
-            if let Err(err) = pmc.call_fn(&lua, initial_args, has_unpack).await {
+            if let Err(err) = pmc.call_fn(&lua, initial_args, entry).await {
                 error!(logger, "{}", err);
             }
 
@@ -87,21 +87,22 @@ impl PluginMethodCall {
         mut self,
         lua: &'a Lua,
         initial_args: impl IntoLuaMulti<'a>,
-        has_unpack: bool,
+        entry: Entry,
     ) -> Result<(), String> {
         let plugin_table: Table = lua.globals().get("M").unwrap();
 
-        let Ok(_plugin_fn) = plugin_table
-            .get::<_, Function>(self.fn_name.as_str())
-            .map_err(|err| err.to_string())
-        else {
+        if !matches!(entry, Entry::TestSuite)
+            && plugin_table
+                .get::<_, Function>(self.fn_name.as_str())
+                .is_err()
+        {
             return Ok(());
-        };
+        }
 
-        let thread_code = if has_unpack {
-            format!(include_str!("unpack.lua"), self.fn_name)
-        } else {
-            format!(include_str!("thread.lua"), self.fn_name)
+        let thread_code = match entry {
+            Entry::Args => format!(include_str!("thread.lua"), self.fn_name),
+            Entry::Unpack => format!(include_str!("unpack.lua"), self.fn_name),
+            Entry::TestSuite => include_str!("suite.lua").to_string(),
         };
         let thread: Thread = lua
             .load(thread_code)
@@ -158,24 +159,11 @@ impl PluginMethodCall {
                     .await
                     .map_err(|err| err.to_string())?;
 
-                'rsp_loop: loop {
-                    let PluginMethodMessage {
-                        plugin_name: _plugin_name,
-                        method_id,
-                        data,
-                    } = self
-                        .gate
-                        .receiver
-                        .recv()
-                        .await
-                        .map_err(|err| err.to_string())?;
-
-                    if method_id != self.id {
-                        continue 'rsp_loop;
-                    }
-
-                    break 'rsp_loop data;
-                }
+                self.gate
+                    .receiver
+                    .recv()
+                    .await
+                    .ok_or_else(|| "Stopped: the plugin engine has exited".to_string())?
             }
         };
 
@@ -247,6 +235,9 @@ impl PluginMethodCall {
         let table = lua.create_table().map_err(|err| err.to_string())?;
 
         match rsp {
+            PluginResponse::Unloaded => {
+                return Err("Stopped: the plugin was unloaded".to_string());
+            }
             PluginResponse::Log
             | PluginResponse::SerialSend
             | PluginResponse::RttSend
@@ -310,6 +301,23 @@ impl PluginMethodCall {
                     table.set("err", err).map_err(|err| err.to_string())?;
                 }
                 table.set("data", message).map_err(|err| err.to_string())?;
+            }
+            PluginResponse::SendAndWait(Ok((lines, matched))) => {
+                let lines = lines
+                    .iter()
+                    .map(|line| lua.create_string(line))
+                    .collect::<mlua::Result<Vec<_>>>()
+                    .and_then(|lines| lua.create_sequence_from(lines))
+                    .map_err(|err| err.to_string())?;
+                let matched = lua.create_string(matched).map_err(|err| err.to_string())?;
+
+                table.set("lines", lines).map_err(|err| err.to_string())?;
+                table
+                    .set("matched", matched)
+                    .map_err(|err| err.to_string())?;
+            }
+            PluginResponse::SendAndWait(Err(err)) => {
+                table.set("err", err).map_err(|err| err.to_string())?;
             }
             PluginResponse::RttRead { err, data } => {
                 if err.is_empty() {

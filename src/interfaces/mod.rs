@@ -25,6 +25,7 @@ pub enum InterfaceShared {
     Serial(SerialShared),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum InterfaceType {
     Rtt,
     Serial,

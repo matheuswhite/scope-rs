@@ -6,7 +6,82 @@ local M = {
     sys = {},
     re = {},
     rtt = {},
+    test = {},
+    codec = {
+        at = require("codec.at")
+    }
 }
+
+local CONFIG_DEFAULTS = {
+    recv_as_string = false,
+    default_timeout = 1000,
+    default_expected = "OK",
+    line_ending = "\r\n",
+    send_quoted = false,
+    ignore_echo = true,
+    ignore_msg = {},
+    strip_msg = {},
+    retries = 0,
+    retry_interval = 1000,
+}
+
+-- Each option a send_and_wait call can take, and the config key it overrides.
+local WAIT_OPTIONS = {
+    expected = "default_expected",
+    timeout = "default_timeout",
+    error_pattern = "error_pattern",
+    ignore_msg = "ignore_msg",
+    strip_msg = "strip_msg",
+    ignore_echo = "ignore_echo",
+    send_prefix = "send_prefix",
+    send_quoted = "send_quoted",
+    line_ending = "line_ending",
+    retries = "retries",
+    retry_interval = "retry_interval",
+    retry_pattern = "retry_pattern",
+}
+
+function M._init_config(plugin)
+    if plugin.config == nil then
+        plugin.config = {}
+    end
+
+    if type(plugin.config) ~= "table" then
+        error("M.config must be a table, not " .. type(plugin.config), 0)
+    end
+
+    for key, value in pairs(CONFIG_DEFAULTS) do
+        if plugin.config[key] == nil then
+            plugin.config[key] = type(value) == "table" and {} or value
+        end
+    end
+end
+
+local function config(key)
+    local plugin = rawget(_G, "M")
+
+    if type(plugin) == "table" and type(plugin.config) == "table" and plugin.config[key] ~= nil then
+        return plugin.config[key]
+    end
+
+    return CONFIG_DEFAULTS[key]
+end
+
+local function recv_data(data)
+    if config("recv_as_string") then
+        return M.fmt.to_str(data)
+    end
+
+    return data
+end
+
+local function bytes_arg(fn_name, msg, level)
+    if type(msg) ~= "string" and type(msg) ~= "table" then
+        error(fn_name .. ": the message must be a string or a list of bytes, not " .. type(msg), level + 1)
+    end
+
+    return msg
+end
 
 function M.fmt.to_str(val)
     if type(val) == "table" then
@@ -35,6 +110,51 @@ function M.fmt.to_bytes(val)
     end
 end
 
+local function text_arg(fn_name, value)
+    if type(value) == "table" then
+        return M.fmt.to_str(value)
+    end
+    assert(type(value) == "string", fn_name .. ": the input must be a string or a list of bytes")
+    return value
+end
+
+function M.fmt.starts_with(str, prefix)
+    str = text_arg("fmt.starts_with", str)
+    assert(type(prefix) == "string", "fmt.starts_with: the prefix must be a string")
+    return str:sub(1, #prefix) == prefix
+end
+
+function M.fmt.ends_with(str, suffix)
+    str = text_arg("fmt.ends_with", str)
+    assert(type(suffix) == "string", "fmt.ends_with: the suffix must be a string")
+    return suffix == "" or str:sub(-#suffix) == suffix
+end
+
+function M.fmt.split(str, sep, max)
+    if type(str) == "table" then
+        str = M.fmt.to_str(str)
+    end
+    assert(type(str) == "string", "fmt.split: the input must be a string or a list of bytes")
+    assert(type(sep) == "string" and sep ~= "", "fmt.split: the separator must be a non-empty string")
+    assert(max == nil or (math.type(max) == "integer" and max >= 1), "fmt.split: max must be a positive integer")
+
+    local parts = {}
+    local start = 1
+
+    while max == nil or #parts < max - 1 do
+        local first, last = string.find(str, sep, start, true)
+        if first == nil then
+            break
+        end
+
+        table.insert(parts, string.sub(str, start, first - 1))
+        start = last + 1
+    end
+    table.insert(parts, string.sub(str, start))
+
+    return table.unpack(parts)
+end
+
 function M.log.debug(msg)
     coroutine.yield({ ":log.debug", msg })
 end
@@ -61,12 +181,131 @@ function M.serial.info()
 end
 
 function M.serial.send(msg)
-    coroutine.yield({ ":serial.send", msg })
+    coroutine.yield({ ":serial.send", bytes_arg("serial.send", msg, 2) })
 end
 
 function M.serial.recv(opts)
     local res = coroutine.yield({ ":serial.recv", opts })
-    return res.err, res.data
+    return res.err, recv_data(res.data)
+end
+
+local function is_whole(value)
+    return type(value) == "number" and value >= 0 and value == math.floor(value) and value < 2 ^ 53
+end
+
+local function is_string_list(value)
+    if type(value) ~= "table" then
+        return false
+    end
+    for _, item in ipairs(value) do
+        if type(item) ~= "string" then
+            return false
+        end
+    end
+    return true
+end
+
+local function send_and_wait(interface, msg, expected, timeout_ms)
+    local fn_name = interface .. ".send_and_wait"
+    local function fail(text)
+        error(fn_name .. ": " .. text, 4)
+    end
+
+    local given = { expected = expected, timeout = timeout_ms }
+    if type(expected) == "table" then
+        given = expected
+        for option in pairs(given) do
+            if WAIT_OPTIONS[option] == nil then
+                fail("unknown option " .. tostring(option))
+            end
+        end
+    end
+
+    local o = {}
+    for option, key in pairs(WAIT_OPTIONS) do
+        if given[option] ~= nil then
+            o[option] = given[option]
+        else
+            o[option] = config(key)
+        end
+    end
+
+    if type(o.expected) ~= "string" then
+        fail("the expected message must be a string pattern")
+    end
+    if not is_whole(o.timeout) then
+        fail("the timeout must be a whole number of milliseconds")
+    end
+    if o.error_pattern ~= nil and type(o.error_pattern) ~= "string" then
+        fail("error_pattern must be a string pattern")
+    end
+    if not is_string_list(o.ignore_msg) then
+        fail("ignore_msg must be a list of string patterns")
+    end
+    if not is_string_list(o.strip_msg) then
+        fail("strip_msg must be a list of string patterns")
+    end
+    if o.send_prefix ~= nil and type(o.send_prefix) ~= "string" then
+        fail("send_prefix must be a string")
+    end
+    if type(o.line_ending) ~= "string" then
+        fail("line_ending must be a string")
+    end
+    if not is_whole(o.retries) then
+        fail("retries must be a whole number")
+    end
+    if not is_whole(o.retry_interval) then
+        fail("retry_interval must be a whole number of milliseconds")
+    end
+    if o.retry_pattern ~= nil and type(o.retry_pattern) ~= "string" then
+        fail("retry_pattern must be a string pattern")
+    end
+
+    if type(msg) ~= "string" and type(msg) ~= "table" then
+        fail("the message must be a string or a list of bytes, not " .. type(msg))
+    end
+    local payload = M.fmt.to_str(msg)
+    local text = payload
+    if o.send_quoted then
+        text = '"' .. text:gsub('"', '\\"') .. '"'
+    end
+    if o.send_prefix ~= nil and o.send_prefix ~= "" then
+        text = o.send_prefix .. (o.send_prefix:match("%s$") and "" or " ") .. text
+    end
+
+    local request = {
+        message = text .. o.line_ending,
+        expected = o.expected,
+        timeout_ms = o.timeout,
+        error_pattern = o.error_pattern,
+        ignore = o.ignore_msg,
+        strip = o.strip_msg,
+        echo = o.ignore_echo and { text, payload } or {},
+    }
+
+    local err
+    for attempt = 0, o.retries do
+        if attempt > 0 then
+            M.sys.sleep_ms(o.retry_interval)
+        end
+
+        local res = coroutine.yield({ ":" .. fn_name, request })
+        if res.err == nil then
+            return res.lines, res.matched
+        end
+
+        err = res.err
+        if o.retry_pattern ~= nil and not M.re.match(err, "^(?:" .. o.retry_pattern .. ")$") then
+            break
+        end
+    end
+
+    return nil, err
+end
+
+function M.serial.send_and_wait(msg, expected, timeout_ms)
+    local lines, matched = send_and_wait("serial", msg, expected, timeout_ms)
+    return lines, matched
 end
 
 function M.rtt.info()
@@ -75,12 +314,17 @@ function M.rtt.info()
 end
 
 function M.rtt.send(msg)
-    coroutine.yield({ ":rtt.send", msg })
+    coroutine.yield({ ":rtt.send", bytes_arg("rtt.send", msg, 2) })
 end
 
 function M.rtt.recv(opts)
     local res = coroutine.yield({ ":rtt.recv", opts })
-    return res.err, res.data
+    return res.err, recv_data(res.data)
+end
+
+function M.rtt.send_and_wait(msg, expected, timeout_ms)
+    local lines, matched = send_and_wait("rtt", msg, expected, timeout_ms)
+    return lines, matched
 end
 
 function M.rtt.read(opts)
@@ -179,6 +423,236 @@ end
 function M.re.match(str, pattern)
     local res = coroutine.yield({ ":re.match", str, pattern })
     return res.is_match
+end
+
+local Signal = {}
+
+Signal.__tostring = function(signal)
+    if signal.kind == "skip" then
+        return "skipped" .. (signal.msg and (": " .. signal.msg) or "")
+    end
+
+    if signal.line then
+        return signal.line .. ": " .. signal.msg
+    end
+
+    return signal.msg
+end
+
+-- Level 4 is the test's line only when an assert function calls fail directly.
+local function fail(msg)
+    local _, where = pcall(error, "", 4)
+    error(setmetatable({ kind = "fail", msg = msg, line = where:match(":(%d+): $") }, Signal), 0)
+end
+
+local function repr(value, depth)
+    depth = depth or 0
+
+    if type(value) == "string" then
+        return '"' .. value:gsub("\r", "\\r"):gsub("\n", "\\n") .. '"'
+    end
+
+    if type(value) ~= "table" or depth >= 3 then
+        return tostring(value)
+    end
+
+    local items = {}
+    for _, item in ipairs(value) do
+        table.insert(items, repr(item, depth + 1))
+    end
+
+    local keys = {}
+    for key in pairs(value) do
+        if math.type(key) ~= "integer" or key < 1 or key > #value then
+            table.insert(keys, key)
+        end
+    end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    for _, key in ipairs(keys) do
+        table.insert(items, tostring(key) .. " = " .. repr(value[key], depth + 1))
+    end
+
+    return "{" .. table.concat(items, ", ") .. "}"
+end
+
+local function equal(a, b)
+    if a == b then
+        return true
+    end
+
+    if type(a) ~= "table" or type(b) ~= "table" then
+        return false
+    end
+
+    for key, value in pairs(a) do
+        if not equal(value, b[key]) then
+            return false
+        end
+    end
+
+    for key in pairs(b) do
+        if a[key] == nil then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function with(msg, detail)
+    if msg ~= nil then
+        return tostring(msg) .. ": " .. detail
+    end
+
+    return detail
+end
+
+function M.test.assert(cond, msg)
+    if not cond then
+        fail(msg ~= nil and tostring(msg) or "assertion failed")
+    end
+end
+
+function M.test.assert_eq(actual, expected, msg)
+    if not equal(actual, expected) then
+        fail(with(msg, "expected " .. repr(expected) .. ", got " .. repr(actual)))
+    end
+end
+
+function M.test.assert_opt(value, options, msg)
+    assert(type(options) == "table", "test.assert_opt: the options must be a list")
+
+    for _, option in ipairs(options) do
+        if equal(value, option) then
+            return
+        end
+    end
+
+    fail(with(msg, repr(value) .. " is not one of " .. repr(options)))
+end
+
+function M.test.assert_re(value, pattern, msg)
+    assert(type(pattern) == "string", "test.assert_re: the pattern must be a string")
+
+    local text = value
+    if type(value) == "table" then
+        text = M.fmt.to_str(value)
+    elseif type(value) == "number" then
+        text = tostring(value)
+    end
+
+    if type(text) ~= "string" or not M.re.match(text, "^(?:" .. pattern .. ")$") then
+        fail(with(msg, repr(value) .. " does not match " .. pattern))
+    end
+end
+
+function M.test.skip(reason)
+    error(setmetatable({ kind = "skip", msg = reason }, Signal), 0)
+end
+
+local function result_of(ok, err)
+    if ok then
+        return "pass"
+    end
+
+    if getmetatable(err) == Signal then
+        return err.kind
+    end
+
+    return "fail"
+end
+
+local function describe(err)
+    if getmetatable(err) == Signal then
+        return tostring(err)
+    end
+
+    return (tostring(err):gsub('^%[string ".-"%]:', ""))
+end
+
+local function report(name, result, err)
+    if result == "fail" then
+        M.log.error(name .. ": " .. describe(err))
+    elseif result == "skip" and err.msg ~= nil then
+        M.log.warning(name .. ": " .. describe(err))
+    end
+end
+
+local function default_teardown_test(index, total, name, result)
+    local text = "[" .. index .. "/" .. total .. "] " .. name .. ": " .. result
+
+    if result == "pass" then
+        M.log.success(text)
+    elseif result == "skip" then
+        M.log.warning(text)
+    else
+        M.log.error(text)
+    end
+end
+
+local function default_teardown_suite(results)
+    local text = string.format("%d passed, %d failed, %d skipped", results.ok, results.fail, results.skip)
+
+    if results.fail > 0 then
+        M.log.error(text)
+    else
+        M.log.success(text)
+    end
+end
+
+local function run_test(plugin, fn_name, name, fixture, setup_test)
+    local ok, err = pcall(setup_test, name, fixture)
+    local label = name .. " (setup_test)"
+
+    if ok then
+        ok, err = pcall(plugin[fn_name], fixture)
+        label = name
+    end
+
+    local result = result_of(ok, err)
+    report(label, result, err)
+
+    return result
+end
+
+function M.test._run_suite(plugin, tests)
+    local noop = function() end
+    local setup_suite = plugin.setup_suite or noop
+    local teardown_suite = plugin.teardown_suite or default_teardown_suite
+    local setup_test = plugin.setup_test or noop
+    local teardown_test = plugin.teardown_test or default_teardown_test
+    local results = { ok = 0, fail = 0, skip = 0, total = #tests, tests = {} }
+
+    local ok, fixture = pcall(setup_suite)
+    local suite_result
+    if not ok then
+        suite_result = result_of(ok, fixture)
+        report("setup_suite", suite_result, fixture)
+        fixture = nil
+    end
+
+    for index, fn_name in ipairs(tests) do
+        local name = (fn_name:gsub("^test_", ""))
+        local result = suite_result
+
+        if result == nil then
+            result = run_test(plugin, fn_name, name, fixture, setup_test)
+
+            local td_ok, td_err = pcall(teardown_test, index, #tests, name, result, fixture)
+            if not td_ok then
+                M.log.error(name .. " (teardown_test): " .. describe(td_err))
+            end
+        end
+
+        local key = result == "pass" and "ok" or result
+        results[key] = results[key] + 1
+        table.insert(results.tests, { name = name, result = result })
+    end
+
+    local td_ok, td_err = pcall(teardown_suite, results, fixture)
+    if not td_ok then
+        M.log.error("teardown_suite: " .. describe(td_err))
+    end
 end
 
 return M

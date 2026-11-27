@@ -251,6 +251,7 @@ fn app_serial(
         latency,
         InterfaceType::Serial,
         serial_if_cmd_sender,
+        plugin::engine::plugins_dir(),
     );
 
     let inputs_task = InputsTask::spawn_inputs_task(
@@ -394,6 +395,7 @@ fn app_rtt(settings: AppSettings, setup: RttSetup) -> Result<(), String> {
         latency,
         InterfaceType::Rtt,
         rtt_if_cmd_sender,
+        plugin::engine::plugins_dir(),
     );
 
     let inputs_task = InputsTask::spawn_inputs_task(

@@ -59,6 +59,13 @@ where
 }
 
 impl<S> Shared<S> {
+    #[cfg(test)]
+    pub fn new(shared: S) -> Self {
+        Self {
+            shared: Arc::new(RwLock::new(shared)),
+        }
+    }
+
     pub fn read(
         &self,
     ) -> Result<

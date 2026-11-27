@@ -1,9 +1,10 @@
 use std::{sync::Arc, time::Instant};
 
-use mlua::Table;
+use mlua::{Table, Value};
 use std::time::Duration;
 
-use crate::infra::LogLevel;
+use super::line_waiter::{WaitResult, WaitSpec};
+use crate::{infra::LogLevel, interfaces::InterfaceType};
 
 #[derive(Clone)]
 pub struct PluginMethodMessage<T: Clone> {
@@ -44,6 +45,11 @@ pub enum PluginExternalRequest {
         address: u64,
         size: usize,
     },
+    SendAndWait {
+        interface: InterfaceType,
+        message: Vec<u8>,
+        spec: WaitSpec,
+    },
     Log {
         level: LogLevel,
         message: String,
@@ -79,19 +85,48 @@ pub enum PluginInternalRequest {
 #[derive(Clone, Debug)]
 pub enum PluginResponse {
     Log,
-    SerialInfo { port: String, baudrate: u32 },
+    SerialInfo {
+        port: String,
+        baudrate: u32,
+    },
     SerialSend,
-    SerialRecv { err: String, message: Vec<u8> },
-    RttInfo { target: String, channel: usize },
+    SerialRecv {
+        err: String,
+        message: Vec<u8>,
+    },
+    RttInfo {
+        target: String,
+        channel: usize,
+    },
     RttSend,
-    RttRecv { err: String, message: Vec<u8> },
-    RttRead { err: String, data: Vec<u8> },
+    RttRecv {
+        err: String,
+        message: Vec<u8>,
+    },
+    RttRead {
+        err: String,
+        data: Vec<u8>,
+    },
+    SendAndWait(WaitResult),
+    /// The plugin instance that made the call is gone; the call must stop.
+    Unloaded,
     SysSleep,
-    ReLiteral { literal: String },
-    ReMatches { pattern: Option<String> },
-    ReMatch { is_match: bool },
-    ShellRun { stdout: String, stderr: String },
-    ShellExist { exist: bool },
+    ReLiteral {
+        literal: String,
+    },
+    ReMatches {
+        pattern: Option<String>,
+    },
+    ReMatch {
+        is_match: bool,
+    },
+    ShellRun {
+        stdout: String,
+        stderr: String,
+    },
+    ShellExist {
+        exist: bool,
+    },
 }
 
 impl PluginRequest {
@@ -103,6 +138,61 @@ impl PluginRequest {
         }
 
         Instant::now().checked_add(Duration::from_millis(timeout_ms))
+    }
+
+    fn bytes(value: mlua::Result<Value>, what: &str) -> Result<Vec<u8>, String> {
+        match value.map_err(|err| format!("Cannot get {what}: {err}"))? {
+            Value::String(string) => Ok(string.as_bytes().to_vec()),
+            Value::Table(table) => table
+                .sequence_values::<u8>()
+                .collect::<mlua::Result<_>>()
+                .map_err(|err| format!("{what} is not a list of bytes: {err}")),
+            other => Err(format!(
+                "{what} must be a string or a list of bytes, not {}",
+                other.type_name()
+            )),
+        }
+    }
+
+    fn send_and_wait(interface: InterfaceType, value: Table, req_id: &str) -> Result<Self, String> {
+        let opts: Table = value
+            .get(2)
+            .map_err(|_| format!("Cannot get the options table of {req_id}"))?;
+        let field = |name: &str, err: mlua::Error| format!("{req_id}: invalid {name}: {err}");
+
+        let message = Self::bytes(opts.get("message"), &format!("{req_id} message"))?;
+        let expected: String = opts.get("expected").map_err(|err| field("expected", err))?;
+        let timeout_ms: Option<u64> = opts
+            .get("timeout_ms")
+            .map_err(|err| field("timeout_ms", err))?;
+        let error_pattern: Option<String> = opts
+            .get("error_pattern")
+            .map_err(|err| field("error_pattern", err))?;
+        let ignore: Option<Vec<String>> = opts.get("ignore").map_err(|err| field("ignore", err))?;
+        let strip: Option<Vec<String>> = opts.get("strip").map_err(|err| field("strip", err))?;
+        let echoes: Option<Vec<mlua::String>> =
+            opts.get("echo").map_err(|err| field("echo", err))?;
+
+        Ok(PluginRequest::External(
+            PluginExternalRequest::SendAndWait {
+                interface,
+                message,
+                spec: WaitSpec {
+                    expected,
+                    error_pattern,
+                    ignore: ignore.unwrap_or_default(),
+                    strip: strip.unwrap_or_default(),
+                    echoes: echoes
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|echo| echo.as_bytes().to_vec())
+                        .collect(),
+                    timeout: timeout_ms
+                        .filter(|timeout_ms| *timeout_ms != u64::MAX)
+                        .map(Duration::from_millis),
+                },
+            },
+        ))
     }
 
     pub fn from_table<'lua>(
@@ -178,9 +268,7 @@ impl PluginRequest {
             }
             ":serial.info" => PluginRequest::External(PluginExternalRequest::SerialInfo),
             ":serial.send" => {
-                let message: Vec<u8> = value
-                    .get(2)
-                    .map_err(|_| "Cannot get second table entry as String".to_string())?;
+                let message = Self::bytes(value.get(2), ":serial.send message")?;
 
                 PluginRequest::External(PluginExternalRequest::SerialSend { message })
             }
@@ -197,12 +285,12 @@ impl PluginRequest {
             }
             ":rtt.info" => PluginRequest::External(PluginExternalRequest::RttInfo),
             ":rtt.send" => {
-                let message: Vec<u8> = value
-                    .get(2)
-                    .map_err(|_| "Cannot get second table entry as bytes".to_string())?;
+                let message = Self::bytes(value.get(2), ":rtt.send message")?;
 
                 PluginRequest::External(PluginExternalRequest::RttSend { message })
             }
+            ":serial.send_and_wait" => Self::send_and_wait(InterfaceType::Serial, value, &req_id)?,
+            ":rtt.send_and_wait" => Self::send_and_wait(InterfaceType::Rtt, value, &req_id)?,
             ":rtt.recv" => {
                 let opts: Table = value
                     .get(2)

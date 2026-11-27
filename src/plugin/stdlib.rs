@@ -1,0 +1,804 @@
+//! The Lua standard library bundled with scope (`require("scope")`,
+//! `require("shell")`, `require("codec.at")`).
+
+use std::path::Path;
+
+/// Each module as `(path relative to the plugins directory, contents)`.
+pub const STDLIB: &[(&str, &str)] = &[
+    ("scope.lua", include_str!("../../plugins/scope.lua")),
+    ("shell.lua", include_str!("../../plugins/shell.lua")),
+    ("codec/at.lua", include_str!("../../plugins/codec/at.lua")),
+];
+
+/// Writes every module into `dir` whose copy there is missing or differs, so
+/// the plugins always run against the library of this scope version.
+pub fn provision(dir: &Path) -> Result<(), String> {
+    for (name, contents) in STDLIB {
+        let path = dir.join(name);
+        if std::fs::read(&path).is_ok_and(|current| current == contents.as_bytes()) {
+            continue;
+        }
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|err| format!("Cannot create {:?}: {}", parent, err))?;
+        }
+        std::fs::write(&path, contents)
+            .map_err(|err| format!("Cannot write {:?}: {}", path, err))?;
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use mlua::{Lua, LuaOptions, StdLib};
+    use regex::Regex;
+
+    /// Runs plugin code as the plugin engine would, answering each request it
+    /// yields from the `responses` table, and records the requests and logs.
+    const DRIVER: &str = r##"
+        local function show(value, depth)
+            depth = depth or 0
+            if type(value) == "string" then return string.format("%q", value) end
+            if type(value) ~= "table" or depth > 4 then return tostring(value) end
+            local keys = {}
+            for key in pairs(value) do table.insert(keys, key) end
+            table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+            local items = {}
+            for _, key in ipairs(keys) do
+                table.insert(items, tostring(key) .. "=" .. show(value[key], depth + 1))
+            end
+            return "{" .. table.concat(items, ", ") .. "}"
+        end
+
+        local function same(a, b)
+            if a == b then return true end
+            if type(a) ~= "table" or type(b) ~= "table" then return false end
+            for key, value in pairs(a) do if not same(value, b[key]) then return false end end
+            for key in pairs(b) do if a[key] == nil then return false end end
+            return true
+        end
+
+        function expect_eq(actual, expected)
+            if not same(actual, expected) then
+                error("\nexpected " .. show(expected) .. "\n     got " .. show(actual), 2)
+            end
+        end
+
+        function drive(fn, responses, ...)
+            responses = responses or {}
+            local requests, logs = {}, {}
+            local co = coroutine.create(fn)
+            local resumed = table.pack(coroutine.resume(co, ...))
+            while true do
+                if not resumed[1] then error(resumed[2], 0) end
+                if coroutine.status(co) == "dead" then
+                    return { requests = requests, logs = logs, results = { table.unpack(resumed, 2, resumed.n) } }
+                end
+                local req = resumed[2]
+                local id = req[1]
+                local rsp = {}
+                if id:match("^:log%.") then
+                    table.insert(logs, id:sub(6) .. ": " .. tostring(req[2]))
+                elseif id == ":re.match" then
+                    rsp = { is_match = rust_is_match(req[2], req[3]) }
+                else
+                    table.insert(requests, req)
+                    assert(responses[id], "unexpected request " .. id)
+                    rsp = responses[id](req)
+                end
+                resumed = table.pack(coroutine.resume(co, rsp))
+            end
+        end
+
+        function load_plugin(code)
+            M = load(code)()
+            require("scope")._init_config(M)
+            return M
+        end
+
+        scope = require("scope")
+    "##;
+
+    fn run(chunk: &str) {
+        let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).unwrap();
+        lua.load("package.path = 'plugins/?.lua;' .. package.path")
+            .exec()
+            .unwrap();
+        let is_match = lua
+            .create_function(|_, (text, pattern): (String, String)| {
+                Ok(Regex::new(&pattern).is_ok_and(|re| re.is_match(&text)))
+            })
+            .unwrap();
+        lua.globals().set("rust_is_match", is_match).unwrap();
+        lua.load(DRIVER).exec().unwrap();
+
+        if let Err(err) = lua.load(chunk).exec() {
+            panic!("{err}");
+        }
+    }
+
+    #[test]
+    fn split_keeps_empty_fields_and_takes_the_separator_literally() {
+        run(r#"
+            expect_eq({ scope.fmt.split("a,,b", ",") }, { "a", "", "b" })
+            expect_eq({ scope.fmt.split("1.2.3", ".") }, { "1", "2", "3" })
+            expect_eq({ scope.fmt.split("abc", ",") }, { "abc" })
+            expect_eq({ scope.fmt.split("a, b", ", ") }, { "a", "b" })
+        "#);
+    }
+
+    #[test]
+    fn split_stops_at_max_pieces() {
+        run(r#"
+            expect_eq({ scope.fmt.split('+COPS: 0,"a:b"', ":", 2) }, { "+COPS", ' 0,"a:b"' })
+        "#);
+    }
+
+    #[test]
+    fn split_takes_a_list_of_bytes() {
+        run(r#"
+            expect_eq({ scope.fmt.split({ 0x61, 0x3a, 0x62 }, ":") }, { "a", "b" })
+        "#);
+    }
+
+    #[test]
+    fn send_passes_strings_and_bytes_through() {
+        run(r#"
+            local out = drive(function()
+                scope.serial.send("AT\r\n")
+                scope.rtt.send({ 0x41, 0x54 })
+            end, {
+                [":serial.send"] = function() return {} end,
+                [":rtt.send"] = function() return {} end,
+            })
+            expect_eq(out.requests, { { ":serial.send", "AT\r\n" }, { ":rtt.send", { 0x41, 0x54 } } })
+        "#);
+    }
+
+    #[test]
+    fn send_rejects_other_types() {
+        run(r#"
+            local ok, err = pcall(drive, function() scope.serial.send(42) end)
+            assert(not ok and err:find("serial.send: the message must be a string or a list of bytes, not number"), err)
+        "#);
+    }
+
+    #[test]
+    fn init_config_fills_the_defaults_and_keeps_the_plugin_values() {
+        run(r#"
+            local plugin = load_plugin([[ return { config = { default_timeout = 200 } } ]])
+            expect_eq(plugin.config, {
+                recv_as_string = false,
+                default_timeout = 200,
+                default_expected = "OK",
+                line_ending = "\r\n",
+                send_quoted = false,
+                ignore_echo = true,
+                ignore_msg = {},
+                strip_msg = {},
+                retries = 0,
+                retry_interval = 1000,
+            })
+
+            expect_eq(load_plugin("return {}").config.default_timeout, 1000)
+
+            local ok, err = pcall(load_plugin, "return { config = 1 }")
+            expect_eq(err, "M.config must be a table, not number")
+        "#);
+    }
+
+    #[test]
+    fn recv_returns_a_string_when_the_plugin_asks_for_it() {
+        run(r#"
+            local responses = {
+                [":serial.recv"] = function() return { data = { 0x4f, 0x4b } } end,
+            }
+            local recv = function() return scope.serial.recv({}) end
+
+            load_plugin("return {}")
+            expect_eq(drive(recv, responses).results, { nil, { 0x4f, 0x4b } })
+
+            load_plugin("return { config = { recv_as_string = true } }")
+            expect_eq(drive(recv, responses).results, { nil, "OK" })
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_builds_the_request_from_the_config() {
+        run(r#"
+            load_plugin([[ return { config = {
+                send_prefix = "modem at",
+                error_pattern = "\\+CME ERROR: .*",
+                default_timeout = 200,
+                ignore_msg = { "uart.*" },
+            } } ]])
+
+            local out = drive(function()
+                return scope.serial.send_and_wait("AT+COPS?")
+            end, {
+                [":serial.send_and_wait"] = function()
+                    return { lines = { "+COPS: 0,0,\"TIM\",7" }, matched = "OK" }
+                end,
+            })
+
+            expect_eq(out.requests[1][2], {
+                message = "modem at AT+COPS?\r\n",
+                expected = "OK",
+                timeout_ms = 200,
+                error_pattern = "\\+CME ERROR: .*",
+                ignore = { "uart.*" },
+                strip = {},
+                echo = { "modem at AT+COPS?", "AT+COPS?" },
+            })
+            expect_eq(out.results, { { "+COPS: 0,0,\"TIM\",7" }, "OK" })
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_arguments_override_the_config() {
+        run(r#"
+            load_plugin([[ return { config = { send_prefix = "at ", line_ending = "\r" } } ]])
+
+            local out = drive(function()
+                return scope.rtt.send_and_wait({ 0x41, 0x54 }, "READY", 50)
+            end, {
+                [":rtt.send_and_wait"] = function() return { lines = {}, matched = "READY" } end,
+            })
+
+            local opts = out.requests[1][2]
+            expect_eq({ opts.message, opts.expected, opts.timeout_ms }, { "at AT\r", "READY", 50 })
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_returns_nil_and_the_reason_on_failure() {
+        run(r#"
+            load_plugin("return {}")
+
+            local out = drive(function()
+                return scope.serial.send_and_wait("AT")
+            end, {
+                [":serial.send_and_wait"] = function() return { err = "timeout" } end,
+            })
+
+            expect_eq(out.results, { nil, "timeout" })
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_rejects_a_bad_timeout() {
+        run(r#"
+            load_plugin([[ return { config = { default_timeout = "200" } } ]])
+
+            local ok, err = pcall(drive, function() scope.serial.send_and_wait("AT") end)
+            assert(not ok and err:find("the timeout must be a whole number of milliseconds"), err)
+
+            ok, err = pcall(drive, function() scope.serial.send_and_wait("AT", "OK", 0.5) end)
+            assert(not ok and err:find("the timeout must be a whole number of milliseconds"), err)
+            ok, err = pcall(drive, function() scope.serial.send_and_wait("AT", "OK", math.huge) end)
+            assert(not ok and err:find("the timeout must be a whole number of milliseconds"), err)
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_rejects_an_ignore_msg_that_is_not_a_list_of_strings() {
+        run(r#"
+            for _, ignore_msg in ipairs({ "uart.*", { "uart.*", 1 } }) do
+                load_plugin("return {}").config.ignore_msg = ignore_msg
+
+                local ok, err = pcall(drive, function() scope.serial.send_and_wait("AT") end)
+                assert(not ok and err:find("ignore_msg must be a list of string patterns"), err)
+            end
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_takes_its_options_as_a_table() {
+        run(r#"
+            load_plugin([[ return { config = { default_timeout = 200, ignore_echo = false } } ]])
+
+            local out = drive(function()
+                return scope.serial.send_and_wait("AT+QESIM?", {
+                    timeout = 10000,
+                    strip_msg = { "uart:~\\$ ?" },
+                    send_prefix = "modem at",
+                    send_quoted = true,
+                    ignore_echo = true,
+                })
+            end, {
+                [":serial.send_and_wait"] = function() return { lines = {}, matched = "OK" } end,
+            })
+
+            local opts = out.requests[1][2]
+            expect_eq({ opts.message, opts.expected, opts.timeout_ms, opts.strip, opts.echo }, {
+                'modem at "AT+QESIM?"\r\n', "OK", 10000, { "uart:~\\$ ?" },
+                { 'modem at "AT+QESIM?"', "AT+QESIM?" },
+            })
+
+            local ok, err = pcall(drive, function() scope.serial.send_and_wait("AT", { timout = 5 }) end)
+            assert(not ok and err:find("serial.send_and_wait: unknown option timout"), err)
+        "#);
+    }
+
+    #[test]
+    fn send_quoted_escapes_the_quotes_of_the_message() {
+        run(r#"
+            load_plugin([[ return { config = { send_prefix = "modem at", send_quoted = true } } ]])
+
+            local out = drive(function()
+                return scope.serial.send_and_wait('AT+QCFG="roamservice"')
+            end, {
+                [":serial.send_and_wait"] = function() return { lines = {}, matched = "OK" } end,
+            })
+
+            expect_eq(out.requests[1][2].message, 'modem at "AT+QCFG=\\"roamservice\\""\r\n')
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_retries_only_the_failures_matching_retry_pattern() {
+        run(r#"
+            load_plugin([[ return { config = {
+                retries = 2,
+                retry_interval = 250,
+                retry_pattern = "script is already running.*",
+            } } ]])
+
+            local function attempts(replies)
+                local sleeps, sent = {}, 0
+                local out = drive(function() return scope.serial.send_and_wait("AT") end, {
+                    [":serial.send_and_wait"] = function()
+                        sent = sent + 1
+                        return replies[sent]
+                    end,
+                    [":sys.sleep"] = function(req)
+                        table.insert(sleeps, req[2])
+                        return {}
+                    end,
+                })
+                return sent, sleeps, out.results
+            end
+
+            local busy = { err = "script is already running" }
+            local sent, sleeps, results = attempts({ busy, busy, { lines = { "x" }, matched = "OK" } })
+            expect_eq({ sent, sleeps, results }, { 3, { 250, 250 }, { { "x" }, "OK" } })
+
+            sent, sleeps, results = attempts({ busy, busy, busy })
+            expect_eq({ sent, results }, { 3, { nil, "script is already running" } })
+
+            sent, sleeps, results = attempts({ { err = "timeout" } })
+            expect_eq({ sent, results }, { 1, { nil, "timeout" } })
+        "#);
+    }
+
+    #[test]
+    fn without_retry_pattern_every_failure_is_retried() {
+        run(r#"
+            load_plugin([[ return { config = { retries = 1 } } ]])
+
+            local sent = 0
+            local out = drive(function() return scope.serial.send_and_wait("AT") end, {
+                [":serial.send_and_wait"] = function()
+                    sent = sent + 1
+                    return { err = "timeout" }
+                end,
+                [":sys.sleep"] = function() return {} end,
+            })
+
+            expect_eq({ sent, out.results }, { 2, { nil, "timeout" } })
+        "#);
+    }
+
+    #[test]
+    fn starts_with_and_ends_with_compare_literally() {
+        run(r#"
+            local fmt = scope.fmt
+            expect_eq({ fmt.starts_with("+COPS: 0", "+COPS"), fmt.starts_with("COPS", "+") }, { true, false })
+            expect_eq({ fmt.ends_with("a.b", ".b"), fmt.ends_with("ab", "%b"), fmt.ends_with("ab", "") }, { true, false, true })
+            expect_eq(fmt.starts_with({ 0x41, 0x54 }, "AT"), true)
+        "#);
+    }
+
+    #[test]
+    fn a_suite_runs_the_hooks_around_each_test_in_order() {
+        run(r#"
+            local calls = {}
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.setup_suite() table.insert(CALLS, "setup_suite") return "fx" end
+                function M.teardown_suite(results, fixture)
+                    table.insert(CALLS, "teardown_suite " .. fixture)
+                    RESULTS = results
+                end
+                function M.setup_test(name, fixture) table.insert(CALLS, "setup_test " .. name .. " " .. fixture) end
+                function M.teardown_test(index, total, name, result)
+                    table.insert(CALLS, "teardown_test " .. index .. "/" .. total .. " " .. name .. " " .. result)
+                end
+                function M.test_one(fixture) table.insert(CALLS, "one " .. fixture) end
+                function M.test_two() test.assert(false) end
+                function M.test_three() test.skip() end
+                return M
+            ]])
+            CALLS = calls
+
+            drive(scope.test._run_suite, {}, plugin, { "test_one", "test_two", "test_three" })
+
+            expect_eq(calls, {
+                "setup_suite",
+                "setup_test one fx", "one fx", "teardown_test 1/3 one pass",
+                "setup_test two fx", "teardown_test 2/3 two fail",
+                "setup_test three fx", "teardown_test 3/3 three skip",
+                "teardown_suite fx",
+            })
+            expect_eq(RESULTS, {
+                ok = 1, fail = 1, skip = 1, total = 3,
+                tests = {
+                    { name = "one", result = "pass" },
+                    { name = "two", result = "fail" },
+                    { name = "three", result = "skip" },
+                },
+            })
+        "#);
+    }
+
+    #[test]
+    fn a_failed_assert_stops_the_test_and_logs_its_line() {
+        run(r#"
+            local reached = false
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.test_cops()
+                    test.assert_eq("CREG", "COPS")
+                    REACHED = true
+                end
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {}, plugin, { "test_cops" })
+
+            expect_eq(REACHED, nil)
+            expect_eq(out.logs, {
+                'error: cops: 4: expected "COPS", got "CREG"',
+                "error: [1/1] cops: fail",
+                "error: 0 passed, 1 failed, 0 skipped",
+            })
+        "#);
+    }
+
+    #[test]
+    fn asserts_describe_what_did_not_match() {
+        run(r#"
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.test_a() test.assert(nil, "no answer") end
+                function M.test_b() test.assert_opt(3, { 0, 1, 2, 4 }) end
+                function M.test_c() test.assert_re("12a", "\\d+") end
+                function M.test_d() test.assert_eq({ 1, { 2 } }, { 1, { 3 } }, "bytes") end
+                function M.test_e() test.assert_re("0", "\\d+") test.assert_eq({ 1, { 2 } }, { 1, { 2 } }) end
+                function M.teardown_test() end
+                function M.teardown_suite() end
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {}, plugin, { "test_a", "test_b", "test_c", "test_d", "test_e" })
+
+            expect_eq(out.logs, {
+                "error: a: 3: no answer",
+                "error: b: 4: 3 is not one of {0, 1, 2, 4}",
+                'error: c: 5: "12a" does not match \\d+',
+                "error: d: 6: bytes: expected {1, {3}}, got {1, {2}}",
+            })
+        "#);
+    }
+
+    #[test]
+    fn a_skip_reason_and_a_runtime_error_are_logged() {
+        run(r#"
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.test_skip() test.skip("no SIM") end
+                function M.test_crash() local cops = nil; return cops.mode end
+                function M.teardown_test() end
+                function M.teardown_suite() end
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {}, plugin, { "test_skip", "test_crash" })
+
+            expect_eq(out.logs, {
+                "warning: skip: skipped: no SIM",
+                "error: crash: 4: attempt to index a nil value (local 'cops')",
+            })
+        "#);
+    }
+
+    #[test]
+    fn a_failed_setup_suite_runs_no_test() {
+        run(r#"
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.setup_suite() error("no modem", 0) end
+                function M.setup_test() RAN = true end
+                function M.test_one() RAN = true end
+                function M.teardown_suite(results) RESULTS = results end
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {}, plugin, { "test_one" })
+
+            expect_eq(RAN, nil)
+            expect_eq(RESULTS.fail, 1)
+            expect_eq(out.logs, { "error: setup_suite: no modem" })
+        "#);
+    }
+
+    #[test]
+    fn a_skip_in_setup_suite_skips_every_test() {
+        run(r#"
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.setup_suite() test.skip() end
+                function M.test_one() end
+                function M.test_two() end
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {}, plugin, { "test_one", "test_two" })
+
+            expect_eq(out.logs, { "success: 0 passed, 0 failed, 2 skipped" })
+        "#);
+    }
+
+    #[test]
+    fn the_issue_example_suite_runs_against_a_modem() {
+        run(r#"
+            local plugin = load_plugin([[
+                local scope = require("scope")
+                local at = scope.codec.at
+                local serial = scope.serial
+                local test = scope.test
+                local M = {}
+
+                function M.setup_suite()
+                    M.config.error_pattern = "\\+CMR.*"
+                    M.config.default_timeout = 200
+                    M.config.send_prefix = "modem at"
+                    M.config.ignore_msg = { "uart" }
+                end
+
+                function M.test_at()
+                    test.skip()
+                end
+
+                function M.test_cops()
+                    local lines = serial.send_and_wait("AT+COPS?")
+                    test.assert(lines)
+
+                    local cops = at.decode(lines[1])
+                    assert(cops)
+
+                    test.assert_eq(cops.id, "COPS")
+                    test.assert_opt(cops.mode, { 0, 1, 2, 4 })
+                    test.assert_opt(cops.format, { 0, 1, 2 })
+                    test.assert_re(cops.raw.format, "\\d+")
+                    test.assert_eq(cops.provider, "TIMBrasil")
+                    test.assert_eq(cops.act, 7)
+                end
+
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {
+                [":serial.send_and_wait"] = function(req)
+                    expect_eq(req[2].message, "modem at AT+COPS?\r\n")
+                    expect_eq(req[2].ignore, { "uart" })
+                    return { lines = { '+COPS: 0,0,"TIMBrasil",7' }, matched = "OK" }
+                end,
+            }, plugin, { "test_at", "test_cops" })
+
+            expect_eq(out.logs, {
+                "warning: [1/2] at: skip",
+                "success: [2/2] cops: pass",
+                "success: 1 passed, 0 failed, 1 skipped",
+            })
+        "#);
+    }
+
+    #[test]
+    fn a_test_signal_reads_as_its_message() {
+        run(r#"
+            local ok, err = pcall(scope.test.skip, "no SIM")
+            expect_eq(tostring(err), "skipped: no SIM")
+        "#);
+    }
+
+    #[test]
+    fn decode_reads_a_cops_read_response() {
+        run(r#"
+            local at = scope.codec.at
+            local cops = at.decode('+COPS: 0,0,"TIMBrasil",7\r\n')
+            expect_eq(cops, {
+                id = "COPS",
+                mode = 0, format = 0, provider = "TIMBrasil", act = 7,
+                params = { 0, 0, "TIMBrasil", 7 },
+                raw = {
+                    "0", "0", '"TIMBrasil"', "7",
+                    mode = "0", format = "0", provider = '"TIMBrasil"', act = "7",
+                },
+            })
+            expect_eq({ at.text("COPS", "act", cops.act), at.text("COPS", "mode", cops.mode) },
+                { "E-UTRAN", "automatic" })
+
+            expect_eq(at.decode('+COPS: 0,0,"TIM",1').act, 1)
+            expect_eq(at.decode('+COPS: 0,0,"TIM",10').act, 10)
+
+            local unregistered = at.decode("+COPS: 0")
+            expect_eq({ unregistered.mode, unregistered.format }, { 0, nil })
+        "#);
+    }
+
+    #[test]
+    fn decode_rejects_out_of_range_values() {
+        run(r#"
+            expect_eq({ scope.codec.at.decode('+COPS: 3,0,"TIM",7') }, { nil, "+COPS: invalid mode 3" })
+            expect_eq({ scope.codec.at.decode('+COPS: 0,0,"TIM",14') }, { nil, "+COPS: invalid act 14" })
+            expect_eq({ scope.codec.at.decode("+CSQ: 32,99") }, { nil, "+CSQ: invalid rssi 32" })
+            expect_eq({ scope.codec.at.decode("+CSQ: 20") }, { nil, "+CSQ: missing ber" })
+            expect_eq({ scope.codec.at.decode("+CPIN: BUSY") }, { nil, "+CPIN: invalid code BUSY" })
+        "#);
+    }
+
+    #[test]
+    fn decode_tells_a_registration_read_response_from_its_urc() {
+        run(r#"
+            local at = scope.codec.at
+
+            local read = at.decode('+CREG: 2,5,"00C3","0000A1B2",7')
+            expect_eq({ read.n, read.stat, read.lac, read.ci, read.act }, { 2, 5, 0xC3, 0xA1B2, 7 })
+
+            local urc = at.decode('+CEREG: 1,"1A2B","01A2B3C4",7')
+            expect_eq({ urc.n, urc.stat, urc.tac, urc.act }, { nil, 1, 0x1A2B, 7 })
+
+            local short = at.decode("+CGREG: 0,1")
+            expect_eq({ short.n, short.stat, at.text("CGREG", "stat", short.stat) }, { 0, 1, "registered, home" })
+        "#);
+    }
+
+    #[test]
+    fn decode_reads_the_basic_27007_responses() {
+        run(r#"
+            local at = scope.codec.at
+
+            local csq = at.decode("+CSQ: 99,99")
+            expect_eq({ csq.rssi, csq.ber }, { 99, 99 })
+            expect_eq(at.decode("+CPIN: SIM PIN").code, "SIM PIN")
+            expect_eq(at.decode("+CFUN: 1").fun, 1)
+            expect_eq(at.decode("+CGATT: 1").state, 1)
+
+            local cgdcont = at.decode('+CGDCONT: 1,"IPV4V6","apn,with,commas","0.0.0.0",0,0')
+            expect_eq({ cgdcont.cid, cgdcont.pdp_type, cgdcont.apn, cgdcont.h_comp }, { 1, "IPV4V6", "apn,with,commas", 0 })
+
+            local cgpaddr = at.decode('+CGPADDR: 1,"10.0.0.2"')
+            expect_eq({ cgpaddr.cid, cgpaddr.pdp_addr, cgpaddr.pdp_addr_2 }, { 1, "10.0.0.2", nil })
+        "#);
+    }
+
+    #[test]
+    fn decode_reads_result_codes_errors_and_unknown_commands() {
+        run(r#"
+            local at = scope.codec.at
+
+            expect_eq(at.decode("OK\r\n"), { id = "OK", params = {}, raw = {} })
+            expect_eq(at.decode("NO CARRIER").id, "NO CARRIER")
+            expect_eq(at.decode("+CME ERROR: 10").err, 10)
+            expect_eq(at.decode("+CMS ERROR: SIM busy").err, "SIM busy")
+
+            local qnwinfo = at.decode('+QNWINFO: "FDD LTE","72404","LTE BAND 3",1300')
+            expect_eq({ qnwinfo.id, qnwinfo.params, qnwinfo.raw[2] },
+                { "QNWINFO", { "FDD LTE", "72404", "LTE BAND 3", 1300 }, '"72404"' })
+
+            expect_eq({ at.decode("uart:~$ modem at AT") }, { nil, "not an AT response: uart:~$ modem at AT" })
+            expect_eq(at.decode({ 0x4f, 0x4b }).id, "OK")
+        "#);
+    }
+
+    #[test]
+    fn decode_turns_a_response_into_one_table() {
+        run(r#"
+            local at = scope.codec.at
+
+            local cereg = at.decode({ "+CEREG: 0,1" })
+            expect_eq({ cereg.n, cereg.stat }, { 0, 1 })
+
+            expect_eq(at.decode({ "724041234567890" }, "AT+CIMI").imsi, "724041234567890")
+            expect_eq({ at.decode({}, "AT+CEREG?") }, { nil, "no +CEREG line in the response" })
+            expect_eq({ at.decode({ "+COPS: 9" }) }, { nil, "+COPS: invalid mode 9" })
+
+            local ok, err = pcall(at.decode, { "+COPS: 0" }, "OK")
+            assert(not ok and err:find('cmd must be the AT command sent %(e.g. "AT%+CIMI"%), not OK'), err)
+        "#);
+    }
+
+    #[test]
+    fn decode_indexes_a_one_line_per_entry_response_by_its_key() {
+        run(r#"
+            local at = scope.codec.at
+
+            local contexts = at.decode({
+                '+CGDCONT: 1,"IP","","0.0.0.0",0,0',
+                '+CGDCONT: 3,"IPV4V6","ims","0.0.0.0",0,0',
+            }, "AT+CGDCONT?")
+            expect_eq({ contexts[1].apn, contexts[3].apn, contexts[2] }, { "", "ims", nil })
+
+            local active = at.decode({ "+CGACT: 1,1", "+CGACT: 2,0" })
+            expect_eq({ active[1].state, active[2].state }, { 1, 0 })
+            expect_eq(at.decode({}, "AT+CGACT?"), {})
+        "#);
+    }
+
+    #[test]
+    fn define_declares_vendor_commands_and_their_subcommands() {
+        run(r#"
+            local at = scope.codec.at
+
+            at.define("QNWINFO", {
+                { "act", "str" }, { "oper", "str" }, { "band", "str" }, { "channel", "int" },
+            })
+            at.define('QCFG="roamservice"', { { "setting", "str" }, { "mode", "int", text = { [2] = "auto" } } })
+            at.define('QESIM="list"', {
+                list = true, key = "iccid", unprefixed = true,
+                { "iccid", "str" }, { "state", "int" }, { "nickname", "str" }, { "provider", "str" },
+            })
+
+            local nw = at.decode({ '+QNWINFO: "FDD LTE","72404","LTE BAND 3",1300' })
+            expect_eq({ nw.act, nw.oper, nw.channel }, { "FDD LTE", "72404", 1300 })
+
+            local roam = at.decode({ '+QCFG: "roamservice",2' }, 'AT+QCFG="roamservice"')
+            expect_eq({ roam.setting, roam.mode, at.text('QCFG="roamservice"', "mode", roam.mode) },
+                { "roamservice", 2, "auto" })
+
+            local profiles = at.decode({
+                '"8955000000000000001","1","Work","TIM"',
+                '"8955000000000000002","0","Old","VIVO"',
+            }, 'AT+QESIM="list",1')
+            expect_eq({ profiles["8955000000000000001"].state, profiles["8955000000000000002"].provider },
+                { 1, "VIVO" })
+
+            local ok, err = pcall(at.define, "X", { { "raw", "str" } })
+            assert(not ok and err:find("needs a name other than id, params and raw"), err)
+            ok, err = pcall(at.define, "X", { { "a", "float" } })
+            assert(not ok and err:find("field a needs a kind"), err)
+        "#);
+    }
+
+    #[test]
+    fn esm_cause_describes_a_session_management_cause() {
+        run(r#"
+            expect_eq({ scope.codec.at.esm_cause(27), scope.codec.at.esm_cause(9999) }, { "missing or unknown APN", nil })
+        "#);
+    }
+
+    #[test]
+    fn encode_builds_set_read_and_test_commands() {
+        run(r#"
+            local at = scope.codec.at
+
+            expect_eq(at.encode("+CGDCONT", 1, "IP", "apn"), 'AT+CGDCONT=1,"IP","apn"')
+            expect_eq(at.encode("+COPS", 1, nil, nil), "AT+COPS=1")
+            expect_eq(at.encode("+CREG", nil, 2), "AT+CREG=,2")
+            expect_eq(at.encode("+CIMI"), "AT+CIMI")
+            expect_eq(at.encode("E0"), "ATE0")
+            expect_eq(at.encode("+CFUN", 1.0, true), "AT+CFUN=1,1")
+            expect_eq(at.encode_read("+COPS"), "AT+COPS?")
+            expect_eq(at.encode_test("+COPS"), "AT+COPS=?")
+        "#);
+    }
+}

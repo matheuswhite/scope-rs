@@ -352,6 +352,8 @@ Anything typed on the command bar that starts with `!` is a command. A line with
 | `!plugin uninstall <name>` | Uninstall a plugin: remove it from the auto-load set and delete its staged copy (a running instance stays loaded for the session — use `!plugin unload` to stop it now). |
 | `!plugin list` | List the installed (auto-loaded) plugins. |
 | `!plugin unload <name>` | Unload a plugin by name (for this session; does not uninstall). |
+| `!test <plugin> [test ...]` | Run the plugin's tests (its `test_*` functions), or only the ones named, between its `setup_*`/`teardown_*` hooks. |
+| `!test <test> [test ...]` | Run the named tests in the loaded plugin that defines them (the `test_` prefix is optional). |
 | `!<plugin> <command> [args...]` | Call a command exported by a loaded plugin (see [Plugins](#plugins)). |
 
 ## Keyboard & Mouse Shortcuts
@@ -536,7 +538,7 @@ end
 return M
 ```
 
-Load a plugin with `!plugin load <file>` (and `!plugin reload <file>` / `!plugin unload <name>` to reload or unload it). To keep a plugin across sessions, use `!plugin install <file>`: it loads the plugin now and records it so every subsequent `Scope` session auto-loads it at start-up (see `!plugin list` to review the installed set, and `!plugin uninstall <name>` to remove one from it). To call one of your plugin's commands, type `!` followed by the plugin name, the command name and its arguments — for example `!echo hello`. Inside a plugin you can react to lifecycle and I/O events (`on_load`, `on_unload`, `on_serial_recv`/`on_serial_send`, `on_rtt_recv`/`on_rtt_send`) and interact with `Scope` and the target: connect/disconnect, send data, read RTT memory, print messages, run shell commands and more. For the full guide see the [Plugins Developer Guide](plugins/README.md).
+Load a plugin with `!plugin load <file>` (and `!plugin reload <file>` / `!plugin unload <name>` to reload or unload it). To keep a plugin across sessions, use `!plugin install <file>`: it loads the plugin now and records it so every subsequent `Scope` session auto-loads it at start-up (see `!plugin list` to review the installed set, and `!plugin uninstall <name>` to remove one from it). To call one of your plugin's commands, type `!` followed by the plugin name, the command name and its arguments — for example `!echo hello`. Inside a plugin you can react to lifecycle and I/O events (`on_load`, `on_unload`, `on_serial_recv`/`on_serial_send`, `on_rtt_recv`/`on_rtt_send`) and interact with `Scope` and the target: connect/disconnect, send data (or send a command and wait for its answer), read RTT memory, print messages, run shell commands and more. A plugin can also be a test suite for the device: its `test_*` functions run with `!test <plugin>`, with asserts and an AT command codec in the standard library. For the full guide see the [Plugins Developer Guide](plugins/README.md).
 
 ![Plugin usage](videos/011_plugin/video.gif)
 
