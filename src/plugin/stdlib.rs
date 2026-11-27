@@ -7,6 +7,7 @@ use std::path::Path;
 pub const STDLIB: &[(&str, &str)] = &[
     ("scope.lua", include_str!("../../plugins/scope.lua")),
     ("shell.lua", include_str!("../../plugins/shell.lua")),
+    ("codec/at.lua", include_str!("../../plugins/codec/at.lua")),
 ];
 
 /// Writes every module into `dir` whose copy there is missing or differs, so
@@ -27,4 +28,215 @@ pub fn provision(dir: &Path) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use mlua::{Lua, LuaOptions, StdLib};
+    use regex::Regex;
+
+    /// Runs plugin code as the plugin engine would, answering each request it
+    /// yields from the `responses` table, and records the requests and logs.
+    const DRIVER: &str = r##"
+        local function show(value, depth)
+            depth = depth or 0
+            if type(value) == "string" then return string.format("%q", value) end
+            if type(value) ~= "table" or depth > 4 then return tostring(value) end
+            local keys = {}
+            for key in pairs(value) do table.insert(keys, key) end
+            table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+            local items = {}
+            for _, key in ipairs(keys) do
+                table.insert(items, tostring(key) .. "=" .. show(value[key], depth + 1))
+            end
+            return "{" .. table.concat(items, ", ") .. "}"
+        end
+
+        local function same(a, b)
+            if a == b then return true end
+            if type(a) ~= "table" or type(b) ~= "table" then return false end
+            for key, value in pairs(a) do if not same(value, b[key]) then return false end end
+            for key in pairs(b) do if a[key] == nil then return false end end
+            return true
+        end
+
+        function expect_eq(actual, expected)
+            if not same(actual, expected) then
+                error("\nexpected " .. show(expected) .. "\n     got " .. show(actual), 2)
+            end
+        end
+
+        function drive(fn, responses, ...)
+            responses = responses or {}
+            local requests, logs = {}, {}
+            local co = coroutine.create(fn)
+            local resumed = table.pack(coroutine.resume(co, ...))
+            while true do
+                if not resumed[1] then error(resumed[2], 0) end
+                if coroutine.status(co) == "dead" then
+                    return { requests = requests, logs = logs, results = { table.unpack(resumed, 2, resumed.n) } }
+                end
+                local req = resumed[2]
+                local id = req[1]
+                local rsp = {}
+                if id:match("^:log%.") then
+                    table.insert(logs, id:sub(6) .. ": " .. tostring(req[2]))
+                elseif id == ":re.match" then
+                    rsp = { is_match = rust_is_match(req[2], req[3]) }
+                else
+                    table.insert(requests, req)
+                    assert(responses[id], "unexpected request " .. id)
+                    rsp = responses[id](req)
+                end
+                resumed = table.pack(coroutine.resume(co, rsp))
+            end
+        end
+
+        scope = require("scope")
+    "##;
+
+    fn run(chunk: &str) {
+        let lua = Lua::new_with(StdLib::ALL_SAFE, LuaOptions::default()).unwrap();
+        lua.load("package.path = 'plugins/?.lua;' .. package.path")
+            .exec()
+            .unwrap();
+        let is_match = lua
+            .create_function(|_, (text, pattern): (String, String)| {
+                Ok(Regex::new(&pattern).is_ok_and(|re| re.is_match(&text)))
+            })
+            .unwrap();
+        lua.globals().set("rust_is_match", is_match).unwrap();
+        lua.load(DRIVER).exec().unwrap();
+
+        if let Err(err) = lua.load(chunk).exec() {
+            panic!("{err}");
+        }
+    }
+
+    #[test]
+    fn split_keeps_empty_fields_and_takes_the_separator_literally() {
+        run(r#"
+            expect_eq({ scope.fmt.split("a,,b", ",") }, { "a", "", "b" })
+            expect_eq({ scope.fmt.split("1.2.3", ".") }, { "1", "2", "3" })
+            expect_eq({ scope.fmt.split("abc", ",") }, { "abc" })
+            expect_eq({ scope.fmt.split("a, b", ", ") }, { "a", "b" })
+        "#);
+    }
+
+    #[test]
+    fn split_stops_at_max_pieces() {
+        run(r#"
+            expect_eq({ scope.fmt.split('+COPS: 0,"a:b"', ":", 2) }, { "+COPS", ' 0,"a:b"' })
+        "#);
+    }
+
+    #[test]
+    fn split_takes_a_list_of_bytes() {
+        run(r#"
+            expect_eq({ scope.fmt.split({ 0x61, 0x3a, 0x62 }, ":") }, { "a", "b" })
+        "#);
+    }
+
+    #[test]
+    fn decode_reads_a_cops_read_response() {
+        run(r#"
+            local cops = scope.codec.at.decode('+COPS: 0,0,"TIMBrasil",7\r\n')
+            expect_eq(cops.id, "COPS")
+            expect_eq(cops.mode, { raw = "0", value = 0 })
+            expect_eq(cops.format, { raw = "0", value = 0 })
+            expect_eq(cops.provider, { raw = '"TIMBrasil"', value = "TIMBrasil" })
+            expect_eq(cops.act, { raw = "7", value = 7 })
+            expect_eq(#cops.params, 4)
+
+            local unregistered = scope.codec.at.decode("+COPS: 0")
+            expect_eq({ unregistered.mode.value, unregistered.format }, { 0, nil })
+        "#);
+    }
+
+    #[test]
+    fn decode_rejects_out_of_range_values() {
+        run(r#"
+            expect_eq({ scope.codec.at.decode('+COPS: 3,0,"TIM",7') }, { nil, "+COPS: invalid mode 3" })
+            expect_eq({ scope.codec.at.decode('+COPS: 0,0,"TIM",10') }, { nil, "+COPS: invalid act 10" })
+            expect_eq({ scope.codec.at.decode("+CSQ: 32,99") }, { nil, "+CSQ: invalid rssi 32" })
+            expect_eq({ scope.codec.at.decode("+CSQ: 20") }, { nil, "+CSQ: missing ber" })
+            expect_eq({ scope.codec.at.decode("+CPIN: BUSY") }, { nil, "+CPIN: invalid code BUSY" })
+        "#);
+    }
+
+    #[test]
+    fn decode_tells_a_registration_read_response_from_its_urc() {
+        run(r#"
+            local at = scope.codec.at
+
+            local read = at.decode('+CREG: 2,5,"00C3","0000A1B2",7')
+            expect_eq({ read.n.value, read.stat.value, read.lac.value, read.ci.value, read.act.value },
+                { 2, 5, 0xC3, 0xA1B2, 7 })
+
+            local urc = at.decode('+CEREG: 1,"1A2B","01A2B3C4",7')
+            expect_eq({ urc.n, urc.stat.value, urc.tac.value, urc.act.value }, { nil, 1, 0x1A2B, 7 })
+
+            local short = at.decode("+CGREG: 0,1")
+            expect_eq({ short.n.value, short.stat.value }, { 0, 1 })
+        "#);
+    }
+
+    #[test]
+    fn decode_reads_the_basic_27007_responses() {
+        run(r#"
+            local at = scope.codec.at
+
+            local csq = at.decode("+CSQ: 99,99")
+            expect_eq({ csq.rssi.value, csq.ber.value }, { 99, 99 })
+            expect_eq(at.decode("+CPIN: SIM PIN").code.value, "SIM PIN")
+            expect_eq(at.decode("+CFUN: 1").fun.value, 1)
+            expect_eq(at.decode("+CGATT: 1").state.value, 1)
+
+            local cgact = at.decode("+CGACT: 1,0")
+            expect_eq({ cgact.cid.value, cgact.state.value }, { 1, 0 })
+
+            local cgdcont = at.decode('+CGDCONT: 1,"IPV4V6","apn,with,commas","0.0.0.0",0,0')
+            expect_eq({ cgdcont.cid.value, cgdcont.pdp_type.value, cgdcont.apn.value, cgdcont.h_comp.value },
+                { 1, "IPV4V6", "apn,with,commas", 0 })
+
+            local cgpaddr = at.decode('+CGPADDR: 1,"10.0.0.2"')
+            expect_eq({ cgpaddr.cid.value, cgpaddr.pdp_addr.value, cgpaddr.pdp_addr_2 }, { 1, "10.0.0.2", nil })
+        "#);
+    }
+
+    #[test]
+    fn decode_reads_result_codes_errors_and_unknown_commands() {
+        run(r#"
+            local at = scope.codec.at
+
+            expect_eq(at.decode("OK\r\n"), { id = "OK", params = {} })
+            expect_eq(at.decode("NO CARRIER").id, "NO CARRIER")
+            expect_eq(at.decode("+CME ERROR: 10").err.value, 10)
+            expect_eq(at.decode("+CMS ERROR: SIM busy").err.value, "SIM busy")
+
+            local qnwinfo = at.decode('+QNWINFO: "FDD LTE","72404","LTE BAND 3",1300')
+            expect_eq(qnwinfo.id, "QNWINFO")
+            expect_eq(qnwinfo.params[2], { raw = '"72404"', value = "72404" })
+            expect_eq(qnwinfo.params[4], { raw = "1300", value = 1300 })
+
+            expect_eq({ at.decode("uart:~$ modem at AT") }, { nil, "not an AT response: uart:~$ modem at AT" })
+            expect_eq(at.decode({ 0x4f, 0x4b }).id, "OK")
+        "#);
+    }
+
+    #[test]
+    fn encode_builds_set_read_and_test_commands() {
+        run(r#"
+            local at = scope.codec.at
+
+            expect_eq(at.encode("+CGDCONT", 1, "IP", "apn"), 'AT+CGDCONT=1,"IP","apn"')
+            expect_eq(at.encode("+COPS", 1, nil, nil), "AT+COPS=1")
+            expect_eq(at.encode("+CREG", nil, 2), "AT+CREG=,2")
+            expect_eq(at.encode("+CIMI"), "AT+CIMI")
+            expect_eq(at.encode("E0"), "ATE0")
+            expect_eq(at.encode("+CFUN", 1.0, true), "AT+CFUN=1,1")
+            expect_eq(at.encode_read("+COPS"), "AT+COPS?")
+            expect_eq(at.encode_test("+COPS"), "AT+COPS=?")
+        "#);
+    }
 }

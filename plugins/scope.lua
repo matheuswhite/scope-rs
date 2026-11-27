@@ -6,6 +6,9 @@ local M = {
     sys = {},
     re = {},
     rtt = {},
+    codec = {
+        at = require("codec.at")
+    }
 }
 
 function M.fmt.to_str(val)
@@ -33,6 +36,31 @@ function M.fmt.to_bytes(val)
     else
         return {}
     end
+end
+
+function M.fmt.split(str, sep, max)
+    if type(str) == "table" then
+        str = M.fmt.to_str(str)
+    end
+    assert(type(str) == "string", "fmt.split: the input must be a string or a list of bytes")
+    assert(type(sep) == "string" and sep ~= "", "fmt.split: the separator must be a non-empty string")
+    assert(max == nil or (math.type(max) == "integer" and max >= 1), "fmt.split: max must be a positive integer")
+
+    local parts = {}
+    local start = 1
+
+    while max == nil or #parts < max - 1 do
+        local first, last = string.find(str, sep, start, true)
+        if first == nil then
+            break
+        end
+
+        table.insert(parts, string.sub(str, start, first - 1))
+        start = last + 1
+    end
+    table.insert(parts, string.sub(str, start))
+
+    return table.unpack(parts)
 end
 
 function M.log.debug(msg)

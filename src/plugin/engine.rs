@@ -1229,6 +1229,10 @@ mod tests {
             fs::read_to_string(plugins.join("shell.lua")).unwrap(),
             stdlib("shell.lua")
         );
+        assert_eq!(
+            fs::read_to_string(plugins.join("codec").join("at.lua")).unwrap(),
+            stdlib("codec/at.lua")
+        );
     }
 
     #[test]
