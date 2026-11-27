@@ -92,6 +92,12 @@ mod tests {
             end
         end
 
+        function load_plugin(code)
+            M = load(code)()
+            require("scope")._init_config(M)
+            return M
+        end
+
         scope = require("scope")
     "##;
 
@@ -134,6 +140,133 @@ mod tests {
     fn split_takes_a_list_of_bytes() {
         run(r#"
             expect_eq({ scope.fmt.split({ 0x61, 0x3a, 0x62 }, ":") }, { "a", "b" })
+        "#);
+    }
+
+    #[test]
+    fn send_passes_strings_and_bytes_through() {
+        run(r#"
+            local out = drive(function()
+                scope.serial.send("AT\r\n")
+                scope.rtt.send({ 0x41, 0x54 })
+            end, {
+                [":serial.send"] = function() return {} end,
+                [":rtt.send"] = function() return {} end,
+            })
+            expect_eq(out.requests, { { ":serial.send", "AT\r\n" }, { ":rtt.send", { 0x41, 0x54 } } })
+        "#);
+    }
+
+    #[test]
+    fn send_rejects_other_types() {
+        run(r#"
+            local ok, err = pcall(drive, function() scope.serial.send(42) end)
+            assert(not ok and err:find("serial.send: the message must be a string or a list of bytes, not number"), err)
+        "#);
+    }
+
+    #[test]
+    fn init_config_fills_the_defaults_and_keeps_the_plugin_values() {
+        run(r#"
+            local plugin = load_plugin([[ return { config = { default_timeout = 200 } } ]])
+            expect_eq(plugin.config, {
+                recv_as_string = false,
+                default_timeout = 200,
+                default_expected = "OK",
+                line_ending = "\r\n",
+                ignore_msg = {},
+            })
+
+            expect_eq(load_plugin("return {}").config.default_timeout, 1000)
+
+            local ok, err = pcall(load_plugin, "return { config = 1 }")
+            expect_eq(err, "M.config must be a table, not number")
+        "#);
+    }
+
+    #[test]
+    fn recv_returns_a_string_when_the_plugin_asks_for_it() {
+        run(r#"
+            local responses = {
+                [":serial.recv"] = function() return { data = { 0x4f, 0x4b } } end,
+            }
+            local recv = function() return scope.serial.recv({}) end
+
+            load_plugin("return {}")
+            expect_eq(drive(recv, responses).results, { nil, { 0x4f, 0x4b } })
+
+            load_plugin("return { config = { recv_as_string = true } }")
+            expect_eq(drive(recv, responses).results, { nil, "OK" })
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_builds_the_request_from_the_config() {
+        run(r#"
+            load_plugin([[ return { config = {
+                send_prefix = "modem at",
+                error_pattern = "\\+CME ERROR: .*",
+                default_timeout = 200,
+                ignore_msg = { "uart.*" },
+            } } ]])
+
+            local out = drive(function()
+                return scope.serial.send_and_wait("AT+COPS?")
+            end, {
+                [":serial.send_and_wait"] = function()
+                    return { lines = { "+COPS: 0,0,\"TIM\",7" }, matched = "OK" }
+                end,
+            })
+
+            expect_eq(out.requests[1][2], {
+                message = "modem at AT+COPS?\r\n",
+                expected = "OK",
+                timeout_ms = 200,
+                error_pattern = "\\+CME ERROR: .*",
+                ignore = { "uart.*" },
+            })
+            expect_eq(out.results, { { "+COPS: 0,0,\"TIM\",7" }, "OK" })
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_arguments_override_the_config() {
+        run(r#"
+            load_plugin([[ return { config = { send_prefix = "at ", line_ending = "\r" } } ]])
+
+            local out = drive(function()
+                return scope.rtt.send_and_wait({ 0x41, 0x54 }, "READY", 50)
+            end, {
+                [":rtt.send_and_wait"] = function() return { lines = {}, matched = "READY" } end,
+            })
+
+            local opts = out.requests[1][2]
+            expect_eq({ opts.message, opts.expected, opts.timeout_ms }, { "at AT\r", "READY", 50 })
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_returns_nil_and_the_reason_on_failure() {
+        run(r#"
+            load_plugin("return {}")
+
+            local out = drive(function()
+                return scope.serial.send_and_wait("AT")
+            end, {
+                [":serial.send_and_wait"] = function() return { err = "timeout" } end,
+            })
+
+            expect_eq(out.results, { nil, "timeout" })
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_rejects_a_bad_timeout() {
+        run(r#"
+            load_plugin([[ return { config = { default_timeout = "200" } } ]])
+
+            local ok, err = pcall(drive, function() scope.serial.send_and_wait("AT") end)
+            assert(not ok and err:find("the timeout must be a number of milliseconds"), err)
         "#);
     }
 

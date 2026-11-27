@@ -1,6 +1,7 @@
 pub mod bridge;
 pub mod engine;
 pub mod installed;
+pub mod line_waiter;
 pub mod messages;
 pub mod method_call;
 pub mod rx_lines;
@@ -12,7 +13,7 @@ use crate::infra::logger::Logger;
 use crate::plugin::method_call::PluginMethodCallArgs;
 use bridge::PluginMethodCallGate;
 use method_call::PluginMethodCall;
-use mlua::{Function, IntoLuaMulti, Lua, LuaOptions, Table};
+use mlua::{Function, IntoLua, IntoLuaMulti, Lua, LuaOptions, Table, Value};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -61,6 +62,9 @@ impl Plugin {
         lua.globals()
             .set("M", plugin_table)
             .map_err(|err| err.to_string())?;
+        lua.load(r#"require("scope")._init_config(M)"#)
+            .exec()
+            .map_err(|err| err.to_string())?;
 
         Ok(Self {
             name,
@@ -82,6 +86,17 @@ impl Plugin {
         let table: Table = self.lua.globals().get("M").unwrap();
 
         table.get::<_, Function>(fn_name).is_ok()
+    }
+
+    /// Whether the plugin asked, through `M.config.recv_as_string`, to get
+    /// received data as a Lua string instead of a list of bytes.
+    pub fn recv_as_string(&self) -> bool {
+        let table: Table = self.lua.globals().get("M").unwrap();
+
+        table
+            .get::<_, Table>("config")
+            .and_then(|config| config.get::<_, bool>("recv_as_string"))
+            .unwrap_or(false)
     }
 
     pub fn log_level(&self) -> LogLevel {
@@ -130,6 +145,23 @@ impl Plugin {
     }
 }
 
+/// Received bytes handed to a receive hook: a list of bytes, or a Lua string
+/// when the plugin set `M.config.recv_as_string`.
+pub struct RecvData {
+    pub bytes: Vec<u8>,
+    pub as_string: bool,
+}
+
+impl<'lua> IntoLua<'lua> for RecvData {
+    fn into_lua(self, lua: &'lua Lua) -> mlua::Result<Value<'lua>> {
+        if self.as_string {
+            lua.create_string(&self.bytes).map(Value::String)
+        } else {
+            self.bytes.into_lua(lua)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::{path::PathBuf, sync::Arc};
@@ -173,6 +205,84 @@ mod tests {
         print_table(lua);
     }
 
+    fn plugin_from(tag: &str, code: &str) -> Plugin {
+        let dir = std::env::temp_dir().join(format!("scope-plugin-test-{tag}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        super::stdlib::provision(&dir).unwrap();
+        let file = dir.join(format!("{tag}.lua"));
+        std::fs::write(&file, code).unwrap();
+
+        let plugin = Plugin::new(
+            Arc::new(tag.to_string()),
+            file.clone(),
+            file,
+            Logger::new("test".to_string()).0,
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+
+        plugin.unwrap()
+    }
+
+    #[test]
+    fn loading_gives_the_plugin_a_config_table_with_the_defaults() {
+        let plugin = plugin_from("config", "return {}");
+        let table: Table = plugin.lua.globals().get("M").unwrap();
+        let config: Table = table.get("config").unwrap();
+
+        assert_eq!(config.get::<_, u64>("default_timeout").unwrap(), 1000);
+        assert!(!plugin.recv_as_string());
+    }
+
+    #[test]
+    fn recv_as_string_follows_the_plugin_config() {
+        let plugin = plugin_from("as-string", "return { config = { recv_as_string = true } }");
+
+        assert!(plugin.recv_as_string());
+    }
+
+    #[test]
+    fn a_config_that_is_not_a_table_fails_the_load() {
+        let dir = std::env::temp_dir().join("scope-plugin-test-bad-config");
+        let _ = std::fs::remove_dir_all(&dir);
+        super::stdlib::provision(&dir).unwrap();
+        let file = dir.join("bad.lua");
+        std::fs::write(&file, "return { config = true }").unwrap();
+
+        let err = Plugin::new(
+            Arc::new("bad".to_string()),
+            file.clone(),
+            file,
+            Logger::new("test".to_string()).0,
+        )
+        .err()
+        .unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            err.contains("M.config must be a table, not boolean"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn recv_data_becomes_a_string_or_a_list_of_bytes() {
+        let lua = Lua::new();
+        let check = lua
+            .load("return function(data) return type(data), #data end")
+            .eval::<mlua::Function>()
+            .unwrap();
+        let call = |as_string| {
+            check
+                .call::<_, (String, usize)>(super::RecvData {
+                    bytes: b"OK\r\n".to_vec(),
+                    as_string,
+                })
+                .unwrap()
+        };
+
+        assert_eq!(call(true), ("string".to_string(), 4));
+        assert_eq!(call(false), ("table".to_string(), 4));
+    }
     #[test]
     fn test_plugin_new() {
         let _plugin = Plugin::new(

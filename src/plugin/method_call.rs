@@ -311,6 +311,23 @@ impl PluginMethodCall {
                 }
                 table.set("data", message).map_err(|err| err.to_string())?;
             }
+            PluginResponse::SendAndWait(Ok((lines, matched))) => {
+                let lines = lines
+                    .iter()
+                    .map(|line| lua.create_string(line))
+                    .collect::<mlua::Result<Vec<_>>>()
+                    .and_then(|lines| lua.create_sequence_from(lines))
+                    .map_err(|err| err.to_string())?;
+                let matched = lua.create_string(matched).map_err(|err| err.to_string())?;
+
+                table.set("lines", lines).map_err(|err| err.to_string())?;
+                table
+                    .set("matched", matched)
+                    .map_err(|err| err.to_string())?;
+            }
+            PluginResponse::SendAndWait(Err(err)) => {
+                table.set("err", err).map_err(|err| err.to_string())?;
+            }
             PluginResponse::RttRead { err, data } => {
                 if err.is_empty() {
                     table

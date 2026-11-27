@@ -11,6 +11,56 @@ local M = {
     }
 }
 
+local CONFIG_DEFAULTS = {
+    recv_as_string = false,
+    default_timeout = 1000,
+    default_expected = "OK",
+    line_ending = "\r\n",
+    ignore_msg = {},
+}
+
+function M._init_config(plugin)
+    if plugin.config == nil then
+        plugin.config = {}
+    end
+
+    if type(plugin.config) ~= "table" then
+        error("M.config must be a table, not " .. type(plugin.config), 0)
+    end
+
+    for key, value in pairs(CONFIG_DEFAULTS) do
+        if plugin.config[key] == nil then
+            plugin.config[key] = type(value) == "table" and {} or value
+        end
+    end
+end
+
+local function config(key)
+    local plugin = rawget(_G, "M")
+
+    if type(plugin) == "table" and type(plugin.config) == "table" and plugin.config[key] ~= nil then
+        return plugin.config[key]
+    end
+
+    return CONFIG_DEFAULTS[key]
+end
+
+local function recv_data(data)
+    if config("recv_as_string") then
+        return M.fmt.to_str(data)
+    end
+
+    return data
+end
+
+local function bytes_arg(fn_name, msg, level)
+    if type(msg) ~= "string" and type(msg) ~= "table" then
+        error(fn_name .. ": the message must be a string or a list of bytes, not " .. type(msg), level + 1)
+    end
+
+    return msg
+end
+
 function M.fmt.to_str(val)
     if type(val) == "table" then
         local bytearr = {}
@@ -89,12 +139,56 @@ function M.serial.info()
 end
 
 function M.serial.send(msg)
-    coroutine.yield({ ":serial.send", msg })
+    coroutine.yield({ ":serial.send", bytes_arg("serial.send", msg, 2) })
 end
 
 function M.serial.recv(opts)
     local res = coroutine.yield({ ":serial.recv", opts })
-    return res.err, res.data
+    return res.err, recv_data(res.data)
+end
+
+local function send_and_wait(interface, msg, expected, timeout_ms)
+    local fn_name = interface .. ".send_and_wait"
+    local text = M.fmt.to_str(bytes_arg(fn_name, msg, 3))
+
+    local prefix = config("send_prefix")
+    if prefix ~= nil and prefix ~= "" then
+        text = prefix .. (prefix:match("%s$") and "" or " ") .. text
+    end
+    text = text .. config("line_ending")
+
+    local opts = {
+        message = text,
+        expected = expected or config("default_expected"),
+        timeout_ms = timeout_ms or config("default_timeout"),
+        error_pattern = config("error_pattern"),
+        ignore = config("ignore_msg"),
+    }
+
+    if type(opts.expected) ~= "string" then
+        error(fn_name .. ": the expected message must be a string pattern", 3)
+    end
+    if type(opts.timeout_ms) ~= "number" or opts.timeout_ms < 0 then
+        error(fn_name .. ": the timeout must be a number of milliseconds", 3)
+    end
+    if opts.error_pattern ~= nil and type(opts.error_pattern) ~= "string" then
+        error(fn_name .. ": config.error_pattern must be a string pattern", 3)
+    end
+    if type(opts.ignore) ~= "table" then
+        error(fn_name .. ": config.ignore_msg must be a list of string patterns", 3)
+    end
+
+    local res = coroutine.yield({ ":" .. fn_name, opts })
+    if res.err ~= nil then
+        return nil, res.err
+    end
+
+    return res.lines, res.matched
+end
+
+function M.serial.send_and_wait(msg, expected, timeout_ms)
+    local lines, matched = send_and_wait("serial", msg, expected, timeout_ms)
+    return lines, matched
 end
 
 function M.rtt.info()
@@ -103,12 +197,17 @@ function M.rtt.info()
 end
 
 function M.rtt.send(msg)
-    coroutine.yield({ ":rtt.send", msg })
+    coroutine.yield({ ":rtt.send", bytes_arg("rtt.send", msg, 2) })
 end
 
 function M.rtt.recv(opts)
     local res = coroutine.yield({ ":rtt.recv", opts })
-    return res.err, res.data
+    return res.err, recv_data(res.data)
+end
+
+function M.rtt.send_and_wait(msg, expected, timeout_ms)
+    local lines, matched = send_and_wait("rtt", msg, expected, timeout_ms)
+    return lines, matched
 end
 
 function M.rtt.read(opts)

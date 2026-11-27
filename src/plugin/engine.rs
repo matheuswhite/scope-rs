@@ -1,7 +1,8 @@
 use super::{
-    Plugin, PluginUnloadMode,
+    Plugin, PluginUnloadMode, RecvData,
     bridge::{PluginEngineGate, PluginMethodCallGate},
     installed::Installed,
+    line_waiter::{LineWaiter, WaitOutcome, WaitResult},
     messages::{self, PluginExternalRequest, PluginMethodMessage, PluginResponse},
     rx_lines::RxLines,
     stdlib::{self, STDLIB},
@@ -169,6 +170,7 @@ impl PluginEngine {
         let mut engine_gate = PluginEngineGate::new(32);
         let mut interface_recv_reqs = vec![];
         let mut rtt_read_reqs = vec![];
+        let mut waits: Vec<PendingWait> = vec![];
         let mut rx_lines = RxLines::default();
         let hooks = RecvHooks::of(&private.interface_type);
         let err_regex = Regex::new(r#".*: \[string ".*"]:"#).unwrap();
@@ -527,16 +529,7 @@ impl PluginEngine {
                     }
                     super::messages::PluginExternalRequest::SerialSend { message } => {
                         match private.interface_type {
-                            InterfaceType::Serial => {
-                                let id = private.tx_consumer.id();
-                                private.tx_producer.produce_without_loopback(
-                                    Arc::new(TimedBytes {
-                                        timestamp: Local::now(),
-                                        message,
-                                    }),
-                                    id,
-                                );
-                            }
+                            InterfaceType::Serial => private.transmit(message),
                             _ => {
                                 warning!(
                                     private.logger,
@@ -602,16 +595,7 @@ impl PluginEngine {
                     }
                     super::messages::PluginExternalRequest::RttSend { message } => {
                         match private.interface_type {
-                            InterfaceType::Rtt => {
-                                let id = private.tx_consumer.id();
-                                private.tx_producer.produce_without_loopback(
-                                    Arc::new(TimedBytes {
-                                        timestamp: Local::now(),
-                                        message,
-                                    }),
-                                    id,
-                                );
-                            }
+                            InterfaceType::Rtt => private.transmit(message),
                             _ => {
                                 warning!(
                                     private.logger,
@@ -718,6 +702,33 @@ impl PluginEngine {
                                 })
                         }
                     },
+                    PluginExternalRequest::SendAndWait {
+                        interface,
+                        message,
+                        spec,
+                    } => {
+                        if interface != private.interface_type {
+                            let module = RecvHooks::of(&interface).prefix;
+                            let err = format!(
+                                "Plugin requested :{module}.send_and_wait but the active interface is not {module}."
+                            );
+                            warning!(private.logger, "{}", err);
+                            Some(PluginResponse::SendAndWait(Err(err)))
+                        } else {
+                            match LineWaiter::new(&spec) {
+                                Ok(waiter) => {
+                                    private.transmit(message);
+                                    waits.push(PendingWait {
+                                        plugin_name: plugin_name.clone(),
+                                        method_id,
+                                        waiter,
+                                    });
+                                    None
+                                }
+                                Err(err) => Some(PluginResponse::SendAndWait(Err(err))),
+                            }
+                        }
+                    }
                     super::messages::PluginExternalRequest::Log {
                         level,
                         message,
@@ -913,6 +924,16 @@ impl PluginEngine {
                 },
             );
 
+            let now = Instant::now();
+            waits.retain(|wait| {
+                if !wait.waiter.expired(now) {
+                    return true;
+                }
+
+                wait.respond(&engine_gate, Err("timeout".to_string()));
+                false
+            });
+
             // Drain the bus: headless publishes one message per received byte,
             // and taking a single one per pass would let the line hook fall
             // behind the wire.
@@ -920,10 +941,14 @@ impl PluginEngine {
                 // Deprecated: gets the message in whatever shape the interface
                 // published it, which differs between the TUI and headless.
                 for plugin in plugin_list.values_mut() {
+                    let data = RecvData {
+                        bytes: rx_msg.message.clone(),
+                        as_string: plugin.recv_as_string(),
+                    };
                     plugin.spawn_method_call(
                         engine_gate.new_method_call_gate(),
                         hooks.legacy,
-                        rx_msg.message.clone(),
+                        data,
                         false,
                     );
                 }
@@ -959,14 +984,35 @@ impl PluginEngine {
                     if !plugin.defines(hooks.line) {
                         continue;
                     }
+                    let as_string = plugin.recv_as_string();
                     for line in framed.lines.iter() {
                         plugin.spawn_method_call(
                             engine_gate.new_method_call_gate(),
                             hooks.line,
-                            line.clone(),
+                            RecvData {
+                                bytes: line.clone(),
+                                as_string,
+                            },
                             false,
                         );
                     }
+                }
+
+                for line in framed.lines.iter() {
+                    waits.retain_mut(|wait| {
+                        let Some(outcome) = wait.waiter.feed(line) else {
+                            return true;
+                        };
+
+                        let result = match outcome {
+                            WaitOutcome::Matched { lines, matched } => Ok((lines, matched)),
+                            WaitOutcome::Failed { line } => {
+                                Err(String::from_utf8_lossy(&line).into_owned())
+                            }
+                        };
+                        wait.respond(&engine_gate, result);
+                        false
+                    });
                 }
 
                 for interface_recv_req in interface_recv_reqs.drain(..) {
@@ -1109,8 +1155,27 @@ impl PluginEngine {
     }
 }
 
+/// A `send_and_wait` call still waiting for its expected line.
+struct PendingWait {
+    plugin_name: Arc<String>,
+    method_id: u64,
+    waiter: LineWaiter,
+}
+
+impl PendingWait {
+    fn respond(&self, gate: &PluginEngineGate, result: WaitResult) {
+        let _ = gate.sender.send(PluginMethodMessage {
+            plugin_name: self.plugin_name.clone(),
+            method_id: self.method_id,
+            data: PluginResponse::SendAndWait(result),
+        });
+    }
+}
+
 /// The plugin hooks that receive data from the active interface (issue #250).
 struct RecvHooks {
+    /// The interface's module in `scope.lua` (`serial`, `rtt`).
+    prefix: &'static str,
     /// Deprecated: called with each message on the RX bus as the interface
     /// published it — a line in the TUI, a byte (serial) or a read chunk (RTT)
     /// in headless.
@@ -1124,11 +1189,13 @@ struct RecvHooks {
 
 impl RecvHooks {
     const SERIAL: Self = Self {
+        prefix: "serial",
         legacy: "on_serial_recv",
         byte: "on_serial_recv_byte",
         line: "on_serial_recv_line",
     };
     const RTT: Self = Self {
+        prefix: "rtt",
         legacy: "on_rtt_recv",
         byte: "on_rtt_recv_byte",
         line: "on_rtt_recv_line",
@@ -1148,6 +1215,17 @@ impl RecvHooks {
 }
 
 impl PluginEngineConnections {
+    /// Sends `message` on the active interface, as the plugin engine.
+    fn transmit(&self, message: Vec<u8>) {
+        self.tx_producer.produce_without_loopback(
+            Arc::new(TimedBytes {
+                timestamp: Local::now(),
+                message,
+            }),
+            self.tx_consumer.id(),
+        );
+    }
+
     // One argument per channel end or setting `main` wires in; bundling them
     // would only move the same list into a struct literal.
     #[allow(clippy::too_many_arguments)]
