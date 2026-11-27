@@ -271,6 +271,225 @@ mod tests {
     }
 
     #[test]
+    fn a_suite_runs_the_hooks_around_each_test_in_order() {
+        run(r#"
+            local calls = {}
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.setup_suite() table.insert(CALLS, "setup_suite") return "fx" end
+                function M.teardown_suite(results, fixture)
+                    table.insert(CALLS, "teardown_suite " .. fixture)
+                    RESULTS = results
+                end
+                function M.setup_test(name, fixture) table.insert(CALLS, "setup_test " .. name .. " " .. fixture) end
+                function M.teardown_test(index, total, name, result)
+                    table.insert(CALLS, "teardown_test " .. index .. "/" .. total .. " " .. name .. " " .. result)
+                end
+                function M.test_one(fixture) table.insert(CALLS, "one " .. fixture) end
+                function M.test_two() test.assert(false) end
+                function M.test_three() test.skip() end
+                return M
+            ]])
+            CALLS = calls
+
+            drive(scope.test._run_suite, {}, plugin, { "test_one", "test_two", "test_three" })
+
+            expect_eq(calls, {
+                "setup_suite",
+                "setup_test one fx", "one fx", "teardown_test 1/3 one pass",
+                "setup_test two fx", "teardown_test 2/3 two fail",
+                "setup_test three fx", "teardown_test 3/3 three skip",
+                "teardown_suite fx",
+            })
+            expect_eq(RESULTS, {
+                ok = 1, fail = 1, skip = 1, total = 3,
+                tests = {
+                    { name = "one", result = "pass" },
+                    { name = "two", result = "fail" },
+                    { name = "three", result = "skip" },
+                },
+            })
+        "#);
+    }
+
+    #[test]
+    fn a_failed_assert_stops_the_test_and_logs_its_line() {
+        run(r#"
+            local reached = false
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.test_cops()
+                    test.assert_eq("CREG", "COPS")
+                    REACHED = true
+                end
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {}, plugin, { "test_cops" })
+
+            expect_eq(REACHED, nil)
+            expect_eq(out.logs, {
+                'error: cops: 4: expected "COPS", got "CREG"',
+                "error: [1/1] cops: fail",
+                "error: 0 passed, 1 failed, 0 skipped",
+            })
+        "#);
+    }
+
+    #[test]
+    fn asserts_describe_what_did_not_match() {
+        run(r#"
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.test_a() test.assert(nil, "no answer") end
+                function M.test_b() test.assert_opt(3, { 0, 1, 2, 4 }) end
+                function M.test_c() test.assert_re("12a", "\\d+") end
+                function M.test_d() test.assert_eq({ 1, { 2 } }, { 1, { 3 } }, "bytes") end
+                function M.test_e() test.assert_re("0", "\\d+") test.assert_eq({ 1, { 2 } }, { 1, { 2 } }) end
+                function M.teardown_test() end
+                function M.teardown_suite() end
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {}, plugin, { "test_a", "test_b", "test_c", "test_d", "test_e" })
+
+            expect_eq(out.logs, {
+                "error: a: 3: no answer",
+                "error: b: 4: 3 is not one of {0, 1, 2, 4}",
+                'error: c: 5: "12a" does not match \\d+',
+                "error: d: 6: bytes: expected {1, {3}}, got {1, {2}}",
+            })
+        "#);
+    }
+
+    #[test]
+    fn a_skip_reason_and_a_runtime_error_are_logged() {
+        run(r#"
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.test_skip() test.skip("no SIM") end
+                function M.test_crash() local cops = nil; return cops.mode end
+                function M.teardown_test() end
+                function M.teardown_suite() end
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {}, plugin, { "test_skip", "test_crash" })
+
+            expect_eq(out.logs, {
+                "warning: skip: skipped: no SIM",
+                "error: crash: 4: attempt to index a nil value (local 'cops')",
+            })
+        "#);
+    }
+
+    #[test]
+    fn a_failed_setup_suite_runs_no_test() {
+        run(r#"
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.setup_suite() error("no modem", 0) end
+                function M.setup_test() RAN = true end
+                function M.test_one() RAN = true end
+                function M.teardown_suite(results) RESULTS = results end
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {}, plugin, { "test_one" })
+
+            expect_eq(RAN, nil)
+            expect_eq(RESULTS.fail, 1)
+            expect_eq(out.logs, { "error: setup_suite: no modem" })
+        "#);
+    }
+
+    #[test]
+    fn a_skip_in_setup_suite_skips_every_test() {
+        run(r#"
+            local plugin = load_plugin([[
+                local test = require("scope").test
+                local M = {}
+                function M.setup_suite() test.skip() end
+                function M.test_one() end
+                function M.test_two() end
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {}, plugin, { "test_one", "test_two" })
+
+            expect_eq(out.logs, { "success: 0 passed, 0 failed, 2 skipped" })
+        "#);
+    }
+
+    #[test]
+    fn the_issue_example_suite_runs_against_a_modem() {
+        run(r#"
+            local plugin = load_plugin([[
+                local scope = require("scope")
+                local at = scope.codec.at
+                local serial = scope.serial
+                local test = scope.test
+                local M = {}
+
+                function M.setup_suite()
+                    M.config.error_pattern = "\\+CMR.*"
+                    M.config.default_timeout = 200
+                    M.config.send_prefix = "modem at"
+                    M.config.ignore_msg = { "uart" }
+                end
+
+                function M.test_at()
+                    test.skip()
+                end
+
+                function M.test_cops()
+                    local lines = serial.send_and_wait("AT+COPS?")
+                    test.assert(lines)
+
+                    local cops = at.decode(lines[1])
+                    assert(cops)
+
+                    test.assert_eq(cops.id, "COPS")
+                    test.assert_opt(cops.mode.value, { 0, 1, 2, 4 })
+                    test.assert_opt(cops.format.value, { 0, 1, 2 })
+                    test.assert_re(cops.format.raw, "\\d+")
+                    test.assert_eq(cops.provider.value, "TIMBrasil")
+                    test.assert_eq(cops.act.value, 7)
+                end
+
+                return M
+            ]])
+
+            local out = drive(scope.test._run_suite, {
+                [":serial.send_and_wait"] = function(req)
+                    expect_eq(req[2].message, "modem at AT+COPS?\r\n")
+                    expect_eq(req[2].ignore, { "uart" })
+                    return { lines = { '+COPS: 0,0,"TIMBrasil",7' }, matched = "OK" }
+                end,
+            }, plugin, { "test_at", "test_cops" })
+
+            expect_eq(out.logs, {
+                "warning: [1/2] at: skip",
+                "success: [2/2] cops: pass",
+                "success: 1 passed, 0 failed, 1 skipped",
+            })
+        "#);
+    }
+
+    #[test]
+    fn a_test_signal_reads_as_its_message() {
+        run(r#"
+            local ok, err = pcall(scope.test.skip, "no SIM")
+            expect_eq(tostring(err), "skipped: no SIM")
+        "#);
+    }
+
+    #[test]
     fn decode_reads_a_cops_read_response() {
         run(r#"
             local cops = scope.codec.at.decode('+COPS: 0,0,"TIMBrasil",7\r\n')

@@ -18,6 +18,17 @@ use std::{
     sync::Arc,
 };
 
+/// How the coroutine running a method call enters the plugin.
+#[derive(Clone, Copy)]
+pub enum Entry {
+    /// `M.<fn_name>(args)`
+    Args,
+    /// `M.<fn_name>(table.unpack(args))`
+    Unpack,
+    /// The test runner of `scope.lua`, over the `test_*` names in the args.
+    TestSuite,
+}
+
 pub struct PluginMethodCallArgs<T> {
     pub plugin_name: Arc<String>,
     pub fn_name: String,
@@ -26,7 +37,7 @@ pub struct PluginMethodCallArgs<T> {
     pub initial_args: T,
     pub gate: PluginMethodCallGate,
     pub logger: Logger,
-    pub has_unpack: bool,
+    pub entry: Entry,
 }
 
 pub struct PluginMethodCall {
@@ -39,7 +50,7 @@ pub struct PluginMethodCall {
 }
 
 impl PluginMethodCall {
-    pub fn spawn<T: for<'a> IntoLuaMulti<'a> + 'static>(args: PluginMethodCallArgs<T>) {
+    pub fn spawn<T: for<'a> IntoLuaMulti<'a> + 'static>(args: PluginMethodCallArgs<T>) -> u64 {
         let PluginMethodCallArgs {
             plugin_name,
             fn_name,
@@ -48,7 +59,7 @@ impl PluginMethodCall {
             initial_args,
             gate,
             logger,
-            has_unpack,
+            entry,
         } = args;
         let mut hasher = DefaultHasher::new();
         plugin_name.hash(&mut hasher);
@@ -69,7 +80,7 @@ impl PluginMethodCall {
         };
 
         tokio::task::spawn_local(async move {
-            if let Err(err) = pmc.call_fn(&lua, initial_args, has_unpack).await {
+            if let Err(err) = pmc.call_fn(&lua, initial_args, entry).await {
                 error!(logger, "{}", err);
             }
 
@@ -81,27 +92,30 @@ impl PluginMethodCall {
                 })
                 .await;
         });
+
+        id
     }
 
     async fn call_fn<'a>(
         mut self,
         lua: &'a Lua,
         initial_args: impl IntoLuaMulti<'a>,
-        has_unpack: bool,
+        entry: Entry,
     ) -> Result<(), String> {
         let plugin_table: Table = lua.globals().get("M").unwrap();
 
-        let Ok(_plugin_fn) = plugin_table
-            .get::<_, Function>(self.fn_name.as_str())
-            .map_err(|err| err.to_string())
-        else {
+        if !matches!(entry, Entry::TestSuite)
+            && plugin_table
+                .get::<_, Function>(self.fn_name.as_str())
+                .is_err()
+        {
             return Ok(());
-        };
+        }
 
-        let thread_code = if has_unpack {
-            format!(include_str!("unpack.lua"), self.fn_name)
-        } else {
-            format!(include_str!("thread.lua"), self.fn_name)
+        let thread_code = match entry {
+            Entry::Args => format!(include_str!("thread.lua"), self.fn_name),
+            Entry::Unpack => format!(include_str!("unpack.lua"), self.fn_name),
+            Entry::TestSuite => include_str!("suite.lua").to_string(),
         };
         let thread: Thread = lua
             .load(thread_code)

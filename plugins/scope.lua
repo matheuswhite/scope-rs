@@ -6,6 +6,7 @@ local M = {
     sys = {},
     re = {},
     rtt = {},
+    test = {},
     codec = {
         at = require("codec.at")
     }
@@ -306,6 +307,236 @@ end
 function M.re.match(str, pattern)
     local res = coroutine.yield({ ":re.match", str, pattern })
     return res.is_match
+end
+
+local Signal = {}
+
+Signal.__tostring = function(signal)
+    if signal.kind == "skip" then
+        return "skipped" .. (signal.msg and (": " .. signal.msg) or "")
+    end
+
+    if signal.line then
+        return signal.line .. ": " .. signal.msg
+    end
+
+    return signal.msg
+end
+
+-- Level 4 is the test's line only when an assert function calls fail directly.
+local function fail(msg)
+    local _, where = pcall(error, "", 4)
+    error(setmetatable({ kind = "fail", msg = msg, line = where:match(":(%d+): $") }, Signal), 0)
+end
+
+local function repr(value, depth)
+    depth = depth or 0
+
+    if type(value) == "string" then
+        return '"' .. value:gsub("\r", "\\r"):gsub("\n", "\\n") .. '"'
+    end
+
+    if type(value) ~= "table" or depth >= 3 then
+        return tostring(value)
+    end
+
+    local items = {}
+    for _, item in ipairs(value) do
+        table.insert(items, repr(item, depth + 1))
+    end
+
+    local keys = {}
+    for key in pairs(value) do
+        if math.type(key) ~= "integer" or key < 1 or key > #value then
+            table.insert(keys, key)
+        end
+    end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    for _, key in ipairs(keys) do
+        table.insert(items, tostring(key) .. " = " .. repr(value[key], depth + 1))
+    end
+
+    return "{" .. table.concat(items, ", ") .. "}"
+end
+
+local function equal(a, b)
+    if a == b then
+        return true
+    end
+
+    if type(a) ~= "table" or type(b) ~= "table" then
+        return false
+    end
+
+    for key, value in pairs(a) do
+        if not equal(value, b[key]) then
+            return false
+        end
+    end
+
+    for key in pairs(b) do
+        if a[key] == nil then
+            return false
+        end
+    end
+
+    return true
+end
+
+local function with(msg, detail)
+    if msg ~= nil then
+        return tostring(msg) .. ": " .. detail
+    end
+
+    return detail
+end
+
+function M.test.assert(cond, msg)
+    if not cond then
+        fail(msg ~= nil and tostring(msg) or "assertion failed")
+    end
+end
+
+function M.test.assert_eq(actual, expected, msg)
+    if not equal(actual, expected) then
+        fail(with(msg, "expected " .. repr(expected) .. ", got " .. repr(actual)))
+    end
+end
+
+function M.test.assert_opt(value, options, msg)
+    assert(type(options) == "table", "test.assert_opt: the options must be a list")
+
+    for _, option in ipairs(options) do
+        if equal(value, option) then
+            return
+        end
+    end
+
+    fail(with(msg, repr(value) .. " is not one of " .. repr(options)))
+end
+
+function M.test.assert_re(value, pattern, msg)
+    assert(type(pattern) == "string", "test.assert_re: the pattern must be a string")
+
+    local text = value
+    if type(value) == "table" then
+        text = M.fmt.to_str(value)
+    elseif type(value) == "number" then
+        text = tostring(value)
+    end
+
+    if type(text) ~= "string" or not M.re.match(text, "^(?:" .. pattern .. ")$") then
+        fail(with(msg, repr(value) .. " does not match " .. pattern))
+    end
+end
+
+function M.test.skip(reason)
+    error(setmetatable({ kind = "skip", msg = reason }, Signal), 0)
+end
+
+local function result_of(ok, err)
+    if ok then
+        return "pass"
+    end
+
+    if getmetatable(err) == Signal then
+        return err.kind
+    end
+
+    return "fail"
+end
+
+local function describe(err)
+    if getmetatable(err) == Signal then
+        return tostring(err)
+    end
+
+    return (tostring(err):gsub('^%[string ".-"%]:', ""))
+end
+
+local function report(name, result, err)
+    if result == "fail" then
+        M.log.error(name .. ": " .. describe(err))
+    elseif result == "skip" and err.msg ~= nil then
+        M.log.warning(name .. ": " .. describe(err))
+    end
+end
+
+local function default_teardown_test(index, total, name, result)
+    local text = "[" .. index .. "/" .. total .. "] " .. name .. ": " .. result
+
+    if result == "pass" then
+        M.log.success(text)
+    elseif result == "skip" then
+        M.log.warning(text)
+    else
+        M.log.error(text)
+    end
+end
+
+local function default_teardown_suite(results)
+    local text = string.format("%d passed, %d failed, %d skipped", results.ok, results.fail, results.skip)
+
+    if results.fail > 0 then
+        M.log.error(text)
+    else
+        M.log.success(text)
+    end
+end
+
+local function run_test(plugin, fn_name, name, fixture, setup_test)
+    local ok, err = pcall(setup_test, name, fixture)
+    local label = name .. " (setup_test)"
+
+    if ok then
+        ok, err = pcall(plugin[fn_name], fixture)
+        label = name
+    end
+
+    local result = result_of(ok, err)
+    report(label, result, err)
+
+    return result
+end
+
+function M.test._run_suite(plugin, tests)
+    local noop = function() end
+    local setup_suite = plugin.setup_suite or noop
+    local teardown_suite = plugin.teardown_suite or default_teardown_suite
+    local setup_test = plugin.setup_test or noop
+    local teardown_test = plugin.teardown_test or default_teardown_test
+    local results = { ok = 0, fail = 0, skip = 0, total = #tests, tests = {} }
+
+    local ok, fixture = pcall(setup_suite)
+    local suite_result
+    if not ok then
+        suite_result = result_of(ok, fixture)
+        report("setup_suite", suite_result, fixture)
+        fixture = nil
+    end
+
+    for index, fn_name in ipairs(tests) do
+        local name = (fn_name:gsub("^test_", ""))
+        local result = suite_result
+
+        if result == nil then
+            result = run_test(plugin, fn_name, name, fixture, setup_test)
+
+            local td_ok, td_err = pcall(teardown_test, index, #tests, name, result, fixture)
+            if not td_ok then
+                M.log.error(name .. " (teardown_test): " .. describe(td_err))
+            end
+        end
+
+        local key = result == "pass" and "ok" or result
+        results[key] = results[key] + 1
+        table.insert(results.tests, { name = name, result = result })
+    end
+
+    local td_ok, td_err = pcall(teardown_suite, results, fixture)
+    if not td_ok then
+        M.log.error("teardown_suite: " .. describe(td_err))
+    end
 end
 
 return M

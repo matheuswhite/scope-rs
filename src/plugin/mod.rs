@@ -7,12 +7,13 @@ pub mod method_call;
 pub mod rx_lines;
 pub mod shell;
 pub mod stdlib;
+pub mod suite;
 
 use crate::infra::LogLevel;
 use crate::infra::logger::Logger;
 use crate::plugin::method_call::PluginMethodCallArgs;
 use bridge::PluginMethodCallGate;
-use method_call::PluginMethodCall;
+use method_call::{Entry, PluginMethodCall};
 use mlua::{Function, IntoLua, IntoLuaMulti, Lua, LuaOptions, Table, Value};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -88,6 +89,27 @@ impl Plugin {
         table.get::<_, Function>(fn_name).is_ok()
     }
 
+    /// The plugin's `test_*` functions, in the order they are defined.
+    pub fn tests(&self) -> Vec<String> {
+        let table: Table = self.lua.globals().get("M").unwrap();
+        let mut tests = table
+            .pairs::<Value, Value>()
+            .filter_map(Result::ok)
+            .filter_map(|(key, value)| {
+                let (Value::String(key), Value::Function(function)) = (key, value) else {
+                    return None;
+                };
+                let name = key.to_str().ok()?;
+                let short = name.strip_prefix(suite::TEST_PREFIX)?;
+
+                (!short.is_empty()).then(|| (function.info().line_defined, name.to_string()))
+            })
+            .collect::<Vec<_>>();
+        tests.sort();
+
+        tests.into_iter().map(|(_, name)| name).collect()
+    }
+
     /// Whether the plugin asked, through `M.config.recv_as_string`, to get
     /// received data as a Lua string instead of a list of bytes.
     pub fn recv_as_string(&self) -> bool {
@@ -126,11 +148,37 @@ impl Plugin {
         initial_args: impl for<'a> IntoLuaMulti<'a> + 'static,
         has_unpack: bool,
     ) {
+        let entry = if has_unpack {
+            Entry::Unpack
+        } else {
+            Entry::Args
+        };
+
+        self.spawn(gate, fn_name, initial_args, entry);
+    }
+
+    /// Runs `tests` (full `test_*` names) as a suite, and returns the id of the
+    /// method call running it.
+    pub fn spawn_test_suite(
+        &mut self,
+        gate: PluginMethodCallGate,
+        tests: Vec<String>,
+    ) -> Option<u64> {
+        self.spawn(gate, "test", tests, Entry::TestSuite)
+    }
+
+    fn spawn(
+        &mut self,
+        gate: PluginMethodCallGate,
+        fn_name: &str,
+        initial_args: impl for<'a> IntoLuaMulti<'a> + 'static,
+        entry: Entry,
+    ) -> Option<u64> {
         if !matches!(self.unload_mode, PluginUnloadMode::None) {
-            return;
+            return None;
         }
 
-        PluginMethodCall::spawn(PluginMethodCallArgs {
+        let id = PluginMethodCall::spawn(PluginMethodCallArgs {
             plugin_name: self.name.clone(),
             fn_name: fn_name.to_string(),
             index: self.index,
@@ -138,10 +186,12 @@ impl Plugin {
             initial_args,
             gate,
             logger: self.logger.clone().with_id(fn_name.to_string()),
-            has_unpack,
+            entry,
         });
 
         self.index = self.index.overflowing_add_signed(1).0;
+
+        Some(id)
     }
 }
 
@@ -224,6 +274,21 @@ mod tests {
     }
 
     #[test]
+    fn tests_are_listed_in_definition_order() {
+        let plugin = plugin_from(
+            "order",
+            "local M = { test_ = 1 }\n\
+             function M.test_zeta() end\n\
+             function M.helper() end\n\
+             function M.test_alpha() end\n\
+             M.test_value = 3\n\
+             return M\n",
+        );
+
+        assert_eq!(plugin.tests(), ["test_zeta", "test_alpha"]);
+    }
+
+    #[test]
     fn loading_gives_the_plugin_a_config_table_with_the_defaults() {
         let plugin = plugin_from("config", "return {}");
         let table: Table = plugin.lua.globals().get("M").unwrap();
@@ -283,6 +348,7 @@ mod tests {
         assert_eq!(call(true), ("string".to_string(), 4));
         assert_eq!(call(false), ("table".to_string(), 4));
     }
+
     #[test]
     fn test_plugin_new() {
         let _plugin = Plugin::new(

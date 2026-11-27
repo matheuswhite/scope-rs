@@ -6,6 +6,7 @@ use super::{
     messages::{self, PluginExternalRequest, PluginMethodMessage, PluginResponse},
     rx_lines::RxLines,
     stdlib::{self, STDLIB},
+    suite,
 };
 use crate::{
     error, info,
@@ -119,6 +120,10 @@ pub enum PluginEngineCommand {
         err: String,
         data: Vec<u8>,
     },
+    /// `!test` with its arguments, resolved by [`suite::select`].
+    RunTests {
+        args: Vec<String>,
+    },
     Exit,
 }
 
@@ -171,6 +176,7 @@ impl PluginEngine {
         let mut interface_recv_reqs = vec![];
         let mut rtt_read_reqs = vec![];
         let mut waits: Vec<PendingWait> = vec![];
+        let mut running_suites: HashMap<Arc<String>, u64> = HashMap::new();
         let mut rx_lines = RxLines::default();
         let hooks = RecvHooks::of(&private.interface_type);
         let err_regex = Regex::new(r#".*: \[string ".*"]:"#).unwrap();
@@ -454,6 +460,37 @@ impl PluginEngine {
                             );
                         }
                     }
+                    PluginEngineCommand::RunTests { args } => {
+                        let catalog = plugin_list
+                            .iter()
+                            .map(|(name, plugin)| (name.clone(), plugin.tests()))
+                            .collect::<Vec<_>>();
+                        let selection = match suite::select(&args, &catalog) {
+                            Ok(selection) => selection,
+                            Err(err) => {
+                                error!(private.logger, "{}", err);
+                                continue 'plugin_engine_loop;
+                            }
+                        };
+
+                        if running_suites.contains_key(&selection.plugin) {
+                            error!(
+                                private.logger,
+                                "A test suite is already running on plugin \"{}\"",
+                                selection.plugin
+                            );
+                            continue 'plugin_engine_loop;
+                        }
+
+                        let Some(plugin) = plugin_list.get_mut(&selection.plugin) else {
+                            continue 'plugin_engine_loop;
+                        };
+                        if let Some(method_id) = plugin
+                            .spawn_test_suite(engine_gate.new_method_call_gate(), selection.tests)
+                        {
+                            running_suites.insert(selection.plugin, method_id);
+                        }
+                    }
                     PluginEngineCommand::RttReadResult {
                         plugin_name,
                         method_id,
@@ -500,6 +537,12 @@ impl PluginEngine {
                 data,
             }) = engine_gate.receiver.try_recv()
             {
+                if matches!(data, PluginExternalRequest::Finish { .. })
+                    && running_suites.get(&plugin_name) == Some(&method_id)
+                {
+                    running_suites.remove(&plugin_name);
+                }
+
                 let Some(plugin) = plugin_list.remove(&plugin_name) else {
                     continue;
                 };
@@ -1106,7 +1149,7 @@ impl PluginEngine {
     ) -> Result<(), String> {
         // These names belong to the embedded standard-library modules the engine
         // writes into the plugins directory; a plugin may not shadow them.
-        if matches!(plugin_name.as_str(), "scope" | "shell") {
+        if matches!(plugin_name.as_str(), "scope" | "shell" | "test") {
             return Err(format!("\"{}\" is a reserved plugin name", plugin_name));
         }
 
@@ -1256,9 +1299,17 @@ impl PluginEngineConnections {
 
 #[cfg(test)]
 mod tests {
-    use super::{STDLIB, stage_plugin};
+    use super::{PluginEngine, PluginEngineCommand, PluginEngineConnections, STDLIB, stage_plugin};
+    use crate::infra::{logger::Logger, messages::TimedBytes, mpmc::Channel, task::Shared};
+    use crate::interfaces::{
+        InterfaceShared, InterfaceType,
+        serial_if::{SerialSetup, SerialShared},
+    };
+    use chrono::Local;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::{Arc, mpsc};
+    use std::time::{Duration, Instant};
 
     /// A self-cleaning unique temp directory (this crate has no tempfile dev-dep).
     struct TempDir(PathBuf);
@@ -1362,5 +1413,134 @@ mod tests {
         let dest = stage_plugin(&plugins, &source, "p").unwrap();
         assert_eq!(dest, source);
         assert_eq!(fs::read_to_string(&dest).unwrap(), "-- inplace\n");
+    }
+
+    const MODEM_PLUGIN: &str = r#"
+local scope = require("scope")
+local at = scope.codec.at
+local serial = scope.serial
+local test = scope.test
+
+local M = {
+    config = {
+        send_prefix = "modem at",
+        ignore_msg = { "uart.*" },
+        error_pattern = "\\+CME ERROR: .*",
+        default_timeout = 2000,
+    },
+}
+
+function M.test_cops()
+    local lines, matched = serial.send_and_wait("AT+COPS?")
+    test.assert(lines, matched)
+    test.assert_eq(matched, "OK")
+    test.assert_eq(at.decode(lines[1]).provider.value, "TIMBrasil")
+end
+
+function M.test_error()
+    test.assert_eq({ serial.send_and_wait("AT+CSQ") }, { nil, "+CME ERROR: 10" })
+end
+
+function M.test_timeout()
+    test.assert_eq({ serial.send_and_wait("AT+SILENT", "OK", 100) }, { nil, "timeout" })
+end
+
+return M
+"#;
+
+    fn modem_reply(command: &[u8]) -> Option<&'static [u8]> {
+        match command {
+            b"modem at AT+COPS?\r\n" => {
+                Some(b"uart:~$ modem at AT+COPS?\r\n\r\n+COPS: 0,0,\"TIMBrasil\",7\r\n\r\nOK\r\n")
+            }
+            b"modem at AT+CSQ\r\n" => Some(b"uart:~$ modem at AT+CSQ\r\n+CME ERROR: 10\r\n"),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn a_test_suite_talks_to_the_device_through_send_and_wait() {
+        let tmp = TempDir::new("suite");
+        let source = tmp.path().join("modem.lua");
+        fs::write(&source, MODEM_PLUGIN).unwrap();
+
+        let mut tx = Channel::default();
+        let wire = tx.new_consumer();
+        let engine_tx = tx.new_consumer();
+        let tx = Arc::new(tx);
+        let mut rx = Channel::default();
+        let engine_rx = rx.new_consumer();
+        let device = Arc::new(rx).new_producer();
+
+        let (logger, logs) = Logger::new("test".to_string());
+        let (interface_sender, _interface_receiver) = mpsc::channel();
+        let (sender, receiver) = mpsc::channel();
+        let engine = PluginEngine::spawn_plugin_engine(
+            PluginEngineConnections::new(
+                logger,
+                tx.new_producer(),
+                engine_tx,
+                engine_rx,
+                Shared::new(InterfaceShared::Serial(SerialShared::new(
+                    SerialSetup::default(),
+                ))),
+                100,
+                InterfaceType::Serial,
+                interface_sender,
+                tmp.path().join("plugins"),
+            ),
+            sender.clone(),
+            receiver,
+        );
+
+        let mut seen = vec![];
+        let mut wait_for = |text: &str| {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            while !seen.iter().any(|line: &String| line.contains(text)) {
+                assert!(Instant::now() < deadline, "no \"{text}\" in {seen:#?}");
+                while let Ok(command) = wire.try_recv() {
+                    if let Some(reply) = modem_reply(&command.message) {
+                        device.produce(Arc::new(TimedBytes {
+                            timestamp: Local::now(),
+                            message: reply.to_vec(),
+                        }));
+                    }
+                }
+                seen.extend(logs.try_iter().map(|log| log.message));
+                std::thread::sleep(Duration::from_millis(1));
+            }
+        };
+
+        sender
+            .send(PluginEngineCommand::LoadPlugin {
+                filepath: source.to_str().unwrap().to_string(),
+            })
+            .unwrap();
+        wait_for("Plugin \"modem\" loaded");
+
+        sender
+            .send(PluginEngineCommand::RunTests {
+                args: vec!["modem".to_string()],
+            })
+            .unwrap();
+        wait_for("passed");
+
+        sender.send(PluginEngineCommand::Exit).unwrap();
+        engine.join();
+
+        let report = seen
+            .iter()
+            .filter(|line| line.starts_with("[modem:test]"))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            report,
+            [
+                "[modem:test] [1/3] cops: pass",
+                "[modem:test] [2/3] error: pass",
+                "[modem:test] [3/3] timeout: pass",
+                "[modem:test] 3 passed, 0 failed, 0 skipped",
+            ],
+            "{seen:#?}"
+        );
     }
 }

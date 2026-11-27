@@ -1433,6 +1433,13 @@ impl InputsTask {
                             });
                 }
             }
+            "test" => {
+                let _ = private
+                    .plugin_engine_cmd_sender
+                    .send(PluginEngineCommand::RunTests {
+                        args: command_line_split[1..].to_vec(),
+                    });
+            }
             "plugin" => {
                 let Some(subcommand) = command_line_split.get(1).map(String::as_str) else {
                     error!(
