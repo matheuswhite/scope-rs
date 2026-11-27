@@ -4,6 +4,7 @@ use super::{
     installed::Installed,
     messages::{self, PluginExternalRequest, PluginMethodMessage, PluginResponse},
     rx_lines::RxLines,
+    stdlib::{self, STDLIB},
 };
 use crate::{
     error, info,
@@ -34,15 +35,6 @@ use tokio::{
 };
 pub type PluginEngine = Task<(), PluginEngineCommand>;
 
-/// The Scope standard-library Lua modules, embedded so they can be provisioned
-/// into the plugins directory even when the source tree isn't present (installed
-/// binary). Every loaded plugin sits next to these, so `require("scope")` /
-/// `require("shell")` resolve without the user staging them by hand.
-const STDLIB: &[(&str, &str)] = &[
-    ("scope.lua", include_str!("../../plugins/scope.lua")),
-    ("shell.lua", include_str!("../../plugins/shell.lua")),
-];
-
 /// The directory scope copies loaded plugins into (alongside the bundled
 /// `scope.lua`): `<config_dir>/scope/plugins`, e.g. `~/.config/scope/plugins`.
 /// Falls back to a relative `scope/plugins` when the config dir is unknown,
@@ -54,21 +46,13 @@ pub fn plugins_dir() -> PathBuf {
 }
 
 /// Stage a plugin for loading: ensure the plugins directory and the bundled
-/// standard libraries exist (each written only when missing, so repeated loads
-/// don't rewrite them and a user's local copy survives), copy the plugin in
-/// (unless the source already *is* the destination), and return the path to
-/// load it from. Pure filesystem work, unit-tested below.
+/// standard libraries are up to date, copy the plugin in (unless the source
+/// already *is* the destination), and return the path to load it from.
 fn stage_plugin(dir: &Path, source: &Path, name: &str) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir)
         .map_err(|err| format!("Cannot create plugins directory {:?}: {}", dir, err))?;
 
-    for (lib_name, contents) in STDLIB {
-        let lib = dir.join(lib_name);
-        if !lib.exists() {
-            std::fs::write(&lib, contents)
-                .map_err(|err| format!("Cannot write {:?}: {}", lib, err))?;
-        }
-    }
+    stdlib::provision(dir)?;
 
     let dest = dir.join(format!("{}.lua", name));
     let same_file = match (std::fs::canonicalize(source), std::fs::canonicalize(&dest)) {
@@ -1248,26 +1232,23 @@ mod tests {
     }
 
     #[test]
-    fn stage_does_not_overwrite_existing_stdlib() {
-        let tmp = TempDir::new("no-overwrite");
+    fn stage_rewrites_a_stale_stdlib() {
+        let tmp = TempDir::new("stale-stdlib");
         let plugins = tmp.path().join("plugins");
         fs::create_dir_all(&plugins).unwrap();
-        // A user-customized scope.lua already in place.
-        fs::write(plugins.join("scope.lua"), "-- CUSTOM\n").unwrap();
+        fs::write(plugins.join("scope.lua"), "-- OLD\n").unwrap();
 
         let source = tmp.path().join("p.lua");
         fs::write(&source, "-- p\n").unwrap();
         stage_plugin(&plugins, &source, "p").unwrap();
 
-        // The existing scope.lua is preserved; the missing shell.lua is written.
-        assert_eq!(
-            fs::read_to_string(plugins.join("scope.lua")).unwrap(),
-            "-- CUSTOM\n"
-        );
-        assert_eq!(
-            fs::read_to_string(plugins.join("shell.lua")).unwrap(),
-            stdlib("shell.lua")
-        );
+        for (name, _) in STDLIB {
+            assert_eq!(
+                fs::read_to_string(plugins.join(name)).unwrap(),
+                stdlib(name),
+                "{name}"
+            );
+        }
     }
 
     #[test]

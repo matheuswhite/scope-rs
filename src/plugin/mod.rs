@@ -5,6 +5,7 @@ pub mod messages;
 pub mod method_call;
 pub mod rx_lines;
 pub mod shell;
+pub mod stdlib;
 
 use crate::infra::LogLevel;
 use crate::infra::logger::Logger;
