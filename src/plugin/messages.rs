@@ -169,6 +169,9 @@ impl PluginRequest {
             .get("error_pattern")
             .map_err(|err| field("error_pattern", err))?;
         let ignore: Option<Vec<String>> = opts.get("ignore").map_err(|err| field("ignore", err))?;
+        let strip: Option<Vec<String>> = opts.get("strip").map_err(|err| field("strip", err))?;
+        let echoes: Option<Vec<mlua::String>> =
+            opts.get("echo").map_err(|err| field("echo", err))?;
 
         Ok(PluginRequest::External(
             PluginExternalRequest::SendAndWait {
@@ -178,6 +181,12 @@ impl PluginRequest {
                     expected,
                     error_pattern,
                     ignore: ignore.unwrap_or_default(),
+                    strip: strip.unwrap_or_default(),
+                    echoes: echoes
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|echo| echo.as_bytes().to_vec())
+                        .collect(),
                     timeout: timeout_ms
                         .filter(|timeout_ms| *timeout_ms != u64::MAX)
                         .map(Duration::from_millis),

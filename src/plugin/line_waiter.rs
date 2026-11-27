@@ -3,8 +3,13 @@
 use regex::bytes::Regex;
 use std::{
     collections::VecDeque,
+    sync::LazyLock,
     time::{Duration, Instant},
 };
+
+/// An ANSI control sequence (CSI), as a shell uses to color its output.
+static ANSI_ESCAPE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\x1b\[[0-9;?]*[ -/]*[@-~]").unwrap());
 
 /// What a plugin waits for after sending, as `send_and_wait` built it from the
 /// call arguments and the plugin's `M.config`.
@@ -13,6 +18,11 @@ pub struct WaitSpec {
     pub expected: String,
     pub error_pattern: Option<String>,
     pub ignore: Vec<String>,
+    /// Patterns removed from every received line before it is matched.
+    pub strip: Vec<String>,
+    /// The device's echo of what was sent: a line equal to one of these, or
+    /// ending with a space and one of these, is dropped.
+    pub echoes: Vec<Vec<u8>>,
     pub timeout: Option<Duration>,
 }
 
@@ -35,6 +45,8 @@ pub struct LineWaiter {
     expected: Regex,
     error: Option<Regex>,
     ignore: Vec<Regex>,
+    strip: Vec<Regex>,
+    echoes: Vec<Vec<u8>>,
     timeout: Option<Duration>,
     deadline: Option<Instant>,
     lines: Vec<Vec<u8>>,
@@ -52,11 +64,21 @@ impl LineWaiter {
             .iter()
             .map(|pattern| whole_line(pattern, "ignore_msg"))
             .collect::<Result<_, _>>()?;
+        let strip = spec
+            .strip
+            .iter()
+            .map(|pattern| {
+                Regex::new(pattern)
+                    .map_err(|err| format!("invalid strip_msg pattern \"{pattern}\": {err}"))
+            })
+            .collect::<Result<_, _>>()?;
 
         Ok(Self {
             expected: whole_line(&spec.expected, "expected")?,
             error,
             ignore,
+            strip,
+            echoes: spec.echoes.clone(),
             timeout: spec.timeout,
             deadline: None,
             lines: vec![],
@@ -65,9 +87,13 @@ impl LineWaiter {
 
     /// Takes one received line, its terminator included.
     pub fn feed(&mut self, line: &[u8]) -> Option<WaitOutcome> {
-        let line = trim_line_ending(line);
+        let mut line = ANSI_ESCAPE.replace_all(line, &b""[..]).into_owned();
+        for strip in &self.strip {
+            line = strip.replace_all(&line, &b""[..]).into_owned();
+        }
+        let line = trim_end(&line);
 
-        if line.is_empty() || self.ignore.iter().any(|re| re.is_match(line)) {
+        if line.is_empty() || self.is_echo(line) || self.ignore.iter().any(|re| re.is_match(line)) {
             return None;
         }
 
@@ -86,6 +112,18 @@ impl LineWaiter {
 
         self.lines.push(line.to_vec());
         None
+    }
+
+    fn is_echo(&self, line: &[u8]) -> bool {
+        self.echoes
+            .iter()
+            .filter(|echo| !echo.is_empty())
+            .any(|echo| {
+                line == echo.as_slice()
+                    || line
+                        .strip_suffix(echo.as_slice())
+                        .is_some_and(|before| before.ends_with(b" "))
+            })
     }
 
     /// Starts the timeout, as the message is sent at `now`.
@@ -183,8 +221,10 @@ fn whole_line(pattern: &str, what: &str) -> Result<Regex, String> {
         .map_err(|err| format!("invalid {what} pattern \"{pattern}\": {err}"))
 }
 
-fn trim_line_ending(mut line: &[u8]) -> &[u8] {
-    while let [rest @ .., b'\r' | b'\n'] = line {
+fn trim_end(mut line: &[u8]) -> &[u8] {
+    while let [rest @ .., last] = line
+        && last.is_ascii_whitespace()
+    {
         line = rest;
     }
     line
@@ -200,6 +240,8 @@ mod tests {
             expected: expected.to_string(),
             error_pattern: None,
             ignore: vec![],
+            strip: vec![],
+            echoes: vec![],
             timeout: None,
         }
     }
@@ -324,6 +366,63 @@ mod tests {
         waiter.start(now);
 
         assert!(!waiter.expired(now + Duration::from_secs(3600)));
+    }
+
+    #[test]
+    fn ansi_escapes_and_strip_patterns_are_removed_before_matching() {
+        let mut waiter = LineWaiter::new(&WaitSpec {
+            strip: vec![r"uart:~\$ ?".to_string()],
+            ..spec("OK")
+        })
+        .unwrap();
+
+        assert_eq!(
+            feed_all(
+                &mut waiter,
+                &[
+                    "\x1b[1;32muart:~$ \x1b[m\r\n",
+                    "uart:~$ \x1b[1m+COPS: 0,0,\"TIM\",7\x1b[0m \r\n",
+                    "\x1b[mOK\r\n",
+                ]
+            ),
+            matched(&["+COPS: 0,0,\"TIM\",7"], "OK")
+        );
+    }
+
+    #[test]
+    fn the_echo_of_the_message_is_dropped() {
+        let mut waiter = LineWaiter::new(&WaitSpec {
+            echoes: vec![b"modem at \"AT+CSQ\"".to_vec(), b"AT+CSQ".to_vec()],
+            ..spec("OK")
+        })
+        .unwrap();
+
+        assert_eq!(
+            feed_all(
+                &mut waiter,
+                &[
+                    "uart:~$ modem at \"AT+CSQ\"\r\n",
+                    "AT+CSQ\r\n",
+                    "+CSQ: 20,99\r\n",
+                    "OK\r\n"
+                ]
+            ),
+            matched(&["+CSQ: 20,99"], "OK")
+        );
+    }
+
+    #[test]
+    fn a_line_that_only_ends_like_the_message_is_not_an_echo() {
+        let mut waiter = LineWaiter::new(&WaitSpec {
+            echoes: vec![b"AT".to_vec()],
+            ..spec("OK")
+        })
+        .unwrap();
+
+        assert_eq!(
+            feed_all(&mut waiter, &["+QSPN: \"CHAT\"\r\n", "FLAT\r\n", "OK\r\n"]),
+            matched(&["+QSPN: \"CHAT\"", "FLAT"], "OK")
+        );
     }
 
     fn queue_with(keys: &[&'static str]) -> WaitQueue<&'static str> {

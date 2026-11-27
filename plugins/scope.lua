@@ -17,7 +17,28 @@ local CONFIG_DEFAULTS = {
     default_timeout = 1000,
     default_expected = "OK",
     line_ending = "\r\n",
+    send_quoted = false,
+    ignore_echo = true,
     ignore_msg = {},
+    strip_msg = {},
+    retries = 0,
+    retry_interval = 1000,
+}
+
+-- Each option a send_and_wait call can take, and the config key it overrides.
+local WAIT_OPTIONS = {
+    expected = "default_expected",
+    timeout = "default_timeout",
+    error_pattern = "error_pattern",
+    ignore_msg = "ignore_msg",
+    strip_msg = "strip_msg",
+    ignore_echo = "ignore_echo",
+    send_prefix = "send_prefix",
+    send_quoted = "send_quoted",
+    line_ending = "line_ending",
+    retries = "retries",
+    retry_interval = "retry_interval",
+    retry_pattern = "retry_pattern",
 }
 
 function M._init_config(plugin)
@@ -89,6 +110,26 @@ function M.fmt.to_bytes(val)
     end
 end
 
+local function text_arg(fn_name, value)
+    if type(value) == "table" then
+        return M.fmt.to_str(value)
+    end
+    assert(type(value) == "string", fn_name .. ": the input must be a string or a list of bytes")
+    return value
+end
+
+function M.fmt.starts_with(str, prefix)
+    str = text_arg("fmt.starts_with", str)
+    assert(type(prefix) == "string", "fmt.starts_with: the prefix must be a string")
+    return str:sub(1, #prefix) == prefix
+end
+
+function M.fmt.ends_with(str, suffix)
+    str = text_arg("fmt.ends_with", str)
+    assert(type(suffix) == "string", "fmt.ends_with: the suffix must be a string")
+    return suffix == "" or str:sub(-#suffix) == suffix
+end
+
 function M.fmt.split(str, sep, max)
     if type(str) == "table" then
         str = M.fmt.to_str(str)
@@ -148,48 +189,118 @@ function M.serial.recv(opts)
     return res.err, recv_data(res.data)
 end
 
+local function is_whole(value)
+    return type(value) == "number" and value >= 0 and value == math.floor(value) and value < 2 ^ 53
+end
+
+local function is_string_list(value)
+    if type(value) ~= "table" then
+        return false
+    end
+    for _, item in ipairs(value) do
+        if type(item) ~= "string" then
+            return false
+        end
+    end
+    return true
+end
+
 local function send_and_wait(interface, msg, expected, timeout_ms)
     local fn_name = interface .. ".send_and_wait"
-    local text = M.fmt.to_str(bytes_arg(fn_name, msg, 3))
-
-    local prefix = config("send_prefix")
-    if prefix ~= nil and prefix ~= "" then
-        text = prefix .. (prefix:match("%s$") and "" or " ") .. text
+    local function fail(text)
+        error(fn_name .. ": " .. text, 4)
     end
-    text = text .. config("line_ending")
 
-    local opts = {
-        message = text,
-        expected = expected or config("default_expected"),
-        timeout_ms = timeout_ms or config("default_timeout"),
-        error_pattern = config("error_pattern"),
-        ignore = config("ignore_msg"),
+    local given = { expected = expected, timeout = timeout_ms }
+    if type(expected) == "table" then
+        given = expected
+        for option in pairs(given) do
+            if WAIT_OPTIONS[option] == nil then
+                fail("unknown option " .. tostring(option))
+            end
+        end
+    end
+
+    local o = {}
+    for option, key in pairs(WAIT_OPTIONS) do
+        if given[option] ~= nil then
+            o[option] = given[option]
+        else
+            o[option] = config(key)
+        end
+    end
+
+    if type(o.expected) ~= "string" then
+        fail("the expected message must be a string pattern")
+    end
+    if not is_whole(o.timeout) then
+        fail("the timeout must be a whole number of milliseconds")
+    end
+    if o.error_pattern ~= nil and type(o.error_pattern) ~= "string" then
+        fail("error_pattern must be a string pattern")
+    end
+    if not is_string_list(o.ignore_msg) then
+        fail("ignore_msg must be a list of string patterns")
+    end
+    if not is_string_list(o.strip_msg) then
+        fail("strip_msg must be a list of string patterns")
+    end
+    if o.send_prefix ~= nil and type(o.send_prefix) ~= "string" then
+        fail("send_prefix must be a string")
+    end
+    if type(o.line_ending) ~= "string" then
+        fail("line_ending must be a string")
+    end
+    if not is_whole(o.retries) then
+        fail("retries must be a whole number")
+    end
+    if not is_whole(o.retry_interval) then
+        fail("retry_interval must be a whole number of milliseconds")
+    end
+    if o.retry_pattern ~= nil and type(o.retry_pattern) ~= "string" then
+        fail("retry_pattern must be a string pattern")
+    end
+
+    if type(msg) ~= "string" and type(msg) ~= "table" then
+        fail("the message must be a string or a list of bytes, not " .. type(msg))
+    end
+    local payload = M.fmt.to_str(msg)
+    local text = payload
+    if o.send_quoted then
+        text = '"' .. text:gsub('"', '\\"') .. '"'
+    end
+    if o.send_prefix ~= nil and o.send_prefix ~= "" then
+        text = o.send_prefix .. (o.send_prefix:match("%s$") and "" or " ") .. text
+    end
+
+    local request = {
+        message = text .. o.line_ending,
+        expected = o.expected,
+        timeout_ms = o.timeout,
+        error_pattern = o.error_pattern,
+        ignore = o.ignore_msg,
+        strip = o.strip_msg,
+        echo = o.ignore_echo and { text, payload } or {},
     }
 
-    if type(opts.expected) ~= "string" then
-        error(fn_name .. ": the expected message must be a string pattern", 3)
-    end
-    local timeout = opts.timeout_ms
-    if type(timeout) ~= "number" or timeout < 0 or timeout ~= math.floor(timeout) or timeout >= 2 ^ 53 then
-        error(fn_name .. ": the timeout must be a whole number of milliseconds", 3)
-    end
-    if opts.error_pattern ~= nil and type(opts.error_pattern) ~= "string" then
-        error(fn_name .. ": config.error_pattern must be a string pattern", 3)
-    end
-    local ignore_is_list = type(opts.ignore) == "table"
-    for _, pattern in ipairs(ignore_is_list and opts.ignore or {}) do
-        ignore_is_list = ignore_is_list and type(pattern) == "string"
-    end
-    if not ignore_is_list then
-        error(fn_name .. ": config.ignore_msg must be a list of string patterns", 3)
+    local err
+    for attempt = 0, o.retries do
+        if attempt > 0 then
+            M.sys.sleep_ms(o.retry_interval)
+        end
+
+        local res = coroutine.yield({ ":" .. fn_name, request })
+        if res.err == nil then
+            return res.lines, res.matched
+        end
+
+        err = res.err
+        if o.retry_pattern ~= nil and not M.re.match(err, "^(?:" .. o.retry_pattern .. ")$") then
+            break
+        end
     end
 
-    local res = coroutine.yield({ ":" .. fn_name, opts })
-    if res.err ~= nil then
-        return nil, res.err
-    end
-
-    return res.lines, res.matched
+    return nil, err
 end
 
 function M.serial.send_and_wait(msg, expected, timeout_ms)

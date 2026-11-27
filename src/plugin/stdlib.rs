@@ -174,7 +174,12 @@ mod tests {
                 default_timeout = 200,
                 default_expected = "OK",
                 line_ending = "\r\n",
+                send_quoted = false,
+                ignore_echo = true,
                 ignore_msg = {},
+                strip_msg = {},
+                retries = 0,
+                retry_interval = 1000,
             })
 
             expect_eq(load_plugin("return {}").config.default_timeout, 1000)
@@ -224,6 +229,8 @@ mod tests {
                 timeout_ms = 200,
                 error_pattern = "\\+CME ERROR: .*",
                 ignore = { "uart.*" },
+                strip = {},
+                echo = { "modem at AT+COPS?", "AT+COPS?" },
             })
             expect_eq(out.results, { { "+COPS: 0,0,\"TIM\",7" }, "OK" })
         "#);
@@ -282,8 +289,115 @@ mod tests {
                 load_plugin("return {}").config.ignore_msg = ignore_msg
 
                 local ok, err = pcall(drive, function() scope.serial.send_and_wait("AT") end)
-                assert(not ok and err:find("config.ignore_msg must be a list of string patterns"), err)
+                assert(not ok and err:find("ignore_msg must be a list of string patterns"), err)
             end
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_takes_its_options_as_a_table() {
+        run(r#"
+            load_plugin([[ return { config = { default_timeout = 200, ignore_echo = false } } ]])
+
+            local out = drive(function()
+                return scope.serial.send_and_wait("AT+QESIM?", {
+                    timeout = 10000,
+                    strip_msg = { "uart:~\\$ ?" },
+                    send_prefix = "modem at",
+                    send_quoted = true,
+                    ignore_echo = true,
+                })
+            end, {
+                [":serial.send_and_wait"] = function() return { lines = {}, matched = "OK" } end,
+            })
+
+            local opts = out.requests[1][2]
+            expect_eq({ opts.message, opts.expected, opts.timeout_ms, opts.strip, opts.echo }, {
+                'modem at "AT+QESIM?"\r\n', "OK", 10000, { "uart:~\\$ ?" },
+                { 'modem at "AT+QESIM?"', "AT+QESIM?" },
+            })
+
+            local ok, err = pcall(drive, function() scope.serial.send_and_wait("AT", { timout = 5 }) end)
+            assert(not ok and err:find("serial.send_and_wait: unknown option timout"), err)
+        "#);
+    }
+
+    #[test]
+    fn send_quoted_escapes_the_quotes_of_the_message() {
+        run(r#"
+            load_plugin([[ return { config = { send_prefix = "modem at", send_quoted = true } } ]])
+
+            local out = drive(function()
+                return scope.serial.send_and_wait('AT+QCFG="roamservice"')
+            end, {
+                [":serial.send_and_wait"] = function() return { lines = {}, matched = "OK" } end,
+            })
+
+            expect_eq(out.requests[1][2].message, 'modem at "AT+QCFG=\\"roamservice\\""\r\n')
+        "#);
+    }
+
+    #[test]
+    fn send_and_wait_retries_only_the_failures_matching_retry_pattern() {
+        run(r#"
+            load_plugin([[ return { config = {
+                retries = 2,
+                retry_interval = 250,
+                retry_pattern = "script is already running.*",
+            } } ]])
+
+            local function attempts(replies)
+                local sleeps, sent = {}, 0
+                local out = drive(function() return scope.serial.send_and_wait("AT") end, {
+                    [":serial.send_and_wait"] = function()
+                        sent = sent + 1
+                        return replies[sent]
+                    end,
+                    [":sys.sleep"] = function(req)
+                        table.insert(sleeps, req[2])
+                        return {}
+                    end,
+                })
+                return sent, sleeps, out.results
+            end
+
+            local busy = { err = "script is already running" }
+            local sent, sleeps, results = attempts({ busy, busy, { lines = { "x" }, matched = "OK" } })
+            expect_eq({ sent, sleeps, results }, { 3, { 250, 250 }, { { "x" }, "OK" } })
+
+            sent, sleeps, results = attempts({ busy, busy, busy })
+            expect_eq({ sent, results }, { 3, { nil, "script is already running" } })
+
+            sent, sleeps, results = attempts({ { err = "timeout" } })
+            expect_eq({ sent, results }, { 1, { nil, "timeout" } })
+        "#);
+    }
+
+    #[test]
+    fn without_retry_pattern_every_failure_is_retried() {
+        run(r#"
+            load_plugin([[ return { config = { retries = 1 } } ]])
+
+            local sent = 0
+            local out = drive(function() return scope.serial.send_and_wait("AT") end, {
+                [":serial.send_and_wait"] = function()
+                    sent = sent + 1
+                    return { err = "timeout" }
+                end,
+                [":sys.sleep"] = function() return {} end,
+            })
+
+            expect_eq({ sent, out.results }, { 2, { nil, "timeout" } })
+        "#);
+    }
+
+    #[test]
+    fn starts_with_and_ends_with_compare_literally() {
+        run(r#"
+            local fmt = scope.fmt
+            expect_eq({ fmt.starts_with("+COPS: 0", "+COPS"), fmt.starts_with("COPS", "+") }, { true, false })
+            expect_eq({ fmt.ends_with("a.b", ".b"), fmt.ends_with("ab", "%b"), fmt.ends_with("ab", "") }, { true, false, true })
+            expect_eq(fmt.starts_with({ 0x41, 0x54 }, "AT"), true)
         "#);
     }
 

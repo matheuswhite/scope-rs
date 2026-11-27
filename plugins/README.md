@@ -928,9 +928,15 @@ end
 | `default_timeout` | `1000` | Milliseconds `send_and_wait` waits when the call gives no timeout. |
 | `default_expected` | `"OK"` | Pattern `send_and_wait` waits for when the call gives none. |
 | `error_pattern` | none | Pattern of a line that makes `send_and_wait` fail at once. |
-| `ignore_msg` | `{}` | Patterns of lines `send_and_wait` drops (e.g. the device echoing the command). |
+| `ignore_msg` | `{}` | Patterns of lines `send_and_wait` drops (e.g. the device's own logs). |
+| `strip_msg` | `{}` | Patterns `send_and_wait` removes from every received line, wherever they appear (e.g. a shell prompt). |
+| `ignore_echo` | `true` | Drop the device's echo of the message `send_and_wait` sent. |
 | `send_prefix` | none | Text `send_and_wait` puts before each message, followed by a space unless it already ends with one. |
+| `send_quoted` | `false` | Put the message between double quotes, escaping the ones inside, before the prefix. |
 | `line_ending` | `"\r\n"` | Text `send_and_wait` puts after each message. |
+| `retries` | `0` | How many times `send_and_wait` sends the message again after a failure. |
+| `retry_interval` | `1000` | Milliseconds between two attempts. |
+| `retry_pattern` | none | Pattern of the error lines worth a retry; without it, every failure (timeout or error line) is retried. |
 
 ## Sending data
 
@@ -940,17 +946,20 @@ end
 
 Sends `msg` and waits for the device to answer with a line matching `expected`. `rtt.send_and_wait` is the same over RTT.
 
-- `msg`: string or list of bytes. `config.send_prefix` (and a space) is put before it and `config.line_ending` after it.
+- `msg`: string or list of bytes. With `config.send_quoted` it is put between quotes; then `config.send_prefix` (and a space) is put before it and `config.line_ending` after it.
 - `expected` (optional): pattern of the line that ends the wait; `config.default_expected` (`"OK"`) when omitted.
 - `timeout_ms` (optional): how long to wait; `config.default_timeout` when omitted.
+- Instead of `expected` and `timeout_ms`, the second argument can be a table of options: `expected`, `timeout`, and any of `error_pattern`, `ignore_msg`, `strip_msg`, `ignore_echo`, `send_prefix`, `send_quoted`, `line_ending`, `retries`, `retry_interval`, `retry_pattern`, each overriding the [config](#plugin-configuration) field of the same name for this call. `serial.send_and_wait('AT+QESIM="list",1', { timeout = 10000 })` waits longer for one slow command.
 - Returns: `lines, matched`
-    - `lines`: the lines received between the send and the expected line, as strings without their `\r\n`. Empty lines and lines matching `config.ignore_msg` are left out.
+    - `lines`: the lines received between the send and the expected line, as strings without their `\r\n`.
     - `matched`: the expected line itself.
-- On timeout, or when a line matches `config.error_pattern`, it returns `nil` and the reason: `"timeout"` or the error line.
+- On timeout, or when a line matches `config.error_pattern`, it returns `nil` and the reason: `"timeout"` or the error line. With `config.retries`, it first sends the message again, `config.retry_interval` milliseconds later, as long as the error line matches `config.retry_pattern` (any failure, without it).
+
+Each received line is cleaned before it is matched or returned: ANSI color codes are removed, then every match of `config.strip_msg`, and trailing spaces. A line is then left out when it is empty, when it is the device's echo of what was sent (the message itself, or a line ending with a space and the message, as after a shell prompt; turn this off with `ignore_echo = false`), or when it matches `config.ignore_msg`.
 
 Only one `send_and_wait` is on the wire at a time, whichever plugin calls it: a call made while another one waits is sent once that one ends, and its timeout starts when it is sent. A reply therefore always answers the call that sent its command.
 
-The patterns are regular expressions (the same syntax as [Regex](#regex)) that must match the **whole** line: `"OK"` matches `OK`, but not `+CPBR: 1,"BOOK"`. Write `.*` to match part of a line, e.g. `"\\+CME ERROR: .*"`.
+The patterns are regular expressions (the same syntax as [Regex](#regex)) that must match the **whole** line, except `strip_msg`, which removes every match: `"OK"` matches `OK`, but not `+CPBR: 1,"BOOK"`. Write `.*` to match part of a line, e.g. `"\\+CME ERROR: .*"`.
 
 ```lua
 local log = require("scope").log
@@ -959,12 +968,15 @@ local serial = require("scope").serial
 local M = {
     config = {
         send_prefix = "modem at",
-        ignore_msg = { "uart:~\\$.*" },
-        error_pattern = "ERROR|\\+CME ERROR: .*",
+        send_quoted = true,
+        strip_msg = { "uart:~\\$ ?" },
+        error_pattern = "ERROR|\\+CME ERROR: .*|script is already running",
+        retries = 2,
+        retry_pattern = "script is already running",
     },
 }
 
--- Sends "modem at AT+CSQ\r\n"; on success, lines is { "+CSQ: 20,99" }.
+-- Sends 'modem at "AT+CSQ"\r\n'; on success, lines is { "+CSQ: 20,99" }.
 function M.csq()
     local lines, err = serial.send_and_wait("AT+CSQ")
     if lines == nil then
@@ -985,6 +997,8 @@ local fmt = require("scope").fmt
 local prefix, args = fmt.split('+COPS: 0,0,"TIM",7', ":", 2)  -- "+COPS", ' 0,0,"TIM",7'
 local fields = { fmt.split("a,,b", ",") }                     -- { "a", "", "b" }
 ```
+
+`fmt.starts_with(str, prefix)` and `fmt.ends_with(str, suffix)` tell whether a string (or a list of bytes) starts or ends with another one, taken literally.
 
 ## Tests
 
