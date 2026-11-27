@@ -47,7 +47,7 @@ const STDLIB: &[(&str, &str)] = &[
 /// `scope.lua`): `<config_dir>/scope/plugins`, e.g. `~/.config/scope/plugins`.
 /// Falls back to a relative `scope/plugins` when the config dir is unknown,
 /// mirroring the crash-backup directory.
-fn plugins_dir() -> PathBuf {
+pub fn plugins_dir() -> PathBuf {
     dirs::config_dir()
         .map(|dir| dir.join("scope").join("plugins"))
         .unwrap_or_else(|| PathBuf::from("scope").join("plugins"))
@@ -146,6 +146,7 @@ pub struct PluginEngineConnections {
     latency: u64,
     interface_type: InterfaceType,
     interface_cmd_sender: Sender<InterfaceCommand>,
+    plugins_dir: PathBuf,
 }
 
 impl PluginEngine {
@@ -197,6 +198,7 @@ impl PluginEngine {
             &mut plugin_list,
             &private.logger,
             &err_regex,
+            &private.plugins_dir,
         )
         .await;
 
@@ -249,6 +251,7 @@ impl PluginEngine {
                             filepath,
                             &mut plugin_list,
                             private.logger.clone(),
+                            &private.plugins_dir,
                         )
                         .await
                         {
@@ -261,11 +264,11 @@ impl PluginEngine {
                             continue 'plugin_engine_loop;
                         };
 
-                        let dir = plugins_dir();
+                        let dir = &private.plugins_dir;
 
                         // Read the manifest up front so a corrupt file surfaces
                         // here instead of silently dropping the install.
-                        let mut installed = match Installed::load(&dir) {
+                        let mut installed = match Installed::load(dir) {
                             Ok(installed) => installed,
                             Err(err) => {
                                 error!(private.logger, "{}", err);
@@ -285,6 +288,7 @@ impl PluginEngine {
                                 source,
                                 &mut plugin_list,
                                 private.logger.clone(),
+                                &private.plugins_dir,
                             )
                             .await
                             {
@@ -295,7 +299,7 @@ impl PluginEngine {
 
                         // Persist. `add` dedupes, so re-installing is idempotent.
                         let newly_added = installed.add(&plugin_name);
-                        if let Err(err) = installed.save(&dir) {
+                        if let Err(err) = installed.save(dir) {
                             error!(private.logger, "{}", err);
                             continue 'plugin_engine_loop;
                         }
@@ -317,9 +321,9 @@ impl PluginEngine {
                             continue 'plugin_engine_loop;
                         };
 
-                        let dir = plugins_dir();
+                        let dir = &private.plugins_dir;
 
-                        let mut installed = match Installed::load(&dir) {
+                        let mut installed = match Installed::load(dir) {
                             Ok(installed) => installed,
                             Err(err) => {
                                 error!(private.logger, "{}", err);
@@ -334,7 +338,7 @@ impl PluginEngine {
                             );
                             continue 'plugin_engine_loop;
                         }
-                        if let Err(err) = installed.save(&dir) {
+                        if let Err(err) = installed.save(dir) {
                             error!(private.logger, "{}", err);
                             continue 'plugin_engine_loop;
                         }
@@ -369,7 +373,7 @@ impl PluginEngine {
                         success!(private.logger, "Plugin \"{}\" uninstalled", plugin_name);
                     }
                     PluginEngineCommand::ListInstalledPlugins => {
-                        match Installed::load(&plugins_dir()) {
+                        match Installed::load(&private.plugins_dir) {
                             Ok(installed) if installed.names().is_empty() => {
                                 info!(private.logger, "No plugins installed");
                             }
@@ -756,6 +760,7 @@ impl PluginEngine {
                                     plugin.filepath(),
                                     &mut plugin_list,
                                     private.logger.clone(),
+                                    &private.plugins_dir,
                                 )
                                 .await
                                 {
@@ -1031,9 +1036,9 @@ impl PluginEngine {
         plugin_list: &mut HashMap<Arc<String>, Plugin>,
         logger: &Logger,
         err_regex: &Regex,
+        dir: &Path,
     ) {
-        let dir = plugins_dir();
-        let installed = match Installed::load(&dir) {
+        let installed = match Installed::load(dir) {
             Ok(installed) => installed,
             Err(err) => {
                 error!(logger, "{}", err);
@@ -1051,6 +1056,7 @@ impl PluginEngine {
                 source,
                 plugin_list,
                 logger.clone(),
+                dir,
             )
             .await
             {
@@ -1066,6 +1072,7 @@ impl PluginEngine {
         filepath: PathBuf,
         plugin_list: &mut HashMap<Arc<String>, Plugin>,
         logger: Logger,
+        dir: &Path,
     ) -> Result<(), String> {
         // These names belong to the embedded standard-library modules the engine
         // writes into the plugins directory; a plugin may not shadow them.
@@ -1090,7 +1097,7 @@ impl PluginEngine {
         // `require("shell")` resolve without the user staging them by hand
         // (issue #206). The original path is kept as the plugin's identity so
         // `!plugin reload` re-copies the (possibly edited) source.
-        let dest = stage_plugin(&plugins_dir(), &source, plugin_name.as_str())?;
+        let dest = stage_plugin(dir, &source, plugin_name.as_str())?;
 
         let mut plugin = Plugin::new(
             plugin_name.clone(),
@@ -1169,6 +1176,7 @@ impl PluginEngineConnections {
         latency: u64,
         interface_type: InterfaceType,
         interface_cmd_sender: Sender<InterfaceCommand>,
+        plugins_dir: PathBuf,
     ) -> Self {
         Self {
             logger,
@@ -1179,6 +1187,7 @@ impl PluginEngineConnections {
             latency,
             interface_type,
             interface_cmd_sender,
+            plugins_dir,
         }
     }
 }
